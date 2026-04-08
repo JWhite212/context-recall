@@ -48,9 +48,12 @@ class TranscriptionConfig:
 
 @dataclass
 class SummarisationConfig:
+    backend: str = "ollama"  # "claude" or "ollama"
     anthropic_api_key: str = ""
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 4096
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1:8b"
 
 
 @dataclass

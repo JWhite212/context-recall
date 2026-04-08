@@ -62,13 +62,19 @@ transcription:
 
 # --- Summarisation ---
 summarisation:
-  # Anthropic API key for Claude-powered summaries.
-  anthropic_api_key: "sk-ant-..."
+  # Backend: "ollama" (local, free) or "claude" (Anthropic API, requires credits).
+  backend: "ollama"
 
-  # Model to use. claude-sonnet-4-20250514 is a good balance of speed and quality.
+  # --- Ollama settings (used when backend: ollama) ---
+  # Install: https://ollama.com  then: ollama pull llama3.1:8b
+  ollama_base_url: "http://localhost:11434"
+  ollama_model: "llama3.1:8b"
+
+  # --- Claude settings (used when backend: claude) ---
+  anthropic_api_key: "sk-ant-..."
   model: "claude-sonnet-4-20250514"
 
-  # Maximum tokens for the summary response.
+  # Maximum tokens for the summary response (applies to both backends).
   max_tokens: 4096
 
 # --- Output: Markdown Vault ---

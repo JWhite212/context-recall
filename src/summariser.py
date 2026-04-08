@@ -1,5 +1,5 @@
 """
-Meeting summarisation via the Anthropic Claude API.
+Meeting summarisation via Claude API or Ollama.
 
 Takes a raw transcript and produces a structured summary containing:
 - A concise title for the meeting
@@ -10,6 +10,9 @@ Takes a raw transcript and produces a structured summary containing:
 
 The prompt is engineered to produce consistent, parseable Markdown
 output that feeds directly into the Markdown and Notion writers.
+
+Backend is configurable: set summarisation.backend to "claude" for the
+Anthropic API, or "ollama" for a local Ollama model.
 """
 
 import json
@@ -17,6 +20,7 @@ import logging
 from dataclasses import dataclass, field
 
 import anthropic
+import httpx
 
 from src.transcriber import Transcript
 from src.utils.config import SummarisationConfig
@@ -98,35 +102,33 @@ class MeetingSummary:
 
 class Summariser:
     """
-    Sends a meeting transcript to Claude for structured summarisation.
+    Sends a meeting transcript to an LLM for structured summarisation.
+
+    Supports two backends:
+      - "claude": Anthropic Claude API (requires API key and credits)
+      - "ollama": Local Ollama instance (free, runs on your machine)
     """
 
     def __init__(self, config: SummarisationConfig):
         self._config = config
-        self._client: anthropic.Anthropic | None = None
+        self._claude_client: anthropic.Anthropic | None = None
 
-    def _get_client(self) -> anthropic.Anthropic:
+    def _get_claude_client(self) -> anthropic.Anthropic:
         """Lazy-initialise the Anthropic client."""
-        if self._client is None:
+        if self._claude_client is None:
             if not self._config.anthropic_api_key:
                 raise ValueError(
                     "Anthropic API key not set. Add it to config.yaml "
-                    "under summarisation.anthropic_api_key."
+                    "under summarisation.anthropic_api_key, or switch to "
+                    "backend: ollama."
                 )
-            self._client = anthropic.Anthropic(
+            self._claude_client = anthropic.Anthropic(
                 api_key=self._config.anthropic_api_key
             )
-        return self._client
+        return self._claude_client
 
-    def summarise(self, transcript: Transcript) -> MeetingSummary:
-        """
-        Generate a structured summary from a meeting transcript.
-
-        If the transcript is extremely long (>50,000 words), it is
-        truncated with a note to the model. Claude's context window
-        can handle long transcripts, but very long meetings may
-        benefit from chunked summarisation in future iterations.
-        """
+    def _prepare_transcript(self, transcript: Transcript) -> tuple[str, int]:
+        """Prepare transcript text, applying truncation if needed."""
         text = transcript.timestamped_text
         word_count = transcript.word_count
 
@@ -136,7 +138,6 @@ class Summariser:
                 f"Summary may not be meaningful."
             )
 
-        # Truncation guard for exceptionally long meetings.
         max_words = 50_000
         if word_count > max_words:
             logger.warning(
@@ -146,13 +147,28 @@ class Summariser:
             words = text.split()
             text = " ".join(words[:max_words]) + "\n\n[Transcript truncated]"
 
+        return text, word_count
+
+    def _build_user_message(
+        self, transcript: Transcript, text: str, word_count: int
+    ) -> str:
+        """Build the user message content."""
+        return (
+            f"Here is the meeting transcript "
+            f"({transcript.duration_seconds / 60:.0f} minutes, "
+            f"{word_count} words):\n\n{text}"
+        )
+
+    def _summarise_claude(self, transcript: Transcript) -> MeetingSummary:
+        """Summarise using the Anthropic Claude API."""
+        text, word_count = self._prepare_transcript(transcript)
+
         logger.info(
             f"Sending {word_count}-word transcript to Claude "
             f"({self._config.model}) for summarisation..."
         )
 
-        client = self._get_client()
-
+        client = self._get_claude_client()
         message = client.messages.create(
             model=self._config.model,
             max_tokens=self._config.max_tokens,
@@ -160,17 +176,71 @@ class Summariser:
             messages=[
                 {
                     "role": "user",
-                    "content": (
-                        f"Here is the meeting transcript "
-                        f"({transcript.duration_seconds / 60:.0f} minutes, "
-                        f"{word_count} words):\n\n{text}"
+                    "content": self._build_user_message(
+                        transcript, text, word_count
                     ),
                 }
             ],
         )
 
-        raw_markdown = message.content[0].text
-        summary = MeetingSummary.from_markdown(raw_markdown)
+        return MeetingSummary.from_markdown(message.content[0].text)
 
-        logger.info(f"Summary generated: '{summary.title}' ({len(summary.tags)} tags)")
+    def _summarise_ollama(self, transcript: Transcript) -> MeetingSummary:
+        """Summarise using a local Ollama instance."""
+        text, word_count = self._prepare_transcript(transcript)
+        model = self._config.ollama_model
+        base_url = self._config.ollama_base_url.rstrip("/")
+
+        logger.info(
+            f"Sending {word_count}-word transcript to Ollama "
+            f"({model}) for summarisation..."
+        )
+
+        user_content = self._build_user_message(transcript, text, word_count)
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SUMMARISATION_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            "stream": False,
+            "options": {
+                "num_predict": self._config.max_tokens,
+            },
+        }
+
+        response = httpx.post(
+            f"{base_url}/api/chat",
+            json=payload,
+            timeout=300.0,  # Long timeout for large transcripts.
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        raw_markdown = data["message"]["content"]
+
+        return MeetingSummary.from_markdown(raw_markdown)
+
+    def summarise(self, transcript: Transcript) -> MeetingSummary:
+        """
+        Generate a structured summary from a meeting transcript
+        using the configured backend.
+        """
+        backend = self._config.backend.lower()
+
+        if backend == "claude":
+            summary = self._summarise_claude(transcript)
+        elif backend == "ollama":
+            summary = self._summarise_ollama(transcript)
+        else:
+            raise ValueError(
+                f"Unknown summarisation backend: '{backend}'. "
+                f"Use 'claude' or 'ollama'."
+            )
+
+        logger.info(
+            f"Summary generated: '{summary.title}' "
+            f"({len(summary.tags)} tags)"
+        )
         return summary
