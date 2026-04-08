@@ -22,6 +22,17 @@ audio:
   # Audio MIDI Setup. Run `python -m sounddevice` to list devices.
   blackhole_device_name: "BlackHole 2ch"
 
+  # Microphone device name (substring match). Empty = system default input.
+  # This captures your voice alongside the remote participants' audio.
+  mic_device_name: ""
+
+  # Whether to mix microphone input with system audio.
+  mic_enabled: true
+
+  # Mic gain relative to system audio (0.0–2.0). Adjust if your voice
+  # is too quiet or too loud relative to remote participants.
+  mic_volume: 1.0
+
   # Sample rate in Hz. 16000 is optimal for speech recognition.
   sample_rate: 16000
 

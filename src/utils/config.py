@@ -30,6 +30,9 @@ class DetectionConfig:
 @dataclass
 class AudioConfig:
     blackhole_device_name: str = "BlackHole 2ch"
+    mic_device_name: str = ""  # Empty = system default input device.
+    mic_enabled: bool = True   # Mix microphone input with system audio.
+    mic_volume: float = 1.0    # Mic gain relative to system audio (0.0–2.0).
     sample_rate: int = 16000
     channels: int = 1
     temp_audio_dir: str = "/tmp/meetingmind"
