@@ -27,6 +27,7 @@ from pathlib import Path
 
 from src.audio_capture import AudioCapture
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
+from src.diariser import Diariser
 from src.output.markdown_writer import MarkdownWriter
 from src.output.notion_writer import NotionWriter
 from src.summariser import Summariser
@@ -51,6 +52,15 @@ class MeetingMind:
         self._capture = AudioCapture(self._config.audio)
         self._transcriber = Transcriber(self._config.transcription)
         self._summariser = Summariser(self._config.summarisation)
+        self._diariser = (
+            Diariser(self._config.diarisation)
+            if self._config.diarisation.enabled
+            else None
+        )
+
+        # If diarisation is enabled, keep source files for comparison.
+        if self._diariser:
+            self._config.audio.keep_source_files = True
 
         # Output writers (initialised based on config).
         self._md_writer = (
@@ -150,7 +160,20 @@ class MeetingMind:
         if duration_seconds == 0.0:
             duration_seconds = transcript.duration_seconds
 
-        # Step 2: Summarise.
+        # Step 2: Diarise (if enabled and source files are available).
+        if self._diariser:
+            sys_path = self._capture.system_audio_path
+            mic_path = self._capture.mic_audio_path
+            if sys_path and mic_path:
+                logger.info("Running speaker diarisation...")
+                try:
+                    transcript = self._diariser.diarise(
+                        transcript, sys_path, mic_path
+                    )
+                except Exception as e:
+                    logger.error(f"Diarisation failed: {e}", exc_info=True)
+
+        # Step 3: Summarise.
         logger.info("Generating summary...")
         try:
             summary = self._summariser.summarise(transcript)
@@ -158,7 +181,7 @@ class MeetingMind:
             logger.error(f"Summarisation failed: {e}", exc_info=True)
             return
 
-        # Step 3: Write outputs.
+        # Step 4: Write outputs.
         if self._md_writer:
             try:
                 md_path = self._md_writer.write(

@@ -10,6 +10,11 @@ detection:
   # Prevents accidental triggers from brief call joins/drops.
   min_meeting_duration_seconds: 30
 
+  # Number of consecutive positive detections required before starting
+  # recording. At 3s polling, 3 = ~9 seconds of confirmed meeting activity.
+  # Prevents false positives from transient audio device usage.
+  required_consecutive_detections: 3
+
   # Process names to monitor. Supports Teams (new) and classic.
   process_names:
     - "Microsoft Teams"
@@ -33,6 +38,10 @@ audio:
   # is too quiet or too loud relative to remote participants.
   mic_volume: 1.0
 
+  # System audio gain after normalisation (0.0–2.0). Increase if remote
+  # participants' audio is too quiet in the final recording.
+  system_volume: 1.0
+
   # Sample rate in Hz. 16000 is optimal for speech recognition.
   sample_rate: 16000
 
@@ -42,6 +51,10 @@ audio:
 
   # Temporary directory for raw audio chunks during recording.
   temp_audio_dir: "/tmp/meetingmind"
+
+  # Keep separate source WAV files (system + mic) after merging.
+  # Required for speaker diarisation. If false, temp files are deleted.
+  keep_source_files: false
 
 # --- Transcription ---
 transcription:
@@ -60,6 +73,11 @@ transcription:
   # Number of CPU threads for inference. 0 = auto-detect.
   cpu_threads: 0
 
+  # Silero VAD threshold (0.0–1.0). Lower values keep more audio,
+  # higher values filter more aggressively. Default Whisper is 0.5;
+  # 0.35 is recommended to avoid discarding quiet remote audio.
+  vad_threshold: 0.35
+
 # --- Summarisation ---
 summarisation:
   # Backend: "ollama" (local, free) or "claude" (Anthropic API, requires credits).
@@ -76,6 +94,24 @@ summarisation:
 
   # Maximum tokens for the summary response (applies to both backends).
   max_tokens: 4096
+
+# --- Speaker Diarisation ---
+diarisation:
+  # Enable energy-based speaker labelling ("Me" vs "Remote").
+  # Requires dual-source recording (mic_enabled: true).
+  # Source WAV files are automatically kept when enabled.
+  enabled: false
+
+  # Label for the local user (you).
+  speaker_name: "Me"
+
+  # Label for remote participants.
+  remote_label: "Remote"
+
+  # Energy ratio threshold. A source must be this many times louder
+  # than the other to be classified as the sole speaker. Lower values
+  # are more decisive; higher values produce more "crosstalk" labels.
+  energy_ratio_threshold: 1.5
 
 # --- Output: Markdown Vault ---
 markdown:

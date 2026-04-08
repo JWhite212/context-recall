@@ -61,6 +61,7 @@ class TeamsDetector:
         self._state = MeetingState.IDLE
         self._meeting_started_at: float = 0.0
         self._running = False
+        self._consecutive_detections: int = 0
 
         # Callbacks — set these from the orchestrator.
         self.on_meeting_start: callable = lambda event: None
@@ -79,7 +80,7 @@ class TeamsDetector:
         for name in self._config.process_names:
             try:
                 result = subprocess.run(
-                    ["pgrep", "-f", name],
+                    ["pgrep", "-x", name],
                     capture_output=True,
                     text=True,
                     timeout=5,
@@ -92,17 +93,16 @@ class TeamsDetector:
 
     def _is_teams_using_audio(self) -> bool:
         """
-        Check if Teams is holding an audio input device open.
+        Check if Teams has active audio device handles open.
 
-        When a Teams call is active, the process opens a handle to
-        CoreAudio's input device. `lsof` exposes this. We look for
-        any file descriptor pointing to an audio-related path.
+        We look for specific file descriptors that indicate active audio
+        streaming, not just loaded libraries. Teams always loads CoreAudio
+        libraries but only opens device handles during a call.
         """
         for name in self._config.process_names:
             try:
-                # Find Teams PIDs first.
                 pgrep = subprocess.run(
-                    ["pgrep", "-f", name],
+                    ["pgrep", "-x", name],
                     capture_output=True,
                     text=True,
                     timeout=5,
@@ -116,7 +116,6 @@ class TeamsDetector:
                     if not pid:
                         continue
 
-                    # Check if this PID has audio-related file descriptors.
                     lsof = subprocess.run(
                         ["lsof", "-p", pid],
                         capture_output=True,
@@ -125,14 +124,15 @@ class TeamsDetector:
                     )
                     output = lsof.stdout.lower()
 
-                    # CoreAudio indicators in open file descriptors.
-                    audio_indicators = [
-                        "coreaudio",
-                        "audiohald",
-                        "audio",
-                        "blackhole",
+                    # Only these patterns indicate active audio streaming
+                    # (not just having libraries loaded):
+                    active_indicators = [
+                        "ioaudioengine",       # Kernel audio device handle.
+                        "appleusbaudio",       # USB headset/mic device.
+                        "blackhole",           # Virtual audio loopback.
+                        "microsoftteamsaudio", # Teams' virtual audio device.
                     ]
-                    if any(indicator in output for indicator in audio_indicators):
+                    if any(ind in output for ind in active_indicators):
                         return True
 
             except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -199,19 +199,33 @@ class TeamsDetector:
     # ------------------------------------------------------------------
 
     def _tick(self) -> None:
-        """Single poll cycle. Advances the state machine."""
+        """Single poll cycle. Advances the state machine with debounce."""
         meeting_active = self._is_meeting_active()
 
-        if self._state == MeetingState.IDLE and meeting_active:
-            self._meeting_started_at = time.time()
-            self._state = MeetingState.ACTIVE
-            logger.info("Meeting detected — recording started.")
-            self.on_meeting_start(
-                MeetingEvent(
-                    state=MeetingState.ACTIVE,
-                    started_at=self._meeting_started_at,
-                )
-            )
+        if self._state == MeetingState.IDLE:
+            if meeting_active:
+                self._consecutive_detections += 1
+                required = self._config.required_consecutive_detections
+                if self._consecutive_detections >= required:
+                    self._meeting_started_at = time.time()
+                    self._state = MeetingState.ACTIVE
+                    self._consecutive_detections = 0
+                    logger.info("Meeting confirmed — recording started.")
+                    self.on_meeting_start(
+                        MeetingEvent(
+                            state=MeetingState.ACTIVE,
+                            started_at=self._meeting_started_at,
+                        )
+                    )
+                else:
+                    logger.debug(
+                        f"Possible meeting ({self._consecutive_detections}/"
+                        f"{required} confirmations)"
+                    )
+            else:
+                if self._consecutive_detections > 0:
+                    logger.debug("Detection interrupted — resetting counter.")
+                self._consecutive_detections = 0
 
         elif self._state == MeetingState.ACTIVE and not meeting_active:
             ended_at = time.time()

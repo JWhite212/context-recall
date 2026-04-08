@@ -22,6 +22,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 class DetectionConfig:
     poll_interval_seconds: int = 3
     min_meeting_duration_seconds: int = 30
+    required_consecutive_detections: int = 3  # Debounce: consecutive positive polls needed.
     process_names: list[str] = field(
         default_factory=lambda: ["Microsoft Teams", "MSTeams", "Teams"]
     )
@@ -33,9 +34,11 @@ class AudioConfig:
     mic_device_name: str = ""  # Empty = system default input device.
     mic_enabled: bool = True   # Mix microphone input with system audio.
     mic_volume: float = 1.0    # Mic gain relative to system audio (0.0–2.0).
+    system_volume: float = 1.0  # System audio gain after normalisation (0.0–2.0).
     sample_rate: int = 16000
     channels: int = 1
     temp_audio_dir: str = "/tmp/meetingmind"
+    keep_source_files: bool = False  # Keep separate source WAVs (for diarisation).
 
 
 @dataclass
@@ -44,6 +47,7 @@ class TranscriptionConfig:
     compute_type: str = "auto"
     language: str = "en"
     cpu_threads: int = 0
+    vad_threshold: float = 0.35  # Silero VAD threshold (default 0.5; lower = less aggressive).
 
 
 @dataclass
@@ -80,6 +84,14 @@ class NotionConfig:
 
 
 @dataclass
+class DiarisationConfig:
+    enabled: bool = False
+    speaker_name: str = "Me"           # Label for the local user.
+    remote_label: str = "Remote"       # Label for remote participants.
+    energy_ratio_threshold: float = 1.5  # How much louder one source must be.
+
+
+@dataclass
 class LoggingConfig:
     level: str = "INFO"
     log_file: str = "~/Library/Logs/meetingmind.log"
@@ -91,6 +103,7 @@ class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
     summarisation: SummarisationConfig = field(default_factory=SummarisationConfig)
+    diarisation: DiarisationConfig = field(default_factory=DiarisationConfig)
     markdown: MarkdownConfig = field(default_factory=MarkdownConfig)
     notion: NotionConfig = field(default_factory=NotionConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -136,6 +149,9 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         ),
         summarisation=_build_dataclass(
             SummarisationConfig, raw.get("summarisation", {})
+        ),
+        diarisation=_build_dataclass(
+            DiarisationConfig, raw.get("diarisation", {})
         ),
         markdown=_build_dataclass(MarkdownConfig, raw.get("markdown", {})),
         notion=_build_dataclass(NotionConfig, raw.get("notion", {})),

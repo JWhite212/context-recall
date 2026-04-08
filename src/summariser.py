@@ -32,9 +32,10 @@ SUMMARISATION_PROMPT = """\
 You are a precise meeting summariser. Analyse the following transcript and produce a structured summary in Markdown.
 
 Rules:
-- Be concise. Capture substance, not filler.
-- If speaker names are identifiable from context, use them. Otherwise use generic labels.
-- Action items MUST include an owner (or "Unassigned") and a deadline (or "No deadline stated").
+- Be concise in summaries but thorough on action items.
+- The transcript may include speaker labels like [Me] and [Remote]. Use these to attribute statements, decisions, and action items to the correct speakers. "Me" is the person who recorded the meeting.
+- If speaker names are identifiable from context, use them. Otherwise use the speaker labels provided.
+- Action items are the MOST IMPORTANT section. Each must include: a clear task description, the full context of why it's needed, what was discussed that led to this task, any specific requirements or constraints mentioned, the owner, and the deadline.
 - If the meeting is too short or incoherent to summarise meaningfully, say so briefly.
 
 Output the summary in EXACTLY this format (no deviation):
@@ -49,8 +50,20 @@ Output the summary in EXACTLY this format (no deviation):
 - {Decision 2}
 
 ## Action Items
-- [ ] {Task description} — **Owner:** {Name} | **Deadline:** {Date or "TBD"}
-- [ ] {Task description} — **Owner:** {Name} | **Deadline:** {Date or "TBD"}
+
+### {Action item 1 — short title}
+- **Owner:** {Name} | **Deadline:** {Date or "TBD"}
+- **Context:** {2-3 sentences explaining what was discussed that led to this task, why it matters, and any relevant background}
+- **Requirements:** {Specific deliverables, constraints, or acceptance criteria mentioned in the meeting}
+- [ ] {Concrete next step or subtask}
+- [ ] {Additional subtask if applicable}
+
+### {Action item 2 — short title}
+- **Owner:** {Name} | **Deadline:** {Date or "TBD"}
+- **Context:** {2-3 sentences explaining what was discussed that led to this task, why it matters, and any relevant background}
+- **Requirements:** {Specific deliverables, constraints, or acceptance criteria mentioned in the meeting}
+- [ ] {Concrete next step or subtask}
+- [ ] {Additional subtask if applicable}
 
 ## Open Questions
 - {Question or unresolved topic 1}

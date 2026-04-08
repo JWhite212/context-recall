@@ -29,26 +29,31 @@ MeetingMind runs silently in the background, watching for active Teams calls. Wh
 ## How It Works
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                      MeetingMind Daemon                      │
-│                                                              │
-│  ┌──────────┐    ┌───────────────┐    ┌───────────────────┐  │
-│  │ Detector │───▶│ Audio Capture │───▶│   Transcriber     │  │
-│  │ (macOS   │    │ (BlackHole +  │    │   (faster-whisper) │  │
-│  │  polling) │    │  Microphone)  │    │                   │  │
-│  └──────────┘    └───────────────┘    └────────┬──────────┘  │
-│                                                │             │
-│                                      ┌─────────▼──────────┐  │
-│                                      │    Summariser      │  │
-│                                      │  (Ollama / Claude) │  │
-│                                      └─────────┬──────────┘  │
-│                                                │             │
-│                                ┌───────────────┼──────────┐  │
-│                                ▼               ▼          │  │
-│                           Markdown          Notion        │  │
-│                            Vault             Page         │  │
-│                                └───────────────┘          │  │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                       MeetingMind Daemon                         │
+│                                                                  │
+│  ┌──────────┐    ┌───────────────┐    ┌───────────────────────┐  │
+│  │ Detector │───▶│ Audio Capture │───▶│     Transcriber       │  │
+│  │ (macOS   │    │ (BlackHole +  │    │   (faster-whisper)    │  │
+│  │  polling) │    │  Microphone)  │    │                       │  │
+│  └──────────┘    └───────────────┘    └───────────┬───────────┘  │
+│                                                   │              │
+│                                        ┌──────────▼───────────┐  │
+│                                        │     Diariser         │  │
+│                                        │  (Me vs Remote)      │  │
+│                                        └──────────┬───────────┘  │
+│                                                   │              │
+│                                        ┌──────────▼───────────┐  │
+│                                        │     Summariser       │  │
+│                                        │  (Ollama / Claude)   │  │
+│                                        └──────────┬───────────┘  │
+│                                                   │              │
+│                                   ┌───────────────┼───────────┐  │
+│                                   ▼               ▼           │  │
+│                              Markdown          Notion         │  │
+│                               Vault             Page          │  │
+│                                   └───────────────┘           │  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Why Other Participants Can't Tell
@@ -63,10 +68,11 @@ MeetingMind does neither. It captures your local system audio via a loopback dri
 
 ## Features
 
-- **Automatic detection** — Monitors macOS process state and audio device usage to detect live Teams calls without manual intervention
-- **Dual-source audio** — Captures both system audio (remote participants) and microphone (your voice) simultaneously, mixed into a single recording
+- **Automatic detection** — Monitors macOS process state and audio device usage with debounce to detect live Teams calls without manual intervention or false positives
+- **Dual-source audio** — Records system audio (remote participants) and microphone (your voice) to separate files, then merges with RMS normalisation so both sides are equally audible
 - **Local transcription** — Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2 backend) for fast, private, on-device speech-to-text
-- **AI summarisation** — Produces structured summaries with title, key decisions, action items (with owners/deadlines), open questions, and topic tags
+- **Speaker diarisation** — Energy-based labelling distinguishes your voice ("Me") from remote participants ("Remote") in the transcript — no ML dependencies
+- **AI summarisation** — Produces structured summaries with title, key decisions, detailed action items (with full context, owners, deadlines, and subtasks), open questions, and topic tags
 - **Multiple backends** — Choose between free local Ollama models or the Claude API for summarisation
 - **Obsidian integration** — Markdown output with YAML frontmatter designed for Obsidian Dataview queries
 - **Notion integration** — Creates native Notion database pages with proper headings, bullets, and to-do blocks
@@ -91,7 +97,7 @@ After installation, create a **Multi-Output Device** in Audio MIDI Setup:
 4. Set your real device as the clock source
 5. Set this Multi-Output Device as your system output (System Settings → Sound → Output)
 
-This routes audio to both your ears and the virtual loopback simultaneously.
+> **Important:** If you use a USB headset or external speakers, you must also configure **Teams** to use the Multi-Output Device (or "System Default") as its speaker output. Go to Teams → Settings → Devices → Speaker. If Teams sends audio directly to your headset, BlackHole won't capture it.
 
 ### 2. Ollama (Local AI — Recommended)
 
@@ -115,7 +121,7 @@ ollama serve
 Requires Python 3.11+.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/meeting-mind.git
+git clone https://github.com/JWhite212/meeting-mind.git
 cd meeting-mind
 python3 -m venv .venv
 source .venv/bin/activate
@@ -139,6 +145,8 @@ Edit `config.yaml` to set:
 | `audio.blackhole_device_name` | Usually `"BlackHole 2ch"` |
 | `audio.mic_device_name` | Microphone name (empty = system default) |
 | `audio.mic_volume` | Mic gain relative to system audio (`0.0`–`2.0`) |
+| `audio.system_volume` | System audio gain after normalisation (`0.0`–`2.0`) |
+| `diarisation.enabled` | `true` to label speakers as "Me" / "Remote" |
 
 See [`config.example.yaml`](config.example.yaml) for the full reference with all options documented.
 
@@ -150,7 +158,7 @@ See [`config.example.yaml`](config.example.yaml) for the full reference with all
 python3 -m src.main
 ```
 
-Polls for active Teams calls and automatically starts/stops recording. Intended for always-on background use.
+Polls for active Teams calls and automatically starts/stops recording. Intended for always-on background use. Detection uses debounce (3 consecutive positive polls over ~9 seconds) to prevent false positives.
 
 ### Manual Recording
 
@@ -203,13 +211,47 @@ type: meeting-note
 ---
 ```
 
-Followed by the AI-generated summary with sections for Key Decisions, Action Items, Open Questions, and the full timestamped transcript.
+Followed by the AI-generated summary with sections for:
+
+- **Summary** — High-level overview of what was discussed and why it matters
+- **Key Decisions** — Decisions made during the meeting
+- **Action Items** — Each action item includes full context, specific requirements, owner, deadline, and concrete subtasks
+- **Open Questions** — Unresolved topics for follow-up
+- **Full Transcript** — Timestamped and speaker-labelled transcript (`[00:01:23] [Remote] So the quarterly numbers show...`)
 
 ### Notion
 
 A new page is created in your configured Notion database with:
 - **Properties:** Title, Date, Tags (multi-select), Status
 - **Content:** Native Notion blocks — headings, bullets, and to-do items (not raw Markdown)
+
+## Audio Pipeline
+
+MeetingMind records system audio and microphone to **separate WAV files** using independent audio streams, then merges them after capture with RMS normalisation. This design:
+
+- **Eliminates clock drift** — Two hardware devices (e.g. BlackHole virtual device and USB headset) run on independent clocks. Real-time mixing causes progressive desynchronisation. Separate files avoid this entirely.
+- **Balances volume levels** — System audio (remote participants) is typically much quieter than a close-range microphone. Post-capture normalisation brings both sources to the same RMS level before mixing.
+- **Enables speaker diarisation** — The separate source files allow energy-based comparison to determine who was speaking in each segment.
+
+## Speaker Diarisation
+
+When enabled, MeetingMind labels each transcript segment with a speaker identifier by comparing the RMS energy between the system audio and microphone recordings for each time window:
+
+- If the mic is significantly louder → **"Me"** (you were speaking)
+- If the system audio is significantly louder → **"Remote"** (another participant was speaking)
+- If both are similar → **"Me + Remote"** (crosstalk)
+
+This produces transcripts like:
+
+```
+[00:01:23] [Remote] So the quarterly numbers show a 15% increase...
+[00:01:45] [Me] Right, and I think we should focus on the enterprise segment.
+[00:02:10] [Remote] Agreed. Let's draft the proposal by Friday.
+```
+
+The summariser uses these labels to correctly attribute statements, decisions, and action items to the right participants.
+
+> **Tip:** Diarisation works best with headsets (like USB headsets) that isolate your mic from system audio. With open speakers, crosstalk reduces accuracy.
 
 ## Configuration Reference
 
@@ -221,6 +263,7 @@ A new page is created in your configured Notion database with:
 detection:
   poll_interval_seconds: 3         # How often to check for active calls
   min_meeting_duration_seconds: 30 # Ignore very short calls
+  required_consecutive_detections: 3  # Debounce: consecutive polls before recording
   process_names:                   # Teams process names to monitor
     - "Microsoft Teams"
     - "MSTeams"
@@ -232,9 +275,11 @@ audio:
   mic_device_name: ""              # Empty = system default microphone
   mic_enabled: true                # Capture your voice alongside system audio
   mic_volume: 1.0                  # 0.0–2.0 gain for microphone input
+  system_volume: 1.0               # 0.0–2.0 gain for system audio after normalisation
   sample_rate: 16000               # 16kHz mono — optimal for Whisper
   channels: 1
   temp_audio_dir: "/tmp/meetingmind"
+  keep_source_files: false         # Keep separate WAVs (auto-enabled with diarisation)
 
 # Transcription
 transcription:
@@ -242,6 +287,7 @@ transcription:
   compute_type: "auto"             # int8 on Apple Silicon
   language: "en"                   # "auto" for language detection
   cpu_threads: 0                   # 0 = auto-detect
+  vad_threshold: 0.35              # 0.0–1.0, lower keeps more audio (default Whisper: 0.5)
 
 # Summarisation
 summarisation:
@@ -251,6 +297,13 @@ summarisation:
   anthropic_api_key: "sk-ant-..."  # Only needed for backend: claude
   model: "claude-sonnet-4-20250514"
   max_tokens: 4096
+
+# Speaker Diarisation
+diarisation:
+  enabled: false                   # Label speakers as "Me" vs "Remote"
+  speaker_name: "Me"               # Your label in the transcript
+  remote_label: "Remote"           # Remote participants' label
+  energy_ratio_threshold: 1.5      # How decisive the energy comparison must be
 
 # Output: Markdown
 markdown:
@@ -290,8 +343,9 @@ meeting-mind/
     ├── __init__.py
     ├── main.py                      # Entry point and orchestrator
     ├── detector.py                  # Teams meeting detection (macOS)
-    ├── audio_capture.py             # Dual-source audio recording
+    ├── audio_capture.py             # Dual-source audio recording + merge
     ├── transcriber.py               # faster-whisper speech-to-text
+    ├── diariser.py                  # Energy-based speaker labelling
     ├── summariser.py                # AI summarisation (Ollama / Claude)
     ├── output/
     │   ├── __init__.py
@@ -309,6 +363,7 @@ meeting-mind/
 | Audio capture | [sounddevice](https://python-sounddevice.readthedocs.io/) + [BlackHole](https://existential.audio/blackhole/) |
 | Transcription | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2) |
 | Summarisation | [Ollama](https://ollama.com/) or [Claude API](https://docs.anthropic.com/) |
+| Diarisation | Energy-based RMS comparison (numpy) |
 | Notion output | [notion-client](https://github.com/ramnes/notion-sdk-py) |
 | Config | PyYAML with typed dataclasses |
 | Platform | macOS only (BlackHole, pgrep, lsof, osascript) |
@@ -319,31 +374,37 @@ meeting-mind/
 
 1. Verify BlackHole is installed: `brew list blackhole-2ch`
 2. Check your system output is set to the Multi-Output Device (not directly to speakers)
-3. Run `python3 -m sounddevice` to confirm BlackHole appears as an input device
-4. Play a system sound while recording to test the loopback
-
-### VAD removes all audio
-
-The faster-whisper VAD filter discards segments it classifies as silence. If your audio is very quiet, the entire recording may be filtered out. Check that the Multi-Output Device is configured correctly and that your system volume is not muted.
-
-### Transcription produces no words
-
-If the recording file has content but transcription returns 0 words, this usually means the audio level is too low for VAD detection. Verify audio is flowing with:
+3. **Check Teams' speaker setting** — go to Teams → Settings → Devices → Speaker and ensure it's set to "Multi-Output Device" or "System Default". If Teams sends audio directly to your headset, BlackHole won't capture it.
+4. Run `python3 -m sounddevice` to confirm BlackHole appears as an input device
+5. Verify audio is flowing:
 
 ```bash
 python3 -c "
 import sounddevice as sd, numpy as np
-data = sd.rec(int(3 * 48000), samplerate=48000, channels=2, device='BlackHole 2ch', dtype='float32')
+data = sd.rec(int(3 * 16000), samplerate=16000, channels=2, device='BlackHole 2ch', dtype='float32')
 sd.wait()
-print(f'Peak amplitude: {np.max(np.abs(data)):.6f}')
+peak = np.max(np.abs(data))
+print(f'Peak amplitude: {peak:.6f}')
+print('Signal detected' if peak > 0.001 else 'SILENT — check audio routing')
 "
 ```
 
-A peak above `0.001` indicates signal is present.
+### VAD removes all audio
+
+The faster-whisper VAD filter discards segments it classifies as silence. If your audio is very quiet, the entire recording may be filtered out. Try lowering `transcription.vad_threshold` in your config (default: `0.35`, lower is less aggressive). Check that the Multi-Output Device is configured correctly and that your system volume is not muted.
+
+### Daemon detects a meeting when Teams is just open
+
+The detector requires multiple consecutive positive polls (default: 3, or ~9 seconds) before triggering. If false positives persist, increase `detection.required_consecutive_detections` in your config.
 
 ### Ollama connection refused
 
 Ensure the Ollama server is running (`ollama serve`) and listening on the configured port (default: `http://localhost:11434`).
+
+### Diarisation labels are inaccurate
+
+- Use a headset with good mic isolation for best results. Open speakers cause crosstalk.
+- Adjust `diarisation.energy_ratio_threshold` — lower values (e.g. `1.2`) are more decisive, higher values (e.g. `2.0`) require a bigger energy difference.
 
 ## License
 

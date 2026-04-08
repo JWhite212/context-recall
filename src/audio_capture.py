@@ -2,13 +2,12 @@
 Audio capture via BlackHole loopback + microphone on macOS.
 
 Records system audio from the BlackHole virtual device and (optionally)
-the local microphone, mixing both into a single 16-bit PCM WAV at
-16kHz mono — the optimal input format for Whisper-based speech
-recognition.
+the local microphone to separate WAV files, then merges them post-capture
+with RMS normalisation. This eliminates clock-drift issues that arise
+from real-time mixing of two independent audio devices.
 
-This captures both sides of a conversation: remote participants come
-through BlackHole (system audio output loopback) while the local
-user's voice comes through the microphone.
+The final output is a single 16-bit PCM WAV at 16kHz mono — the optimal
+input format for Whisper-based speech recognition.
 
 Thread safety: start() and stop() are designed to be called from
 different threads (e.g., the detector thread calls start/stop while
@@ -17,7 +16,6 @@ the audio capture runs on its own thread).
 
 import logging
 import os
-import queue
 import threading
 import time
 from pathlib import Path
@@ -30,6 +28,8 @@ from src.utils.config import AudioConfig
 
 logger = logging.getLogger(__name__)
 
+TARGET_RMS_DBFS = -20.0  # Target RMS level for normalisation.
+
 
 class AudioCaptureError(Exception):
     """Raised when audio capture encounters an unrecoverable error."""
@@ -38,8 +38,8 @@ class AudioCaptureError(Exception):
 class AudioCapture:
     """
     Captures audio from the BlackHole virtual device and the local
-    microphone, mixes them into a single mono WAV file suitable for
-    transcription.
+    microphone to separate files, then merges them into a single
+    normalised mono WAV file suitable for transcription.
     """
 
     def __init__(self, config: AudioConfig):
@@ -47,6 +47,8 @@ class AudioCapture:
         self._recording = False
         self._thread: threading.Thread | None = None
         self._output_path: Path | None = None
+        self._system_path: Path | None = None
+        self._mic_path: Path | None = None
         self._blackhole_idx: int | None = None
         self._mic_idx: int | None = None
 
@@ -82,7 +84,6 @@ class AudioCapture:
     def _find_default_input_device(self) -> int | None:
         """Return the index of the system default input device, or None."""
         try:
-            info = sd.query_devices(kind="input")
             idx = sd.default.device[0]
             if idx is not None and idx >= 0:
                 device = sd.query_devices(idx)
@@ -104,179 +105,229 @@ class AudioCapture:
     def _record_loop(self) -> None:
         """
         Runs on a background thread. Opens input streams on BlackHole
-        and (optionally) the microphone, mixes them, and writes mono
-        audio to a WAV file until self._recording is set to False.
+        and (optionally) the microphone. Each stream writes directly
+        to its own WAV file — no real-time mixing, no clock-drift issues.
         """
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        self._output_path = (
-            Path(self._config.temp_audio_dir) / f"meeting_{timestamp}.wav"
-        )
+        base = Path(self._config.temp_audio_dir)
 
-        logger.info(f"Recording to {self._output_path}")
+        self._system_path = base / f"meeting_{timestamp}_system.wav"
+        self._output_path = base / f"meeting_{timestamp}.wav"
 
-        system_q: queue.Queue[np.ndarray] = queue.Queue()
-        mic_q: queue.Queue[np.ndarray] = queue.Queue()
         use_mic = self._config.mic_enabled and self._mic_idx is not None
-        mic_vol = max(0.0, min(2.0, self._config.mic_volume))
-
         if use_mic:
-            logger.info(
-                f"Dual-source recording: BlackHole (system) + mic "
-                f"(volume={mic_vol:.1f})"
-            )
+            self._mic_path = base / f"meeting_{timestamp}_mic.wav"
+            logger.info("Dual-source recording: BlackHole (system) + mic")
         else:
+            self._mic_path = None
             logger.info("Single-source recording: BlackHole (system) only")
 
         try:
-            with sf.SoundFile(
-                str(self._output_path),
+            # Open output WAV files.
+            system_file = sf.SoundFile(
+                str(self._system_path),
                 mode="w",
                 samplerate=self._config.sample_rate,
-                channels=self._config.channels,
+                channels=1,
                 subtype="PCM_16",
-            ) as wav_file:
+            )
 
-                def system_callback(indata, frames, time_info, status):
-                    if status:
-                        logger.warning(f"System audio status: {status}")
-                    if self._recording:
-                        system_q.put(indata.copy())
-
-                def mic_callback(indata, frames, time_info, status):
-                    if status:
-                        logger.warning(f"Mic audio status: {status}")
-                    if self._recording:
-                        mic_q.put(indata.copy())
-
-                # Determine mic channel count.
-                mic_channels = 1
-                if use_mic:
-                    mic_info = sd.query_devices(self._mic_idx)
-                    mic_channels = min(mic_info["max_input_channels"], 2)
-
-                # Open streams.
-                system_stream = sd.InputStream(
-                    device=self._blackhole_idx,
+            mic_file = None
+            if use_mic:
+                mic_file = sf.SoundFile(
+                    str(self._mic_path),
+                    mode="w",
                     samplerate=self._config.sample_rate,
-                    channels=2,  # BlackHole 2ch always provides stereo.
+                    channels=1,
+                    subtype="PCM_16",
+                )
+
+            # Callbacks write directly to their respective files.
+            def system_callback(indata, frames, time_info, status):
+                if status:
+                    logger.warning(f"System audio status: {status}")
+                if self._recording:
+                    mono = self._to_mono(indata)
+                    system_file.write(mono)
+
+            def mic_callback(indata, frames, time_info, status):
+                if status:
+                    logger.warning(f"Mic audio status: {status}")
+                if self._recording:
+                    mono = self._to_mono(indata)
+                    mic_file.write(mono)
+
+            # Determine mic channel count.
+            mic_channels = 1
+            if use_mic:
+                mic_info = sd.query_devices(self._mic_idx)
+                mic_channels = min(mic_info["max_input_channels"], 2)
+
+            # Open streams.
+            system_stream = sd.InputStream(
+                device=self._blackhole_idx,
+                samplerate=self._config.sample_rate,
+                channels=2,  # BlackHole 2ch always provides stereo.
+                dtype="float32",
+                callback=system_callback,
+                blocksize=1024,
+            )
+
+            mic_stream = None
+            if use_mic:
+                mic_stream = sd.InputStream(
+                    device=self._mic_idx,
+                    samplerate=self._config.sample_rate,
+                    channels=mic_channels,
                     dtype="float32",
-                    callback=system_callback,
+                    callback=mic_callback,
                     blocksize=1024,
                 )
 
-                mic_stream = None
-                if use_mic:
-                    mic_stream = sd.InputStream(
-                        device=self._mic_idx,
-                        samplerate=self._config.sample_rate,
-                        channels=mic_channels,
-                        dtype="float32",
-                        callback=mic_callback,
-                        blocksize=1024,
-                    )
+            system_stream.start()
+            if mic_stream:
+                mic_stream.start()
 
-                system_stream.start()
-                if mic_stream:
-                    mic_stream.start()
+            logger.info("Audio stream(s) opened. Capturing...")
 
-                logger.info("Audio stream(s) opened. Capturing...")
+            # Wait until recording is stopped.
+            while self._recording:
+                time.sleep(0.1)
 
-                # Mixing buffers.
-                system_buf = np.zeros(0, dtype=np.float32)
-                mic_buf = np.zeros(0, dtype=np.float32)
+            # Stop streams (blocks until callbacks finish).
+            system_stream.stop()
+            system_stream.close()
+            if mic_stream:
+                mic_stream.stop()
+                mic_stream.close()
 
-                while self._recording:
-                    # Drain system audio queue.
-                    while not system_q.empty():
-                        try:
-                            chunk = system_q.get_nowait()
-                            system_buf = np.concatenate(
-                                [system_buf, self._to_mono(chunk)]
-                            )
-                        except queue.Empty:
-                            break
-
-                    # Drain mic queue.
-                    if use_mic:
-                        while not mic_q.empty():
-                            try:
-                                chunk = mic_q.get_nowait()
-                                mono = self._to_mono(chunk) * mic_vol
-                                mic_buf = np.concatenate([mic_buf, mono])
-                            except queue.Empty:
-                                break
-
-                    # Mix and write aligned samples.
-                    if use_mic:
-                        n = min(len(system_buf), len(mic_buf))
-                        if n > 0:
-                            mixed = system_buf[:n] + mic_buf[:n]
-                            mixed = np.clip(mixed, -1.0, 1.0)
-                            wav_file.write(mixed.reshape(-1, 1))
-                            system_buf = system_buf[n:]
-                            mic_buf = mic_buf[n:]
-                    else:
-                        if len(system_buf) > 0:
-                            wav_file.write(system_buf.reshape(-1, 1))
-                            system_buf = np.zeros(0, dtype=np.float32)
-
-                    time.sleep(0.05)
-
-                # --- Flush remaining samples after stop ---
-                system_stream.stop()
-                if mic_stream:
-                    mic_stream.stop()
-
-                # Drain any final data from queues.
-                while not system_q.empty():
-                    try:
-                        chunk = system_q.get_nowait()
-                        system_buf = np.concatenate(
-                            [system_buf, self._to_mono(chunk)]
-                        )
-                    except queue.Empty:
-                        break
-
-                if use_mic:
-                    while not mic_q.empty():
-                        try:
-                            chunk = mic_q.get_nowait()
-                            mono = self._to_mono(chunk) * mic_vol
-                            mic_buf = np.concatenate([mic_buf, mono])
-                        except queue.Empty:
-                            break
-
-                # Write remaining mixed audio.
-                if use_mic:
-                    n = min(len(system_buf), len(mic_buf))
-                    if n > 0:
-                        mixed = system_buf[:n] + mic_buf[:n]
-                        mixed = np.clip(mixed, -1.0, 1.0)
-                        wav_file.write(mixed.reshape(-1, 1))
-                    # Write any trailing samples from the longer source.
-                    remainder = (
-                        system_buf[n:] if len(system_buf) > n else mic_buf[n:]
-                    )
-                    if len(remainder) > 0:
-                        wav_file.write(
-                            np.clip(remainder, -1.0, 1.0).reshape(-1, 1)
-                        )
-                else:
-                    if len(system_buf) > 0:
-                        wav_file.write(system_buf.reshape(-1, 1))
-
-                system_stream.close()
-                if mic_stream:
-                    mic_stream.close()
+            # Close WAV files.
+            system_file.close()
+            if mic_file:
+                mic_file.close()
 
             logger.info(
-                f"Recording complete: {self._output_path} "
-                f"({self._output_path.stat().st_size / 1024:.0f} KB)"
+                f"System audio: {self._system_path} "
+                f"({self._system_path.stat().st_size / 1024:.0f} KB)"
             )
+            if self._mic_path and self._mic_path.exists():
+                logger.info(
+                    f"Mic audio:    {self._mic_path} "
+                    f"({self._mic_path.stat().st_size / 1024:.0f} KB)"
+                )
+
+            # Merge sources into the final output file.
+            self._merge_sources()
 
         except Exception as e:
             logger.error(f"Audio capture failed: {e}", exc_info=True)
             self._output_path = None
+
+    def _merge_sources(self) -> None:
+        """
+        Load the separate source WAV files, normalise each to a target
+        RMS level, mix them, and write the final output.
+
+        This ensures both sources contribute equally regardless of their
+        original volume levels — the quiet BlackHole system audio gets
+        boosted to match the louder microphone.
+        """
+        if not self._system_path or not self._system_path.exists():
+            logger.error("System audio file missing — cannot merge.")
+            self._output_path = None
+            return
+
+        system_audio, sr = sf.read(str(self._system_path), dtype="float32")
+        logger.info(
+            f"System audio: {len(system_audio)} samples, "
+            f"RMS={self._rms_dbfs(system_audio):.1f} dBFS"
+        )
+
+        has_mic = (
+            self._mic_path is not None
+            and self._mic_path.exists()
+            and self._mic_path.stat().st_size > 44  # WAV header only = empty.
+        )
+
+        if has_mic:
+            mic_audio, _ = sf.read(str(self._mic_path), dtype="float32")
+            logger.info(
+                f"Mic audio:    {len(mic_audio)} samples, "
+                f"RMS={self._rms_dbfs(mic_audio):.1f} dBFS"
+            )
+
+            # Pad shorter source with silence.
+            max_len = max(len(system_audio), len(mic_audio))
+            if len(system_audio) < max_len:
+                system_audio = np.pad(
+                    system_audio, (0, max_len - len(system_audio))
+                )
+            if len(mic_audio) < max_len:
+                mic_audio = np.pad(mic_audio, (0, max_len - len(mic_audio)))
+
+            # Normalise each source to target RMS, then apply user gain.
+            system_vol = max(0.0, min(2.0, self._config.system_volume))
+            mic_vol = max(0.0, min(2.0, self._config.mic_volume))
+
+            system_audio = self._normalise_rms(system_audio) * system_vol
+            mic_audio = self._normalise_rms(mic_audio) * mic_vol
+
+            # Mix and clip.
+            mixed = system_audio + mic_audio
+            mixed = np.clip(mixed, -1.0, 1.0)
+
+            logger.info(
+                f"Mixed audio: {len(mixed)} samples, "
+                f"RMS={self._rms_dbfs(mixed):.1f} dBFS"
+            )
+        else:
+            # Single-source: just normalise system audio.
+            mixed = self._normalise_rms(system_audio)
+
+        # Write final output.
+        sf.write(
+            str(self._output_path),
+            mixed,
+            self._config.sample_rate,
+            subtype="PCM_16",
+        )
+
+        logger.info(
+            f"Final output: {self._output_path} "
+            f"({self._output_path.stat().st_size / 1024:.0f} KB)"
+        )
+
+        # Clean up source files (keep them if needed for diarisation).
+        if not self._config.keep_source_files:
+            if self._system_path and self._system_path.exists():
+                self._system_path.unlink()
+            if self._mic_path and self._mic_path.exists():
+                self._mic_path.unlink()
+            logger.debug("Deleted temporary source files.")
+
+    @staticmethod
+    def _rms_dbfs(audio: np.ndarray) -> float:
+        """Calculate RMS level in dBFS."""
+        rms = np.sqrt(np.mean(audio ** 2))
+        if rms < 1e-10:
+            return -100.0
+        return 20.0 * np.log10(rms)
+
+    @staticmethod
+    def _normalise_rms(
+        audio: np.ndarray, target_dbfs: float = TARGET_RMS_DBFS
+    ) -> np.ndarray:
+        """
+        Normalise audio to a target RMS level in dBFS.
+        Returns the audio unchanged if it's effectively silent.
+        """
+        rms = np.sqrt(np.mean(audio ** 2))
+        if rms < 1e-10:
+            return audio  # Silent — nothing to normalise.
+
+        target_rms = 10.0 ** (target_dbfs / 20.0)
+        gain = target_rms / rms
+        return audio * gain
 
     # ------------------------------------------------------------------
     # Public interface
@@ -326,10 +377,8 @@ class AudioCapture:
 
     def stop(self) -> Path | None:
         """
-        Stop recording and return the path to the captured WAV file.
-
-        Returns None if no audio was captured (e.g., due to an error
-        or if the recording was never started).
+        Stop recording, merge source files, and return the path to
+        the final mixed WAV file.
         """
         if not self._recording:
             logger.warning("Not recording — ignoring stop().")
@@ -338,7 +387,7 @@ class AudioCapture:
         self._recording = False
 
         if self._thread:
-            self._thread.join(timeout=10)
+            self._thread.join(timeout=30)  # Merge can take a moment.
             self._thread = None
 
         return self._output_path
@@ -350,3 +399,17 @@ class AudioCapture:
     @property
     def output_path(self) -> Path | None:
         return self._output_path
+
+    @property
+    def system_audio_path(self) -> Path | None:
+        """Path to the separate system audio file (if kept)."""
+        if self._system_path and self._system_path.exists():
+            return self._system_path
+        return None
+
+    @property
+    def mic_audio_path(self) -> Path | None:
+        """Path to the separate mic audio file (if kept)."""
+        if self._mic_path and self._mic_path.exists():
+            return self._mic_path
+        return None

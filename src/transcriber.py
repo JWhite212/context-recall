@@ -54,10 +54,15 @@ class Transcript:
 
     @property
     def timestamped_text(self) -> str:
-        """Formatted transcript with timestamps for each segment."""
+        """Formatted transcript with timestamps and optional speaker labels."""
         lines = []
         for seg in self.segments:
-            lines.append(f"{seg.timestamp} {seg.text.strip()}")
+            if seg.speaker:
+                lines.append(
+                    f"{seg.timestamp} [{seg.speaker}] {seg.text.strip()}"
+                )
+            else:
+                lines.append(f"{seg.timestamp} {seg.text.strip()}")
         return "\n".join(lines)
 
     @property
@@ -128,6 +133,7 @@ class Transcriber:
             vad_filter=True,           # Filter out silence for speed.
             vad_parameters=dict(
                 min_silence_duration_ms=500,
+                threshold=self._config.vad_threshold,
             ),
         )
 
