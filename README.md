@@ -111,7 +111,7 @@ python -m src.main --record-now
 Each meeting produces a file like:
 
 ```
-~/SecondBrain/Meetings/2026-04-07_standup-with-patrik.md
+~/SecondBrain/Meetings/2026-04-07_standup-with-team.md
 ```
 
 Containing:
