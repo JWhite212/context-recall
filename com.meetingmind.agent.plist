@@ -21,13 +21,13 @@
     <key>ProgramArguments</key>
     <array>
         <!-- Update these paths to match your installation. -->
-        <string>/Users/jamiewhite/Documents/Documents/Personal/Coding Projects/meeting-mind/.venv/bin/python</string>
+        <string>/path/to/meeting-mind/.venv/bin/python</string>
         <string>-m</string>
         <string>src.main</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/jamiewhite/Documents/Documents/Personal/Coding Projects/meeting-mind</string>
+    <string>/path/to/meeting-mind</string>
 
     <!-- Start automatically on login. -->
     <key>RunAtLoad</key>
@@ -46,8 +46,8 @@
 
     <!-- Log stdout and stderr for debugging. -->
     <key>StandardOutPath</key>
-    <string>/Users/jamiewhite/Library/Logs/meetingmind-stdout.log</string>
+    <string>/tmp/meetingmind-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/jamiewhite/Library/Logs/meetingmind-stderr.log</string>
+    <string>/tmp/meetingmind-stderr.log</string>
 </dict>
 </plist>

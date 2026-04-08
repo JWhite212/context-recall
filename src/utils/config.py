@@ -59,7 +59,7 @@ class SummarisationConfig:
 @dataclass
 class MarkdownConfig:
     enabled: bool = True
-    vault_path: str = "~/Documents/SecondBrain/Meetings"
+    vault_path: str = "~/Documents/Meetings"
     filename_template: str = "{date}_{slug}.md"
     include_full_transcript: bool = True
 
