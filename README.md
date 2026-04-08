@@ -5,13 +5,13 @@ A macOS daemon that automatically detects Microsoft Teams meetings, transcribes 
 ## How It Works
 
 ```
-┌─────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────┐
 │                     MeetingMind Daemon                   │
 │                                                          │
-│  ┌──────────┐   ┌──────────────┐   ┌──────────────────┐ │
-│  │ Detector  │──▶│ Audio Capture │──▶│  Transcriber     │ │
-│  │ (polling) │   │ (BlackHole)  │   │  (faster-whisper) │ │
-│  └──────────┘   └──────────────┘   └────────┬─────────┘ │
+│  ┌──────────┐   ┌──────────────┐   ┌──────────────────┐  │
+│  │ Detector │──▶│ Audio Capture│──▶│  Transcriber    │  │
+│  │ (polling)│   │ (BlackHole)  │   │  (faster-whisper)│  │
+│  └──────────┘   └──────────────┘   └─────────┬────────┘  │
 │                                              │           │
 │                                    ┌─────────▼─────────┐ │
 │                                    │   Summariser      │ │
@@ -23,7 +23,7 @@ A macOS daemon that automatically detects Microsoft Teams meetings, transcribes 
 │                         Markdown          Notion      │  │
 │                          Vault             Page       │  │
 │                              └───────────────┘        │  │
-└─────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────┘
 ```
 
 ## Why This Is Undetectable
