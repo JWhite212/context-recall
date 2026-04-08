@@ -1,0 +1,144 @@
+"""
+Configuration loader for MeetingMind.
+
+Reads config.yaml from the project root and exposes a typed
+configuration object. Falls back to sensible defaults where possible.
+"""
+
+import os
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Optional
+
+import yaml
+
+
+# Resolve project root as the directory two levels above this file.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+
+
+@dataclass
+class DetectionConfig:
+    poll_interval_seconds: int = 3
+    min_meeting_duration_seconds: int = 30
+    process_names: list[str] = field(
+        default_factory=lambda: ["Microsoft Teams", "MSTeams", "Teams"]
+    )
+
+
+@dataclass
+class AudioConfig:
+    blackhole_device_name: str = "BlackHole 2ch"
+    sample_rate: int = 16000
+    channels: int = 1
+    temp_audio_dir: str = "/tmp/meetingmind"
+
+
+@dataclass
+class TranscriptionConfig:
+    model_size: str = "small.en"
+    compute_type: str = "auto"
+    language: str = "en"
+    cpu_threads: int = 0
+
+
+@dataclass
+class SummarisationConfig:
+    anthropic_api_key: str = ""
+    model: str = "claude-sonnet-4-20250514"
+    max_tokens: int = 4096
+
+
+@dataclass
+class MarkdownConfig:
+    enabled: bool = True
+    vault_path: str = "~/Documents/SecondBrain/Meetings"
+    filename_template: str = "{date}_{slug}.md"
+    include_full_transcript: bool = True
+
+
+@dataclass
+class NotionConfig:
+    enabled: bool = False
+    api_key: str = ""
+    database_id: str = ""
+    properties: dict[str, str] = field(
+        default_factory=lambda: {
+            "title": "Name",
+            "date": "Date",
+            "tags": "Tags",
+            "status": "Status",
+        }
+    )
+
+
+@dataclass
+class LoggingConfig:
+    level: str = "INFO"
+    log_file: str = "~/Library/Logs/meetingmind.log"
+
+
+@dataclass
+class AppConfig:
+    detection: DetectionConfig = field(default_factory=DetectionConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)
+    transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
+    summarisation: SummarisationConfig = field(default_factory=SummarisationConfig)
+    markdown: MarkdownConfig = field(default_factory=MarkdownConfig)
+    notion: NotionConfig = field(default_factory=NotionConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+
+
+def _expand_path(path_str: str) -> str:
+    """Expand ~ and environment variables in a path string."""
+    return str(Path(os.path.expandvars(os.path.expanduser(path_str))).resolve())
+
+
+def _build_dataclass(cls, raw: dict):
+    """
+    Construct a dataclass from a dict, ignoring any keys that
+    don't correspond to fields. This makes the config forward-compatible:
+    old configs won't break if new fields are added.
+    """
+    valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+    filtered = {k: v for k, v in raw.items() if k in valid_fields}
+    return cls(**filtered)
+
+
+def load_config(config_path: Optional[Path] = None) -> AppConfig:
+    """
+    Load and validate the application configuration.
+
+    Falls back to defaults if the config file does not exist,
+    which allows the app to start in a minimal state for testing.
+    """
+    path = config_path or DEFAULT_CONFIG_PATH
+
+    if not path.exists():
+        print(f"[config] No config found at {path}, using defaults.")
+        return AppConfig()
+
+    with open(path, "r") as f:
+        raw = yaml.safe_load(f) or {}
+
+    config = AppConfig(
+        detection=_build_dataclass(DetectionConfig, raw.get("detection", {})),
+        audio=_build_dataclass(AudioConfig, raw.get("audio", {})),
+        transcription=_build_dataclass(
+            TranscriptionConfig, raw.get("transcription", {})
+        ),
+        summarisation=_build_dataclass(
+            SummarisationConfig, raw.get("summarisation", {})
+        ),
+        markdown=_build_dataclass(MarkdownConfig, raw.get("markdown", {})),
+        notion=_build_dataclass(NotionConfig, raw.get("notion", {})),
+        logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
+    )
+
+    # Expand user paths so downstream code doesn't need to worry about tildes.
+    config.audio.temp_audio_dir = _expand_path(config.audio.temp_audio_dir)
+    config.markdown.vault_path = _expand_path(config.markdown.vault_path)
+    config.logging.log_file = _expand_path(config.logging.log_file)
+
+    return config

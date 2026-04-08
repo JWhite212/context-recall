@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        MeetingMind Launch Agent
+        Starts the daemon automatically on user login.
+
+        Installation:
+          cp com.meetingmind.agent.plist ~/Library/LaunchAgents/
+          launchctl load ~/Library/LaunchAgents/com.meetingmind.agent.plist
+
+        Removal:
+          launchctl unload ~/Library/LaunchAgents/com.meetingmind.agent.plist
+          rm ~/Library/LaunchAgents/com.meetingmind.agent.plist
+    -->
+    <key>Label</key>
+    <string>com.meetingmind.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Update these paths to match your installation. -->
+        <string>/Users/jamiewhite/Documents/Personal/Coding Projects/meeting-mind/.venv/bin/python</string>
+        <string>-m</string>
+        <string>src.main</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jamiewhite/Documents/Personal/Coding Projects/meeting-mind</string>
+
+    <!-- Start automatically on login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if the process exits unexpectedly. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Throttle restarts to avoid rapid-fire loops on error. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Log stdout and stderr for debugging. -->
+    <key>StandardOutPath</key>
+    <string>/Users/jamiewhite/Library/Logs/meetingmind-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jamiewhite/Library/Logs/meetingmind-stderr.log</string>
+</dict>
+</plist>

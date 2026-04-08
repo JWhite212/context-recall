@@ -1,0 +1,16 @@
+# Secrets — config.yaml contains real API keys
+config.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+
+# macOS
+.DS_Store
+
+# Claude Code
+.claude/

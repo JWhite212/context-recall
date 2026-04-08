@@ -1,0 +1,98 @@
+# MeetingMind Configuration
+# Copy to config.yaml and fill in your values.
+
+# --- Meeting Detection ---
+detection:
+  # How often to poll for an active Teams meeting (seconds).
+  poll_interval_seconds: 3
+
+  # Minimum meeting duration (seconds) before transcription is kept.
+  # Prevents accidental triggers from brief call joins/drops.
+  min_meeting_duration_seconds: 30
+
+  # Process names to monitor. Supports Teams (new) and classic.
+  process_names:
+    - "Microsoft Teams"
+    - "MSTeams"
+    - "Teams"
+
+# --- Audio Capture ---
+audio:
+  # Name of the BlackHole virtual audio device as it appears in
+  # Audio MIDI Setup. Run `python -m sounddevice` to list devices.
+  blackhole_device_name: "BlackHole 2ch"
+
+  # Sample rate in Hz. 16000 is optimal for speech recognition.
+  sample_rate: 16000
+
+  # Number of audio channels. BlackHole 2ch provides stereo;
+  # we downmix to mono for transcription.
+  channels: 1
+
+  # Temporary directory for raw audio chunks during recording.
+  temp_audio_dir: "/tmp/meetingmind"
+
+# --- Transcription ---
+transcription:
+  # faster-whisper model size. Options: tiny.en, base.en, small.en,
+  # medium.en, large-v3. Larger models are more accurate but slower.
+  # Recommendation: small.en for M1/M2, medium.en for M2 Pro/Max+.
+  model_size: "small.en"
+
+  # Compute backend. "auto" selects the best available.
+  # Options: auto, cpu, cuda (not applicable on Mac, but future-proof).
+  compute_type: "auto"
+
+  # Language. Use "en" for English-only models, or "auto" to detect.
+  language: "en"
+
+  # Number of CPU threads for inference. 0 = auto-detect.
+  cpu_threads: 0
+
+# --- Summarisation ---
+summarisation:
+  # Anthropic API key for Claude-powered summaries.
+  anthropic_api_key: "sk-ant-..."
+
+  # Model to use. claude-sonnet-4-20250514 is a good balance of speed and quality.
+  model: "claude-sonnet-4-20250514"
+
+  # Maximum tokens for the summary response.
+  max_tokens: 4096
+
+# --- Output: Markdown Vault ---
+markdown:
+  enabled: true
+
+  # Absolute path to the Obsidian vault meetings folder.
+  vault_path: "~/Documents/SecondBrain/Meetings"
+
+  # Template for the filename. Available variables:
+  # {date}, {time}, {slug} (auto-generated from summary title).
+  filename_template: "{date}_{slug}.md"
+
+  # Whether to include the full transcript in the markdown file.
+  include_full_transcript: true
+
+# --- Output: Notion ---
+notion:
+  enabled: false
+
+  # Notion integration token (internal integration).
+  api_key: "ntn_..."
+
+  # The database ID to create meeting pages in.
+  # Find this in the database URL: notion.so/<workspace>/<database_id>?v=...
+  database_id: ""
+
+  # Property mappings (Notion database property names).
+  properties:
+    title: "Name"
+    date: "Date"
+    tags: "Tags"
+    status: "Status"
+
+# --- Logging ---
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "~/Library/Logs/meetingmind.log"
