@@ -21,6 +21,7 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.14.0",
     "tailwindcss": "^4.2.2",
+    "wavesurfer.js": "^7.12.5",
     "zustand": "^5.0.12"
   },
   "devDependencies": {

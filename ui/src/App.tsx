@@ -9,8 +9,10 @@ import { MeetingList } from "./components/meetings/MeetingList";
 import { MeetingDetail } from "./components/meetings/MeetingDetail";
 import { Settings } from "./components/settings/Settings";
 import { LiveView } from "./components/live/LiveView";
+import { CommandPalette } from "./components/common/CommandPalette";
 import { useDaemonStatus } from "./hooks/useDaemonStatus";
 import { useWebSocket } from "./hooks/useWebSocket";
+import { useTraySync } from "./hooks/useTraySync";
 import { useAppStore } from "./stores/appStore";
 import { setAuthToken } from "./lib/api";
 import type { WSEvent } from "./lib/types";
@@ -25,8 +27,9 @@ const queryClient = new QueryClient({
 });
 
 function AppShell() {
-  const { daemonRunning } = useDaemonStatus();
+  const { daemonRunning, state } = useDaemonStatus();
   const handleEvent = useAppStore((s) => s.handleEvent);
+  useTraySync(state);
 
   // Load auth token from disk via Tauri on mount.
   useEffect(() => {
@@ -54,6 +57,7 @@ function AppShell() {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar daemonRunning={daemonRunning} />
+      <CommandPalette />
       <main className="flex-1 overflow-y-auto">
         {/* Titlebar drag region over the content area */}
         <div data-tauri-drag-region className="h-[52px] shrink-0" />

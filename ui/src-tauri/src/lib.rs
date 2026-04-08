@@ -1,11 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
-    Manager,
-};
+mod tray;
 
 /// Read the shared auth token so the frontend can authenticate with the API.
 #[tauri::command]
@@ -24,33 +20,12 @@ fn read_auth_token() -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![read_auth_token])
+        .invoke_handler(tauri::generate_handler![
+            read_auth_token,
+            tray::update_tray_state,
+        ])
         .setup(|app| {
-            // Build the tray menu.
-            let open_item = MenuItem::with_id(app, "open", "Open MeetingMind", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-
-            let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
-
-            // Build the tray icon using the app's default icon.
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("MeetingMind")
-                .menu(&menu)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "quit" => {
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .build(app)?;
-
+            tray::setup(app)?;
             Ok(())
         })
         .run(tauri::generate_context!())

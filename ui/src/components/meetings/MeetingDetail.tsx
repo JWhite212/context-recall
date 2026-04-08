@@ -5,6 +5,7 @@ import Markdown from "react-markdown";
 import { getMeeting, deleteMeeting } from "../../lib/api";
 import { API_BASE } from "../../lib/constants";
 import type { TranscriptSegment } from "../../lib/types";
+import { AudioPlayer } from "./AudioPlayer";
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -171,13 +172,7 @@ export function MeetingDetail() {
 
       {/* Audio player */}
       {hasAudio && (
-        <div className="rounded-xl bg-surface-raised border border-border p-4">
-          <audio
-            controls
-            className="w-full h-8"
-            src={`${API_BASE}/api/meetings/${meeting.id}/audio`}
-          />
-        </div>
+        <AudioPlayer src={`${API_BASE}/api/meetings/${meeting.id}/audio`} />
       )}
 
       {/* Tabs */}
