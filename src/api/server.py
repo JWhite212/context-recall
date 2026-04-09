@@ -122,7 +122,9 @@ class ApiServer:
             try:
                 while True:
                     await websocket.receive_text()
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, Exception):
+                pass
+            finally:
                 self.ws_manager.disconnect(websocket)
 
         return app

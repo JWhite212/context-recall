@@ -16,6 +16,13 @@ from src.db.database import Database
 
 logger = logging.getLogger("meetingmind.db")
 
+# Columns that update_meeting() is allowed to write.
+_MUTABLE_COLUMNS = frozenset({
+    "title", "ended_at", "duration_seconds", "status",
+    "audio_path", "transcript_json", "summary_markdown",
+    "tags", "language", "word_count",
+})
+
 
 @dataclass
 class MeetingRecord:
@@ -104,6 +111,10 @@ class MeetingRepository:
         """Update one or more fields on a meeting."""
         if not fields:
             return
+
+        invalid = set(fields) - _MUTABLE_COLUMNS
+        if invalid:
+            raise ValueError(f"Cannot update column(s): {invalid}")
 
         # Serialise tags as JSON.
         if "tags" in fields and isinstance(fields["tags"], list):
@@ -285,5 +296,8 @@ class MeetingRepository:
                 (transcript_text, meeting_id),
             )
             await self._db.conn.commit()
-        except Exception:
-            logger.debug("FTS update skipped (FTS5 may not be available)")
+        except Exception as e:
+            if "no such table" in str(e).lower():
+                logger.debug("FTS update skipped (FTS5 not available)")
+            else:
+                logger.warning("FTS update failed for meeting %s: %s", meeting_id, e)

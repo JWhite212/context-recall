@@ -11,6 +11,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, ConfigDict
 
 from src.utils.config import (
     AppConfig,
@@ -80,7 +81,9 @@ def _mask_secrets(config: dict) -> dict:
     return masked
 
 
-def _deep_merge(base: dict, updates: dict, existing: dict) -> dict:
+def _deep_merge(
+    base: dict, updates: dict, existing: dict, _path: tuple[str, ...] = ()
+) -> dict:
     """
     Recursively merge *updates* into *base*.
 
@@ -90,12 +93,13 @@ def _deep_merge(base: dict, updates: dict, existing: dict) -> dict:
     merged = copy.deepcopy(base)
     for key, value in updates.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], value, existing.get(key, {}))
+            merged[key] = _deep_merge(
+                merged[key], value, existing.get(key, {}), _path + (key,)
+            )
         else:
-            for section, field in _SECRET_FIELDS:
-                if key == field and value == _MASK:
-                    value = existing.get(key, "")
-                    break
+            full_path = _path + (key,)
+            if full_path in _SECRET_FIELDS and value == _MASK:
+                value = existing.get(key, "")
             merged[key] = value
     return merged
 
@@ -107,13 +111,29 @@ async def get_config():
     return _mask_secrets(full)
 
 
+class ConfigUpdateBody(BaseModel):
+    """Validated schema for config updates — rejects unknown top-level keys."""
+    model_config = ConfigDict(extra="forbid")
+
+    detection: dict | None = None
+    audio: dict | None = None
+    transcription: dict | None = None
+    summarisation: dict | None = None
+    diarisation: dict | None = None
+    markdown: dict | None = None
+    notion: dict | None = None
+    logging: dict | None = None
+    api: dict | None = None
+    retention: dict | None = None
+
+
 @router.put("/api/config")
-async def update_config(body: dict):
+async def update_config(body: ConfigUpdateBody):
     if not _config_path:
         raise HTTPException(status_code=500, detail="Config path not set")
 
     existing = _read_yaml()
-    merged = _deep_merge(existing, body, existing)
+    merged = _deep_merge(existing, body.model_dump(exclude_none=True), existing)
 
     with open(_config_path, "w") as f:
         yaml.dump(merged, f, default_flow_style=False, sort_keys=False, allow_unicode=True)

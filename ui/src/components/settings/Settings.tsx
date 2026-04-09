@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getConfig, updateConfig, getModels, downloadModel } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
@@ -143,15 +143,18 @@ export function Settings() {
     },
   });
 
-  const isDirty =
-    form !== null &&
-    savedConfig !== null &&
-    JSON.stringify(form) !== JSON.stringify(savedConfig);
+  const isDirty = useMemo(
+    () =>
+      form !== null &&
+      savedConfig !== null &&
+      JSON.stringify(form) !== JSON.stringify(savedConfig),
+    [form, savedConfig],
+  );
 
-  function set<S extends keyof AppConfig>(
+  function set<S extends keyof AppConfig, K extends string & keyof AppConfig[S]>(
     section: S,
-    key: string,
-    value: unknown,
+    key: K,
+    value: AppConfig[S][K],
   ) {
     setForm((prev) => {
       if (!prev) return prev;
@@ -217,7 +220,9 @@ export function Settings() {
       {saveMutation.isError && (
         <div className="rounded-lg bg-status-error/10 border border-status-error/30 px-4 py-3">
           <p className="text-sm text-status-error">
-            Failed to save: {(saveMutation.error as Error).message}
+            Failed to save: {saveMutation.error instanceof Error
+              ? saveMutation.error.message
+              : "An unexpected error occurred"}
           </p>
         </div>
       )}
@@ -580,7 +585,7 @@ export function Settings() {
               <select
                 value={form.summarisation.backend}
                 onChange={(e) =>
-                  set("summarisation", "backend", e.target.value)
+                  set("summarisation", "backend", e.target.value as "ollama" | "claude")
                 }
                 className={SELECT}
               >

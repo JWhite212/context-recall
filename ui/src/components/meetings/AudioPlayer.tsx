@@ -35,10 +35,13 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const isDark = document.documentElement.classList.contains("dark") ||
+      !document.documentElement.classList.contains("light");
+
     const ws = WaveSurfer.create({
       container: containerRef.current,
       height: 64,
-      waveColor: "rgba(255, 255, 255, 0.2)",
+      waveColor: isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(0, 0, 0, 0.15)",
       progressColor: "rgba(99, 102, 241, 0.7)",
       cursorColor: "rgba(99, 102, 241, 0.9)",
       cursorWidth: 1,
@@ -98,7 +101,7 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
   }, []);
 
   return (
-    <div className="rounded-xl bg-surface-raised border border-border p-4 flex flex-col gap-3">
+    <div className="rounded-xl bg-surface-raised border border-border p-4 flex flex-col gap-3" aria-label="Audio player">
       {/* Waveform */}
       <div ref={containerRef} className={loading ? "opacity-30" : ""} />
 
@@ -109,9 +112,9 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
           <button
             onClick={() => skip(-SKIP_SECONDS)}
             className="p-1.5 rounded-md text-text-secondary hover:text-text-primary hover:bg-sidebar-hover transition-colors"
-            title={`Back ${SKIP_SECONDS}s`}
+            aria-label={`Skip back ${SKIP_SECONDS} seconds`}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polygon points="11 19 2 12 11 5 11 19" />
               <polygon points="22 19 13 12 22 5 22 19" />
             </svg>
@@ -121,15 +124,16 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
           <button
             onClick={togglePlay}
             disabled={loading}
+            aria-label={playing ? "Pause" : "Play"}
             className="p-2 rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
             {playing ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <rect x="6" y="4" width="4" height="16" />
                 <rect x="14" y="4" width="4" height="16" />
               </svg>
             ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
             )}
@@ -139,9 +143,9 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
           <button
             onClick={() => skip(SKIP_SECONDS)}
             className="p-1.5 rounded-md text-text-secondary hover:text-text-primary hover:bg-sidebar-hover transition-colors"
-            title={`Forward ${SKIP_SECONDS}s`}
+            aria-label={`Skip forward ${SKIP_SECONDS} seconds`}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <polygon points="13 19 22 12 13 5 13 19" />
               <polygon points="2 19 11 12 2 5 2 19" />
             </svg>
@@ -157,7 +161,7 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
         <button
           onClick={cycleRate}
           className="px-2 py-0.5 rounded-md text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-sidebar-hover transition-colors"
-          title="Playback speed"
+          aria-label={`Playback speed: ${rate}x`}
         >
           {rate}x
         </button>

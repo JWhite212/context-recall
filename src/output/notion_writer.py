@@ -14,9 +14,7 @@ native Notion blocks rather than dumped as plain text.
 """
 
 import logging
-import re
 import time
-from pathlib import Path
 
 from notion_client import Client as NotionClient
 

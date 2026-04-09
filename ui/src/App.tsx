@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Dashboard } from "./components/dashboard/Dashboard";
 import { MeetingList } from "./components/meetings/MeetingList";
@@ -77,13 +78,15 @@ function AppShell() {
       <main id="main-content" className="flex-1 overflow-y-auto" role="main">
         {/* Titlebar drag region over the content area */}
         <div data-tauri-drag-region className="h-[52px] shrink-0" />
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/live" element={<LiveView />} />
-          <Route path="/meetings" element={<MeetingList />} />
-          <Route path="/meetings/:id" element={<MeetingDetail />} />
-          <Route path="/settings" element={<Settings />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/live" element={<LiveView />} />
+            <Route path="/meetings" element={<MeetingList />} />
+            <Route path="/meetings/:id" element={<MeetingDetail />} />
+            <Route path="/settings" element={<Settings />} />
+          </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -15,7 +15,6 @@ Backend is configurable: set summarisation.backend to "claude" for the
 Anthropic API, or "ollama" for a local Ollama model.
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 

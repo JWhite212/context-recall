@@ -3,9 +3,12 @@ Meeting history CRUD endpoints.
 """
 
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
+
+from src.utils.config import load_config
 
 router = APIRouter()
 
@@ -73,8 +76,17 @@ async def get_meeting_audio(meeting_id: str):
     if not meeting.audio_path or not os.path.exists(meeting.audio_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
 
+    # Validate the audio file is within the expected directory.
+    try:
+        audio_dir = Path(load_config().audio.temp_audio_dir).expanduser().resolve()
+    except Exception:
+        audio_dir = Path("/tmp/meetingmind").resolve()
+    resolved = Path(meeting.audio_path).resolve()
+    if not str(resolved).startswith(str(audio_dir)):
+        raise HTTPException(status_code=403, detail="Audio file not found")
+
     return FileResponse(
-        meeting.audio_path,
+        str(resolved),
         media_type="audio/wav",
         filename=f"meeting_{meeting_id}.wav",
     )

@@ -6,12 +6,13 @@ on incoming requests. Since the API binds to 127.0.0.1 only,
 this prevents other local applications from controlling the daemon.
 """
 
+import hmac
 import logging
 import os
 import secrets
 from pathlib import Path
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 
 logger = logging.getLogger("meetingmind.auth")
 
@@ -60,5 +61,5 @@ async def verify_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Missing auth token")
 
     token = auth_header.removeprefix("Bearer ").strip()
-    if token != _get_token():
+    if not hmac.compare_digest(token, _get_token()):
         raise HTTPException(status_code=403, detail="Invalid auth token")

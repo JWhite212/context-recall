@@ -6,8 +6,10 @@ POST /api/export/{id} — export a meeting as markdown or JSON.
 
 import json
 import logging
+import re
 import time
 
+import yaml
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse, JSONResponse
 
@@ -27,7 +29,7 @@ def init(repo) -> None:
 @router.post("/api/export/{meeting_id}")
 async def export_meeting(
     meeting_id: str,
-    format: str = Query("markdown", regex="^(markdown|json)$"),
+    format: str = Query("markdown", pattern="^(markdown|json)$"),
 ):
     if not _repo:
         raise HTTPException(status_code=503, detail="Repository not available")
@@ -46,14 +48,15 @@ async def export_meeting(
     date_str = time.strftime("%Y-%m-%d", time.localtime(meeting.started_at))
     time_str = time.strftime("%H:%M", time.localtime(meeting.started_at))
     duration_min = int((meeting.duration_seconds or 0) / 60)
-    tags_yaml = ", ".join(f'"{t}"' for t in meeting.tags)
 
+    safe_title = yaml.dump(meeting.title, default_flow_style=True, allow_unicode=True).strip()
+    safe_tags = yaml.dump(meeting.tags, default_flow_style=True, allow_unicode=True).strip()
     parts.append("---")
-    parts.append(f'title: "{meeting.title}"')
+    parts.append(f"title: {safe_title}")
     parts.append(f"date: {date_str}")
     parts.append(f"time: {time_str}")
     parts.append(f"duration_minutes: {duration_min}")
-    parts.append(f"tags: [{tags_yaml}]")
+    parts.append(f"tags: {safe_tags}")
     parts.append("type: meeting-note")
     parts.append("---")
     parts.append("")
@@ -88,10 +91,11 @@ async def export_meeting(
             pass
 
     content = "\n".join(parts)
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", meeting_id)
     return PlainTextResponse(
         content=content,
         media_type="text/markdown",
         headers={
-            "Content-Disposition": f'attachment; filename="{meeting_id}.md"',
+            "Content-Disposition": f'attachment; filename="{safe_id}.md"',
         },
     )

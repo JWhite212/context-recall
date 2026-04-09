@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useDeferredValue } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -7,7 +7,7 @@ import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { LoadingBlock } from "../common/Spinner";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
-import type { MeetingStatus } from "../../lib/types";
+import type { Meeting, MeetingStatus } from "../../lib/types";
 
 const STATUS_FILTERS: { label: string; value: MeetingStatus | "all" }[] = [
   { label: "All", value: "all" },
@@ -23,17 +23,19 @@ export function MeetingList() {
   const navigate = useNavigate();
   const { daemonRunning } = useDaemonStatus();
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
   const [page, setPage] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["meetings", statusFilter, page, search],
+    queryKey: ["meetings", statusFilter, page, deferredSearch],
     queryFn: () =>
       getMeetings(
         PAGE_SIZE,
         page * PAGE_SIZE,
-        search || undefined,
+        deferredSearch || undefined,
+        statusFilter !== "all" ? statusFilter : undefined,
       ),
     enabled: daemonRunning,
     refetchInterval: 10000,
@@ -58,6 +60,7 @@ export function MeetingList() {
             <input
               type="text"
               placeholder="Search meetings..."
+              aria-label="Search meetings"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -136,8 +139,6 @@ export function MeetingList() {
     </div>
   );
 }
-
-import type { Meeting } from "../../lib/types";
 
 function VirtualMeetingList({
   meetings,

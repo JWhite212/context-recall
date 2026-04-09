@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import Markdown from "react-markdown";
 import { getMeeting, deleteMeeting, exportMeeting, resummariseMeeting } from "../../lib/api";
 import { API_BASE } from "../../lib/constants";
@@ -18,12 +18,14 @@ function formatTime(seconds: number): string {
 
 function HighlightText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>;
-  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(${escaped})`, "gi");
   const parts = text.split(regex);
+  const lowerQuery = query.toLowerCase();
   return (
     <>
       {parts.map((part, i) =>
-        regex.test(part) ? (
+        part.toLowerCase() === lowerQuery ? (
           <mark key={i} className="bg-accent/30 text-text-primary rounded-sm px-0.5">
             {part}
           </mark>
@@ -68,6 +70,7 @@ function TranscriptView({
         <input
           type="text"
           placeholder="Search transcript..."
+          aria-label="Search transcript"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="flex-1 px-3 py-1.5 text-sm rounded-lg bg-surface border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
@@ -125,7 +128,27 @@ export function MeetingDetail() {
   const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
   const audioSeekRef = useRef<AudioSeekHandle | null>(null);
+
+  // Close export dropdown on Escape or click outside.
+  useEffect(() => {
+    if (!exportOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExportOpen(false);
+    };
+    const handleClick = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [exportOpen]);
 
   const { data: meeting, isLoading, isError, refetch } = useQuery({
     queryKey: ["meeting", id],
@@ -195,7 +218,7 @@ export function MeetingDetail() {
         onClick={() => navigate("/meetings")}
         className="text-sm text-text-secondary hover:text-text-primary w-fit flex items-center gap-1"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <polyline points="15 18 9 12 15 6" />
         </svg>
         Back
@@ -268,7 +291,7 @@ export function MeetingDetail() {
           disabled={resummarise.isPending}
           className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
           </svg>
           {resummarise.isPending ? "Summarising..." : "Re-summarise"}
@@ -276,23 +299,27 @@ export function MeetingDetail() {
       )}
       {resummarise.isError && (
         <span className="text-xs text-status-error">
-          {(resummarise.error as Error).message}
+          {resummarise.error instanceof Error
+            ? resummarise.error.message
+            : "An unexpected error occurred"}
         </span>
       )}
 
       {/* Export */}
-      <div className="relative inline-block">
+      <div className="relative inline-block" ref={exportMenuRef}>
         <button
           onClick={() => setExportOpen(!exportOpen)}
+          aria-haspopup="true"
+          aria-expanded={exportOpen}
           className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
           </svg>
           Export
         </button>
         {exportOpen && (
-          <div className="absolute left-0 mt-1 w-40 rounded-lg bg-surface-raised border border-border shadow-lg z-10 py-1">
+          <div role="menu" className="absolute left-0 mt-1 w-40 rounded-lg bg-surface-raised border border-border shadow-lg z-10 py-1">
             <button
               onClick={async () => {
                 setExportOpen(false);
@@ -305,6 +332,7 @@ export function MeetingDetail() {
                 a.click();
                 URL.revokeObjectURL(url);
               }}
+              role="menuitem"
               className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
             >
               Markdown (.md)
@@ -321,6 +349,7 @@ export function MeetingDetail() {
                 a.click();
                 URL.revokeObjectURL(url);
               }}
+              role="menuitem"
               className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
             >
               JSON (.json)
@@ -331,6 +360,7 @@ export function MeetingDetail() {
                 const md = meeting.summary_markdown || "";
                 await navigator.clipboard.writeText(md);
               }}
+              role="menuitem"
               className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
             >
               Copy summary
@@ -379,7 +409,19 @@ export function MeetingDetail() {
           <div className="rounded-xl bg-surface-raised border border-border p-6 max-h-[60vh] overflow-y-auto">
             {activeTab === "summary" && hasSummary ? (
               <div className="prose prose-sm prose-invert max-w-none text-text-primary [&_h1]:text-text-primary [&_h2]:text-text-primary [&_h3]:text-text-primary [&_li]:text-text-primary [&_p]:text-text-secondary [&_strong]:text-text-primary">
-                <Markdown>{meeting.summary_markdown!}</Markdown>
+                <Markdown
+                  components={{
+                    a: ({ href, children, ...props }) => {
+                      const safeHref =
+                        href && /^(https?:|mailto:|#)/i.test(href) ? href : undefined;
+                      return (
+                        <a href={safeHref} rel="noopener noreferrer" {...props}>
+                          {children}
+                        </a>
+                      );
+                    },
+                  }}
+                >{meeting.summary_markdown!}</Markdown>
               </div>
             ) : activeTab === "transcript" && hasTranscript ? (
               <TranscriptView

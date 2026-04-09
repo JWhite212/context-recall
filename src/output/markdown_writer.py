@@ -67,7 +67,7 @@ class MarkdownWriter:
             f"time: {time_str.replace('-', ':')}",
             f"duration_minutes: {duration_min}",
             f"tags: [{tags_yaml}]",
-            f"type: meeting-note",
+            "type: meeting-note",
             "---",
             "",
             summary.raw_markdown,

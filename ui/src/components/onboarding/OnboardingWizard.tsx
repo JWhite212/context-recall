@@ -44,22 +44,35 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-surface"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Onboarding wizard — Step ${stepIdx + 1} of ${STEPS.length}: ${step}`}
+    >
       <div className="w-full max-w-xl mx-auto px-8">
         {/* Progress */}
-        <div className="flex items-center gap-1 mb-8">
+        <div
+          className="flex items-center gap-1 mb-8"
+          role="progressbar"
+          aria-valuenow={stepIdx + 1}
+          aria-valuemin={1}
+          aria-valuemax={STEPS.length}
+          aria-label={`Step ${stepIdx + 1} of ${STEPS.length}`}
+        >
           {STEPS.map((s, i) => (
             <div
               key={s}
               className={`h-1 flex-1 rounded-full transition-colors ${
                 i <= stepIdx ? "bg-accent" : "bg-border"
               }`}
+              aria-hidden="true"
             />
           ))}
         </div>
 
         {/* Step content */}
-        <div className="min-h-[320px]">
+        <div className="min-h-[320px]" aria-live="polite">
           {step === "Welcome" && <WelcomeStep />}
           {step === "Audio Setup" && <AudioStep />}
           {step === "Transcription" && <TranscriptionStep />}
@@ -198,7 +211,10 @@ function TranscriptionStep() {
   const { data, isLoading } = useQuery({
     queryKey: ["models"],
     queryFn: getModels,
-    refetchInterval: 3000,
+    refetchInterval: (query) => {
+      const models = query.state.data?.models ?? [];
+      return models.some((m: WhisperModel) => m.status === "downloading") ? 3000 : false;
+    },
   });
 
   const dl = useMutation({

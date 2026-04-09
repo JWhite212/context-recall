@@ -44,9 +44,6 @@ def _download_worker(model_name: str) -> None:
     try:
         from faster_whisper.utils import download_model
 
-        with _download_lock:
-            _downloads[model_name] = {"status": "downloading", "error": None}
-
         logger.info("Downloading model: %s", model_name)
         download_model(model_name)
 
@@ -101,6 +98,8 @@ async def download_model(model_name: str):
         dl = _downloads.get(model_name)
         if dl and dl["status"] == "downloading":
             return {"status": "already_downloading"}
+        # Set status under lock before spawning thread to prevent TOCTOU race.
+        _downloads[model_name] = {"status": "downloading", "error": None}
 
     thread = threading.Thread(
         target=_download_worker,

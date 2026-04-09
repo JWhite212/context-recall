@@ -12,7 +12,7 @@ import type {
   StatusResponse,
 } from "./types";
 
-const API_BASE = "http://127.0.0.1:9876";
+import { API_BASE } from "./constants";
 
 let authToken: string | null = null;
 
@@ -55,18 +55,20 @@ export async function getMeetings(
   limit = 50,
   offset = 0,
   query?: string,
+  status?: string,
 ): Promise<MeetingsResponse> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (query) params.set("q", query);
+  if (status) params.set("status", status);
   return request<MeetingsResponse>(`/api/meetings?${params}`);
 }
 
 export async function getMeeting(id: string): Promise<Meeting> {
-  return request<Meeting>(`/api/meetings/${id}`);
+  return request<Meeting>(`/api/meetings/${encodeURIComponent(id)}`);
 }
 
 export async function deleteMeeting(id: string): Promise<void> {
-  await request(`/api/meetings/${id}`, { method: "DELETE" });
+  await request(`/api/meetings/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 export async function getConfig(): Promise<AppConfig> {
@@ -103,7 +105,7 @@ export async function downloadModel(name: string): Promise<{ status: string }> {
 export async function resummariseMeeting(
   id: string,
 ): Promise<{ meeting_id: string; title: string; tags: string[] }> {
-  return request(`/api/meetings/${id}/resummarise`, { method: "POST" });
+  return request(`/api/meetings/${encodeURIComponent(id)}/resummarise`, { method: "POST" });
 }
 
 export async function exportMeeting(
@@ -115,7 +117,7 @@ export async function exportMeeting(
     headers["Authorization"] = `Bearer ${authToken}`;
   }
   const res = await fetch(
-    `${API_BASE}/api/export/${id}?format=${format}`,
+    `${API_BASE}/api/export/${encodeURIComponent(id)}?format=${format}`,
     { method: "POST", headers },
   );
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);
