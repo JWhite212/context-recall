@@ -105,6 +105,12 @@ class ApiConfig:
 
 
 @dataclass
+class RetentionConfig:
+    audio_retention_days: int = 0   # 0 = keep forever.
+    record_retention_days: int = 0  # 0 = keep forever.
+
+
+@dataclass
 class AppConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -115,6 +121,7 @@ class AppConfig:
     notion: NotionConfig = field(default_factory=NotionConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
 
 
 def _expand_path(path_str: str) -> str:
@@ -165,6 +172,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         notion=_build_dataclass(NotionConfig, raw.get("notion", {})),
         logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
         api=_build_dataclass(ApiConfig, raw.get("api", {})),
+        retention=_build_dataclass(RetentionConfig, raw.get("retention", {})),
     )
 
     # Expand user paths so downstream code doesn't need to worry about tildes.

@@ -6,6 +6,7 @@ import type {
   HealthResponse,
   MeetingsResponse,
   Meeting,
+  ModelsResponse,
   RecordingStartResponse,
   RecordingStopResponse,
   StatusResponse,
@@ -89,6 +90,20 @@ export async function stopRecording(): Promise<RecordingStopResponse> {
 
 export async function getDevices(): Promise<DevicesResponse> {
   return request<DevicesResponse>("/api/devices");
+}
+
+export async function getModels(): Promise<ModelsResponse> {
+  return request<ModelsResponse>("/api/models");
+}
+
+export async function downloadModel(name: string): Promise<{ status: string }> {
+  return request("/api/models/" + encodeURIComponent(name) + "/download", { method: "POST" });
+}
+
+export async function resummariseMeeting(
+  id: string,
+): Promise<{ meeting_id: string; title: string; tags: string[] }> {
+  return request(`/api/meetings/${id}/resummarise`, { method: "POST" });
 }
 
 export async function exportMeeting(

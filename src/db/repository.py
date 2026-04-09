@@ -6,6 +6,7 @@ Provides async CRUD operations over the SQLite database.
 
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -193,6 +194,66 @@ class MeetingRepository:
             cursor = await self._db.conn.execute("SELECT COUNT(*) FROM meetings")
         row = await cursor.fetchone()
         return row[0]
+
+    async def cleanup_old_meetings(
+        self, audio_retention_days: int, record_retention_days: int
+    ) -> dict[str, int]:
+        """Delete old audio files and/or meeting records based on retention policy.
+
+        Returns counts of cleaned-up items.
+        """
+        now = time.time()
+        audio_deleted = 0
+        records_deleted = 0
+
+        # Delete audio files older than audio_retention_days.
+        if audio_retention_days > 0:
+            cutoff = now - (audio_retention_days * 86400)
+            cursor = await self._db.conn.execute(
+                "SELECT id, audio_path FROM meetings WHERE audio_path IS NOT NULL AND started_at < ?",
+                (cutoff,),
+            )
+            rows = await cursor.fetchall()
+            for row in rows:
+                path = row["audio_path"]
+                if path and os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                        audio_deleted += 1
+                    except OSError:
+                        pass
+                await self._db.conn.execute(
+                    "UPDATE meetings SET audio_path = NULL, updated_at = ? WHERE id = ?",
+                    (now, row["id"]),
+                )
+            await self._db.conn.commit()
+            if audio_deleted:
+                logger.info("Retention: deleted %d audio file(s)", audio_deleted)
+
+        # Delete entire meeting records older than record_retention_days.
+        if record_retention_days > 0:
+            cutoff = now - (record_retention_days * 86400)
+            cursor = await self._db.conn.execute(
+                "SELECT id, audio_path FROM meetings WHERE started_at < ?",
+                (cutoff,),
+            )
+            rows = await cursor.fetchall()
+            for row in rows:
+                path = row["audio_path"]
+                if path and os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+            await self._db.conn.execute(
+                "DELETE FROM meetings WHERE started_at < ?", (cutoff,)
+            )
+            await self._db.conn.commit()
+            records_deleted = len(rows)
+            if records_deleted:
+                logger.info("Retention: deleted %d meeting record(s)", records_deleted)
+
+        return {"audio_deleted": audio_deleted, "records_deleted": records_deleted}
 
     async def update_fts(self, meeting_id: str) -> None:
         """Update the FTS index for a meeting after transcript/summary changes."""

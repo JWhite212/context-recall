@@ -127,6 +127,11 @@ export interface ApiConfig {
   port: number;
 }
 
+export interface RetentionConfig {
+  audio_retention_days: number;
+  record_retention_days: number;
+}
+
 export interface AppConfig {
   detection: DetectionConfig;
   audio: AudioConfig;
@@ -137,6 +142,21 @@ export interface AppConfig {
   notion: NotionConfig;
   logging: LoggingConfig;
   api: ApiConfig;
+  retention: RetentionConfig;
+}
+
+/** Whisper model info from the daemon. */
+
+export interface WhisperModel {
+  name: string;
+  repo: string;
+  size_mb: number;
+  status: "downloaded" | "not_downloaded" | "downloading" | "error";
+  error: string | null;
+}
+
+export interface ModelsResponse {
+  models: WhisperModel[];
 }
 
 /** Recording control responses. */

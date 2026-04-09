@@ -1,11 +1,14 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Markdown from "react-markdown";
-import { getMeeting, deleteMeeting, exportMeeting } from "../../lib/api";
+import { getMeeting, deleteMeeting, exportMeeting, resummariseMeeting } from "../../lib/api";
 import { API_BASE } from "../../lib/constants";
 import type { TranscriptSegment } from "../../lib/types";
-import { AudioPlayer } from "./AudioPlayer";
+import { AudioPlayer, type AudioSeekHandle } from "./AudioPlayer";
+import { LoadingBlock } from "../common/Spinner";
+import { EmptyState } from "../common/EmptyState";
+import { ErrorState } from "../common/ErrorState";
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -13,7 +16,34 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function TranscriptView({ json }: { json: string }) {
+function HighlightText({ text, query }: { text: string; query: string }) {
+  if (!query) return <>{text}</>;
+  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+  const parts = text.split(regex);
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className="bg-accent/30 text-text-primary rounded-sm px-0.5">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+function TranscriptView({
+  json,
+  onSeek,
+}: {
+  json: string;
+  onSeek?: (seconds: number) => void;
+}) {
+  const [search, setSearch] = useState("");
+
   let segments: TranscriptSegment[] = [];
   try {
     const data = JSON.parse(json);
@@ -26,29 +56,64 @@ function TranscriptView({ json }: { json: string }) {
     return <p className="text-sm text-text-muted">No transcript segments.</p>;
   }
 
+  const query = search.trim().toLowerCase();
+  const filtered = query
+    ? segments.filter((s) => s.text.toLowerCase().includes(query))
+    : segments;
+
   return (
-    <div className="flex flex-col gap-1">
-      {segments.map((seg, i) => (
-        <div key={i} className="flex gap-3 py-1.5 group">
-          <span className="text-[11px] text-text-muted font-mono w-10 shrink-0 pt-0.5">
-            {formatTime(seg.start)}
+    <div className="flex flex-col gap-3">
+      {/* Search */}
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          placeholder="Search transcript..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="flex-1 px-3 py-1.5 text-sm rounded-lg bg-surface border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
+        />
+        {query && (
+          <span className="text-xs text-text-muted shrink-0">
+            {filtered.length} / {segments.length}
           </span>
-          {seg.speaker && (
-            <span
-              className={`text-[11px] font-medium w-14 shrink-0 pt-0.5 ${
-                seg.speaker === "Me"
-                  ? "text-accent"
-                  : "text-status-idle"
-              }`}
-            >
-              {seg.speaker}
+        )}
+      </div>
+
+      {/* Segments */}
+      <div className="flex flex-col gap-0.5">
+        {filtered.map((seg, i) => (
+          <button
+            key={i}
+            onClick={() => onSeek?.(seg.start)}
+            className={`flex gap-3 py-1.5 px-1 rounded-md text-left transition-colors ${
+              onSeek ? "hover:bg-sidebar-hover cursor-pointer" : ""
+            }`}
+          >
+            <span className="text-[11px] text-text-muted font-mono w-10 shrink-0 pt-0.5">
+              {formatTime(seg.start)}
             </span>
-          )}
-          <span className="text-sm text-text-primary leading-relaxed">
-            {seg.text}
-          </span>
-        </div>
-      ))}
+            {seg.speaker && (
+              <span
+                className={`text-[11px] font-medium w-14 shrink-0 pt-0.5 ${
+                  seg.speaker === "Me"
+                    ? "text-accent"
+                    : "text-status-idle"
+                }`}
+              >
+                {seg.speaker}
+              </span>
+            )}
+            <span className="text-sm text-text-primary leading-relaxed">
+              <HighlightText text={seg.text} query={search.trim()} />
+            </span>
+          </button>
+        ))}
+        {query && filtered.length === 0 && (
+          <p className="text-xs text-text-muted py-4 text-center">
+            No segments match "{search}".
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -60,8 +125,9 @@ export function MeetingDetail() {
   const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const audioSeekRef = useRef<AudioSeekHandle | null>(null);
 
-  const { data: meeting, isLoading } = useQuery({
+  const { data: meeting, isLoading, isError, refetch } = useQuery({
     queryKey: ["meeting", id],
     queryFn: () => getMeeting(id!),
     enabled: !!id,
@@ -75,24 +141,45 @@ export function MeetingDetail() {
     },
   });
 
+  const resummarise = useMutation({
+    mutationFn: () => resummariseMeeting(id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", id] });
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="p-6">
-        <p className="text-sm text-text-muted">Loading...</p>
+        <LoadingBlock label="Loading meeting..." />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="p-6 max-w-3xl">
+        <ErrorState message="Failed to load meeting." onRetry={() => refetch()} />
       </div>
     );
   }
 
   if (!meeting) {
     return (
-      <div className="p-6">
-        <p className="text-sm text-text-muted">Meeting not found.</p>
-        <button
-          onClick={() => navigate("/meetings")}
-          className="mt-2 text-sm text-accent hover:underline"
-        >
-          Back to meetings
-        </button>
+      <div className="p-6 max-w-3xl">
+        <EmptyState
+          title="Meeting not found"
+          description="This meeting may have been deleted."
+          action={
+            <button
+              onClick={() => navigate("/meetings")}
+              className="px-4 py-1.5 text-sm rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+            >
+              Back to meetings
+            </button>
+          }
+        />
       </div>
     );
   }
@@ -171,6 +258,28 @@ export function MeetingDetail() {
         )}
       </div>
 
+      {/* Actions row */}
+      <div className="flex items-center gap-2">
+
+      {/* Re-summarise */}
+      {hasTranscript && (
+        <button
+          onClick={() => resummarise.mutate()}
+          disabled={resummarise.isPending}
+          className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+          </svg>
+          {resummarise.isPending ? "Summarising..." : "Re-summarise"}
+        </button>
+      )}
+      {resummarise.isError && (
+        <span className="text-xs text-status-error">
+          {(resummarise.error as Error).message}
+        </span>
+      )}
+
       {/* Export */}
       <div className="relative inline-block">
         <button
@@ -230,9 +339,11 @@ export function MeetingDetail() {
         )}
       </div>
 
+      </div>
+
       {/* Audio player */}
       {hasAudio && (
-        <AudioPlayer src={`${API_BASE}/api/meetings/${meeting.id}/audio`} />
+        <AudioPlayer src={`${API_BASE}/api/meetings/${meeting.id}/audio`} seekRef={audioSeekRef} />
       )}
 
       {/* Tabs */}
@@ -271,7 +382,10 @@ export function MeetingDetail() {
                 <Markdown>{meeting.summary_markdown!}</Markdown>
               </div>
             ) : activeTab === "transcript" && hasTranscript ? (
-              <TranscriptView json={meeting.transcript_json!} />
+              <TranscriptView
+                json={meeting.transcript_json!}
+                onSeek={hasAudio ? (s) => audioSeekRef.current?.seekTo(s) : undefined}
+              />
             ) : (
               <p className="text-sm text-text-muted">No content available.</p>
             )}

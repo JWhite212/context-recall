@@ -27,6 +27,31 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Focus-visible ring for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Skip-to-content link — hidden until focused */
+.skip-to-content {
+  position: absolute;
+  top: -100%;
+  left: 16px;
+  z-index: 100;
+  padding: 8px 16px;
+  background: var(--color-accent);
+  color: white;
+  border-radius: 8px;
+  font-size: 13px;
+  text-decoration: none;
+  transition: top 0.2s;
+}
+.skip-to-content:focus {
+  top: 8px;
+}
+
 /* macOS-style titlebar drag region */
 [data-tauri-drag-region] {
   -webkit-app-region: drag;
@@ -157,15 +182,32 @@ textarea {
   opacity: 1;
 }
 
-@media (prefers-color-scheme: light) {
-  @theme {
-    --color-sidebar: oklch(0.95 0.005 260);
-    --color-sidebar-hover: oklch(0.90 0.005 260);
-    --color-surface: oklch(0.99 0 0);
-    --color-surface-raised: oklch(0.96 0.005 260);
-    --color-text-primary: oklch(0.15 0 0);
-    --color-text-secondary: oklch(0.40 0 0);
-    --color-text-muted: oklch(0.60 0 0);
-    --color-border: oklch(0.85 0.005 260);
-  }
+/* Class-based light theme — applied by useTheme hook. */
+:root.light {
+  --color-sidebar: oklch(0.95 0.005 260);
+  --color-sidebar-hover: oklch(0.90 0.005 260);
+  --color-surface: oklch(0.99 0 0);
+  --color-surface-raised: oklch(0.96 0.005 260);
+  --color-text-primary: oklch(0.15 0 0);
+  --color-text-secondary: oklch(0.40 0 0);
+  --color-text-muted: oklch(0.60 0 0);
+  --color-border: oklch(0.85 0.005 260);
+}
+
+:root.light ::-webkit-scrollbar-thumb {
+  background: oklch(0.6 0 0 / 0.3);
+}
+
+:root.light ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.6 0 0 / 0.5);
+}
+
+:root.light [cmdk-dialog] {
+  background: oklch(0 0 0 / 0.25);
+}
+
+:root.light [cmdk-dialog] [cmdk-root] {
+  box-shadow:
+    0 16px 70px oklch(0 0 0 / 0.15),
+    0 0 0 1px oklch(0 0 0 / 0.05) inset;
 }

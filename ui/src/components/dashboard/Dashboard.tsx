@@ -1,7 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { getMeetings } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
+import { LoadingBlock } from "../common/Spinner";
+import { EmptyState } from "../common/EmptyState";
+import { ErrorState } from "../common/ErrorState";
 
 function StatusCard() {
   const { daemonRunning, state, activeMeeting } = useDaemonStatus();
@@ -71,8 +75,9 @@ function StatusCard() {
 
 function RecentMeetings() {
   const { daemonRunning } = useDaemonStatus();
+  const navigate = useNavigate();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["meetings", "recent"],
     queryFn: () => getMeetings(10, 0),
     enabled: daemonRunning,
@@ -81,30 +86,35 @@ function RecentMeetings() {
 
   if (!daemonRunning) return null;
 
-  if (isLoading) {
-    return (
-      <div className="rounded-xl bg-surface-raised border border-border p-6">
-        <h2 className="text-sm font-medium text-text-primary mb-4">Recent Meetings</h2>
-        <p className="text-xs text-text-muted">Loading...</p>
-      </div>
-    );
-  }
-
   const meetings = data?.meetings ?? [];
 
   return (
     <div className="rounded-xl bg-surface-raised border border-border p-6">
       <h2 className="text-sm font-medium text-text-primary mb-4">Recent Meetings</h2>
-      {meetings.length === 0 ? (
-        <p className="text-xs text-text-muted">
-          No meetings yet. Meetings will appear here once the daemon records and processes them.
-        </p>
+      {isLoading ? (
+        <LoadingBlock label="Loading meetings..." />
+      ) : isError ? (
+        <ErrorState message="Failed to load meetings." onRetry={() => refetch()} />
+      ) : meetings.length === 0 ? (
+        <EmptyState
+          title="No meetings yet"
+          description="Meetings will appear here once the daemon records and processes them."
+          icon={
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-text-muted/50">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+          }
+        />
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
           {meetings.map((m) => (
-            <div
+            <button
               key={m.id}
-              className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-sidebar-hover transition-colors cursor-pointer"
+              onClick={() => navigate(`/meetings/${m.id}`)}
+              className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-sidebar-hover transition-colors cursor-pointer text-left"
             >
               <div className="min-w-0">
                 <p className="text-sm text-text-primary truncate">{m.title}</p>
@@ -124,7 +134,7 @@ function RecentMeetings() {
               >
                 {m.status}
               </span>
-            </div>
+            </button>
           ))}
         </div>
       )}

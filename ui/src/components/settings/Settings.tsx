@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getConfig, updateConfig } from "../../lib/api";
+import { getConfig, updateConfig, getModels, downloadModel } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
-import type { AppConfig } from "../../lib/types";
+import { useTheme } from "../../hooks/useTheme";
+import type { Theme } from "../../hooks/useTheme";
+import type { AppConfig, WhisperModel } from "../../lib/types";
 
 /* ------------------------------------------------------------------ */
 /*  Reusable form primitives                                          */
@@ -99,6 +101,7 @@ export function Settings() {
   const { daemonRunning, state } = useDaemonStatus();
   const wsConnected = useAppStore((s) => s.wsConnected);
   const queryClient = useQueryClient();
+  const { theme, setTheme: applyTheme } = useTheme();
 
   const { data: fetchedConfig, isLoading: configLoading } = useQuery({
     queryKey: ["config"],
@@ -110,6 +113,18 @@ export function Settings() {
   const [savedConfig, setSavedConfig] = useState<AppConfig | null>(null);
   const [showRestart, setShowRestart] = useState(false);
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({});
+
+  const { data: modelsData } = useQuery({
+    queryKey: ["models"],
+    queryFn: getModels,
+    enabled: daemonRunning,
+    refetchInterval: 5000,
+  });
+
+  const downloadMutation = useMutation({
+    mutationFn: (name: string) => downloadModel(name),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["models"] }),
+  });
 
   useEffect(() => {
     if (fetchedConfig && !form) {
@@ -207,6 +222,21 @@ export function Settings() {
         </div>
       )}
 
+      {/* Appearance — always visible, not dependent on daemon */}
+      <Section title="Appearance" description="Theme and display preferences">
+        <Field label="Theme" help="Choose light, dark, or follow system preference">
+          <select
+            value={theme}
+            onChange={(e) => applyTheme(e.target.value as Theme)}
+            className={SELECT}
+          >
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </Field>
+      </Section>
+
       {/* Config form */}
       {!daemonRunning ? (
         <Section title="Configuration">
@@ -225,10 +255,12 @@ export function Settings() {
         </Section>
       ) : configLoading || !form ? (
         <Section title="Configuration">
-          <div className="py-3">
-            <p className="text-sm text-text-muted">
-              Loading configuration...
-            </p>
+          <div className="flex items-center gap-2.5 py-6 justify-center">
+            <svg className="animate-spin h-4 w-4 text-text-muted" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <span className="text-sm text-text-muted">Loading configuration...</span>
           </div>
         </Section>
       ) : (
@@ -486,6 +518,58 @@ export function Settings() {
               />
             </Field>
           </Section>
+
+          {/* Whisper Models */}
+          {modelsData && (
+            <Section
+              title="Whisper Models"
+              description="Download and manage transcription models"
+            >
+              {modelsData.models.map((model: WhisperModel) => (
+                <div key={model.name} className="flex items-center justify-between py-3">
+                  <div>
+                    <div className="text-sm text-text-primary">{model.name}</div>
+                    <div className="text-xs text-text-muted">{model.size_mb} MB</div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {model.status === "downloaded" ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-status-idle/20 text-status-idle">
+                        Downloaded
+                      </span>
+                    ) : model.status === "downloading" ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-400/20 text-blue-400 flex items-center gap-1.5">
+                        <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Downloading...
+                      </span>
+                    ) : model.status === "error" ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-status-error" title={model.error ?? ""}>
+                          Failed
+                        </span>
+                        <button
+                          onClick={() => downloadMutation.mutate(model.name)}
+                          className="text-xs px-2 py-0.5 rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => downloadMutation.mutate(model.name)}
+                        disabled={downloadMutation.isPending}
+                        className="text-xs px-3 py-1 rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                      >
+                        Download
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </Section>
+          )}
 
           {/* Summarisation */}
           <Section
@@ -774,6 +858,49 @@ export function Settings() {
                 </Field>
               </>
             )}
+          </Section>
+
+          {/* Data Retention */}
+          <Section
+            title="Data Retention"
+            description="Automatically clean up old data. Set to 0 to keep forever."
+          >
+            <Field
+              label="Delete audio after"
+              help="Remove audio files after this many days (keeps meeting record)"
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={form.retention.audio_retention_days}
+                  onChange={(e) =>
+                    set("retention", "audio_retention_days", Number(e.target.value))
+                  }
+                  className={NUM}
+                />
+                <span className="text-xs text-text-muted">days</span>
+              </div>
+            </Field>
+            <Field
+              label="Delete records after"
+              help="Remove entire meeting records (including audio) after this many days"
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={form.retention.record_retention_days}
+                  onChange={(e) =>
+                    set("retention", "record_retention_days", Number(e.target.value))
+                  }
+                  className={NUM}
+                />
+                <span className="text-xs text-text-muted">days</span>
+              </div>
+            </Field>
           </Section>
 
           {/* Logging */}

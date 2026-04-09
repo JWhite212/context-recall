@@ -10,6 +10,10 @@ import { MeetingDetail } from "./components/meetings/MeetingDetail";
 import { Settings } from "./components/settings/Settings";
 import { LiveView } from "./components/live/LiveView";
 import { CommandPalette } from "./components/common/CommandPalette";
+import {
+  OnboardingWizard,
+  isOnboardingComplete,
+} from "./components/onboarding/OnboardingWizard";
 import { useDaemonStatus } from "./hooks/useDaemonStatus";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useTraySync } from "./hooks/useTraySync";
@@ -31,6 +35,7 @@ function AppShell() {
   const { daemonRunning, state } = useDaemonStatus();
   const handleEvent = useAppStore((s) => s.handleEvent);
   const [lastEvent, setLastEvent] = useState<WSEvent | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(!isOnboardingComplete());
   useTraySync(state);
   useNotifications(lastEvent);
 
@@ -58,11 +63,18 @@ function AppShell() {
 
   useWebSocket(onWSEvent);
 
+  if (showOnboarding) {
+    return <OnboardingWizard onComplete={() => setShowOnboarding(false)} />;
+  }
+
   return (
     <div className="flex h-screen overflow-hidden">
+      <a href="#main-content" className="skip-to-content">
+        Skip to content
+      </a>
       <Sidebar daemonRunning={daemonRunning} />
       <CommandPalette />
-      <main className="flex-1 overflow-y-auto">
+      <main id="main-content" className="flex-1 overflow-y-auto" role="main">
         {/* Titlebar drag region over the content area */}
         <div data-tauri-drag-region className="h-[52px] shrink-0" />
         <Routes>

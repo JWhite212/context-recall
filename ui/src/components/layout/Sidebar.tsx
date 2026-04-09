@@ -66,13 +66,14 @@ export function Sidebar({ daemonRunning }: SidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex flex-col gap-0.5 px-2 mt-2 flex-1">
+      <nav aria-label="Main navigation" className="flex flex-col gap-0.5 px-2 mt-2 flex-1">
         {NAV_ITEMS.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
+            aria-label={item.label}
             className={({ isActive }) =>
-              `flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm transition-colors ${
+              `flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-sidebar ${
                 isActive
                   ? "bg-sidebar-hover text-text-primary"
                   : "text-text-secondary hover:bg-sidebar-hover hover:text-text-primary"
@@ -86,9 +87,10 @@ export function Sidebar({ daemonRunning }: SidebarProps) {
       </nav>
 
       {/* Daemon status */}
-      <div className="px-4 py-3 border-t border-border">
+      <div className="px-4 py-3 border-t border-border" role="status" aria-live="polite">
         <div className="flex items-center gap-2 text-xs text-text-muted">
           <span
+            aria-hidden="true"
             className={`w-2 h-2 rounded-full ${
               daemonRunning ? "bg-status-idle" : "bg-status-error"
             }`}

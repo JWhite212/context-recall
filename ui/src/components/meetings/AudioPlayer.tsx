@@ -1,12 +1,18 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type MutableRefObject } from "react";
 import WaveSurfer from "wavesurfer.js";
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const SKIP_SECONDS = 10;
 
+export interface AudioSeekHandle {
+  seekTo: (seconds: number) => void;
+}
+
 interface AudioPlayerProps {
   /** Full URL to the audio file. */
   src: string;
+  /** Optional ref that gets populated with seek controls. */
+  seekRef?: MutableRefObject<AudioSeekHandle | null>;
 }
 
 function formatTime(seconds: number): string {
@@ -15,7 +21,7 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export function AudioPlayer({ src }: AudioPlayerProps) {
+export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
 
@@ -46,6 +52,17 @@ export function AudioPlayer({ src }: AudioPlayerProps) {
     ws.on("ready", () => {
       setDuration(ws.getDuration());
       setLoading(false);
+      if (seekRef) {
+        seekRef.current = {
+          seekTo: (seconds: number) => {
+            const dur = ws.getDuration();
+            if (dur > 0) {
+              ws.seekTo(Math.max(0, Math.min(1, seconds / dur)));
+              ws.play();
+            }
+          },
+        };
+      }
     });
     ws.on("timeupdate", (time) => setCurrentTime(time));
     ws.on("play", () => setPlaying(true));

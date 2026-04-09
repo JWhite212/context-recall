@@ -21,6 +21,7 @@ from src.utils.config import (
     LoggingConfig,
     MarkdownConfig,
     NotionConfig,
+    RetentionConfig,
     SummarisationConfig,
     TranscriptionConfig,
     _build_dataclass,
@@ -63,6 +64,7 @@ def _full_config_dict(raw: dict) -> dict:
         notion=_build_dataclass(NotionConfig, raw.get("notion", {})),
         logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
         api=_build_dataclass(ApiConfig, raw.get("api", {})),
+        retention=_build_dataclass(RetentionConfig, raw.get("retention", {})),
     )
     return dataclasses.asdict(config)
 

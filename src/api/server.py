@@ -18,10 +18,12 @@ from src.api.events import EventBus
 from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
 from src.api.routes import export as export_routes
+from src.api.routes import resummarise as resummarise_routes
 from src.api.routes import meetings as meetings_routes
+from src.api.routes import models as models_routes
 from src.api.routes import recording as recording_routes
 from src.api.routes import status as status_routes
-from src.utils.config import DEFAULT_CONFIG_PATH
+from src.utils.config import DEFAULT_CONFIG_PATH, load_config
 from src.api.websocket import ConnectionManager
 from src.db.database import Database
 from src.db.repository import MeetingRepository
@@ -100,6 +102,7 @@ class ApiServer:
         )
 
         export_routes.init(self.repo)
+        resummarise_routes.init(self.repo)
 
         # Register REST routers with auth dependency.
         auth_deps = [Depends(verify_token)]
@@ -109,6 +112,8 @@ class ApiServer:
         app.include_router(recording_routes.router, dependencies=auth_deps)
         app.include_router(devices_routes.router, dependencies=auth_deps)
         app.include_router(export_routes.router, dependencies=auth_deps)
+        app.include_router(resummarise_routes.router, dependencies=auth_deps)
+        app.include_router(models_routes.router, dependencies=auth_deps)
 
         # WebSocket endpoint (no auth — the UI running on localhost is trusted).
         @app.websocket("/ws")
@@ -137,6 +142,19 @@ class ApiServer:
         # Re-init routes now that repo is ready.
         meetings_routes.init(self.repo)
         export_routes.init(self.repo)
+        resummarise_routes.init(self.repo)
+
+        # Run data retention cleanup on startup.
+        try:
+            config = load_config()
+            r = config.retention
+            if r.audio_retention_days > 0 or r.record_retention_days > 0:
+                result = await self.repo.cleanup_old_meetings(
+                    r.audio_retention_days, r.record_retention_days
+                )
+                logger.info("Retention cleanup: %s", result)
+        except Exception as e:
+            logger.warning("Retention cleanup failed: %s", e)
 
         self._app = self._create_app()
 

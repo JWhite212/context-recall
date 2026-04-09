@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { getMeetings } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
+import { LoadingBlock } from "../common/Spinner";
+import { EmptyState } from "../common/EmptyState";
+import { ErrorState } from "../common/ErrorState";
 import type { MeetingStatus } from "../../lib/types";
 
 const STATUS_FILTERS: { label: string; value: MeetingStatus | "all" }[] = [
@@ -12,7 +16,8 @@ const STATUS_FILTERS: { label: string; value: MeetingStatus | "all" }[] = [
   { label: "Error", value: "error" },
 ];
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 100;
+const ROW_HEIGHT = 72;
 
 export function MeetingList() {
   const navigate = useNavigate();
@@ -20,8 +25,9 @@ export function MeetingList() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
   const [page, setPage] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["meetings", statusFilter, page, search],
     queryFn: () =>
       getMeetings(
@@ -82,76 +88,20 @@ export function MeetingList() {
 
           {/* Meeting list */}
           {isLoading ? (
-            <p className="text-xs text-text-muted">Loading...</p>
+            <LoadingBlock label="Loading meetings..." />
+          ) : isError ? (
+            <ErrorState message="Failed to load meetings." onRetry={() => refetch()} />
           ) : meetings.length === 0 ? (
-            <div className="rounded-xl bg-surface-raised border border-border p-6">
-              <p className="text-sm text-text-muted">
-                {search
-                  ? "No meetings match your search."
-                  : "No meetings yet. Meetings will appear here once the daemon records them."}
-              </p>
-            </div>
+            <EmptyState
+              title={search ? "No results" : "No meetings yet"}
+              description={
+                search
+                  ? `No meetings match "${search}".`
+                  : "Meetings will appear here once the daemon records them."
+              }
+            />
           ) : (
-            <div className="flex flex-col gap-1">
-              {meetings.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => navigate(`/meetings/${m.id}`)}
-                  className="flex items-center justify-between py-3 px-4 rounded-xl bg-surface-raised border border-border hover:border-accent/40 transition-colors text-left"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-text-primary truncate">
-                      {m.title}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs text-text-muted">
-                        {new Date(m.started_at * 1000).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })}
-                      </span>
-                      {m.duration_seconds != null && (
-                        <span className="text-xs text-text-muted">
-                          {Math.round(m.duration_seconds / 60)}m
-                        </span>
-                      )}
-                      {m.word_count != null && (
-                        <span className="text-xs text-text-muted">
-                          {m.word_count.toLocaleString()} words
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0 ml-4">
-                    {m.tags.length > 0 && (
-                      <div className="flex gap-1">
-                        {m.tags.slice(0, 2).map((tag) => (
-                          <span
-                            key={tag}
-                            className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <span
-                      className={`text-xs px-2 py-0.5 rounded-full ${
-                        m.status === "complete"
-                          ? "bg-status-idle/20 text-status-idle"
-                          : m.status === "error"
-                            ? "bg-status-error/20 text-status-error"
-                            : "bg-blue-400/20 text-blue-400"
-                      }`}
-                    >
-                      {m.status}
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
+            <VirtualMeetingList meetings={meetings} onSelect={(id) => navigate(`/meetings/${id}`)} listRef={listRef} />
           )}
 
           {/* Pagination */}
@@ -184,5 +134,129 @@ export function MeetingList() {
         </>
       )}
     </div>
+  );
+}
+
+import type { Meeting } from "../../lib/types";
+
+function VirtualMeetingList({
+  meetings,
+  onSelect,
+  listRef,
+}: {
+  meetings: Meeting[];
+  onSelect: (id: string) => void;
+  listRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const virtualizer = useVirtualizer({
+    count: meetings.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 5,
+  });
+
+  // For small lists, skip virtualisation overhead.
+  if (meetings.length <= 30) {
+    return (
+      <div className="flex flex-col gap-1">
+        {meetings.map((m) => (
+          <MeetingRow key={m.id} meeting={m} onSelect={onSelect} />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={listRef}
+      className="max-h-[60vh] overflow-y-auto"
+    >
+      <div
+        className="relative"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        {virtualizer.getVirtualItems().map((virtual) => {
+          const m = meetings[virtual.index];
+          return (
+            <div
+              key={m.id}
+              className="absolute left-0 right-0"
+              style={{
+                top: virtual.start,
+                height: virtual.size,
+              }}
+            >
+              <MeetingRow meeting={m} onSelect={onSelect} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function MeetingRow({
+  meeting: m,
+  onSelect,
+}: {
+  meeting: Meeting;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(m.id)}
+      className="flex items-center justify-between py-3 px-4 rounded-xl bg-surface-raised border border-border hover:border-accent/40 transition-colors text-left w-full mb-1"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-text-primary truncate">
+          {m.title}
+        </p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs text-text-muted">
+            {new Date(m.started_at * 1000).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
+          {m.duration_seconds != null && (
+            <span className="text-xs text-text-muted">
+              {Math.round(m.duration_seconds / 60)}m
+            </span>
+          )}
+          {m.word_count != null && (
+            <span className="text-xs text-text-muted">
+              {m.word_count.toLocaleString()} words
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 shrink-0 ml-4">
+        {m.tags.length > 0 && (
+          <div className="flex gap-1">
+            {m.tags.slice(0, 2).map((tag) => (
+              <span
+                key={tag}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
+        <span
+          className={`text-xs px-2 py-0.5 rounded-full ${
+            m.status === "complete"
+              ? "bg-status-idle/20 text-status-idle"
+              : m.status === "error"
+                ? "bg-status-error/20 text-status-error"
+                : "bg-blue-400/20 text-blue-400"
+          }`}
+        >
+          {m.status}
+        </span>
+      </div>
+    </button>
   );
 }
