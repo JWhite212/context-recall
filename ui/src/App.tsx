@@ -58,6 +58,13 @@ function AppShell() {
       if (event.type === "pipeline.complete") {
         queryClient.invalidateQueries({ queryKey: ["meetings"] });
       }
+      // Refresh model list on download progress (throttled via staleTime).
+      if (
+        event.type === "model.download.progress" &&
+        (event.percent === 100 || event.error)
+      ) {
+        queryClient.invalidateQueries({ queryKey: ["models"] });
+      }
     },
     [handleEvent],
   );

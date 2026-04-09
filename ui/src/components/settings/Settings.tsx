@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { getConfig, updateConfig, getModels, downloadModel } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
@@ -14,15 +15,18 @@ import type { AppConfig, WhisperModel } from "../../lib/types";
 function Toggle({
   checked,
   onChange,
+  label,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
+  label?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={label}
       onClick={() => onChange(!checked)}
       className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
         checked ? "bg-accent" : "bg-border"
@@ -86,6 +90,161 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ModelSection({
+  models,
+  onDownload,
+  downloading,
+}: {
+  models: WhisperModel[];
+  onDownload: (name: string) => void;
+  downloading: boolean;
+}) {
+  const modelProgress = useAppStore((s) => s.modelProgress);
+
+  return (
+    <Section
+      title="Whisper Models"
+      description="Download and manage transcription models"
+    >
+      {models.map((model) => {
+        const liveProgress = modelProgress[model.name];
+        const isDownloading = model.status === "downloading" || (liveProgress && liveProgress.percent < 100 && !liveProgress.error);
+        const percent = liveProgress?.percent ?? model.percent;
+
+        return (
+          <div key={model.name} className="flex flex-col gap-2 py-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-text-primary">{model.name}</div>
+                <div className="text-xs text-text-muted">{model.size_mb} MB</div>
+              </div>
+              <div className="flex items-center gap-2">
+                {model.status === "downloaded" && !isDownloading ? (
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-status-idle/20 text-status-idle">
+                    Downloaded
+                  </span>
+                ) : isDownloading ? (
+                  <span className="text-xs text-blue-400 tabular-nums">
+                    {percent}%
+                  </span>
+                ) : model.status === "error" || liveProgress?.error ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-status-error" title={liveProgress?.error ?? model.error ?? ""}>
+                      Failed
+                    </span>
+                    <button
+                      onClick={() => onDownload(model.name)}
+                      className="text-xs px-2 py-0.5 rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => onDownload(model.name)}
+                    disabled={downloading}
+                    className="text-xs px-3 py-1 rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                  >
+                    Download
+                  </button>
+                )}
+              </div>
+            </div>
+            {isDownloading && (
+              <div
+                role="progressbar"
+                aria-valuenow={percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={`Downloading ${model.name}: ${percent}%`}
+                className="h-1.5 rounded-full bg-border overflow-hidden"
+              >
+                <div
+                  className="h-full rounded-full bg-accent transition-[width] duration-300"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </Section>
+  );
+}
+
+function UpdateChecker() {
+  const [checking, setChecking] = useState(false);
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function checkForUpdates() {
+    setChecking(true);
+    setError(null);
+    try {
+      const version = await invoke<string | null>("check_for_updates");
+      setUpdateVersion(version);
+      setChecked(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function installUpdate() {
+    setInstalling(true);
+    setError(null);
+    try {
+      await invoke("install_update");
+      // If the app hasn't restarted, prompt the user.
+      setError("Update installed. Please restart the application.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  return (
+    <div className="py-3">
+      {updateVersion ? (
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-sm text-text-primary">
+              Update available: v{updateVersion}
+            </span>
+          </div>
+          <button
+            onClick={installUpdate}
+            disabled={installing}
+            className="text-xs px-3 py-1 rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+          >
+            {installing ? "Installing..." : "Install & Restart"}
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-text-secondary">
+            {checked ? "You're up to date." : "Check for updates"}
+          </span>
+          <button
+            onClick={checkForUpdates}
+            disabled={checking}
+            className="text-xs px-3 py-1 rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors disabled:opacity-50"
+          >
+            {checking ? "Checking..." : "Check Now"}
+          </button>
+        </div>
+      )}
+      {error && (
+        <p className="text-xs text-status-error mt-1">{error}</p>
+      )}
+    </div>
+  );
+}
+
 const INPUT =
   "bg-surface border border-border rounded-lg px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent";
 const NUM = `${INPUT} w-24 text-right`;
@@ -118,7 +277,7 @@ export function Settings() {
     queryKey: ["models"],
     queryFn: getModels,
     enabled: daemonRunning,
-    refetchInterval: 5000,
+    refetchInterval: 30_000,
   });
 
   const downloadMutation = useMutation({
@@ -395,6 +554,7 @@ export function Settings() {
               <Toggle
                 checked={form.audio.mic_enabled}
                 onChange={(v) => set("audio", "mic_enabled", v)}
+                label="Enable microphone"
               />
             </Field>
             <Field label="Mic volume" help="0.0 to 2.0">
@@ -443,6 +603,7 @@ export function Settings() {
               <Toggle
                 checked={form.audio.keep_source_files}
                 onChange={(v) => set("audio", "keep_source_files", v)}
+                label="Keep source files"
               />
             </Field>
           </Section>
@@ -526,54 +687,11 @@ export function Settings() {
 
           {/* Whisper Models */}
           {modelsData && (
-            <Section
-              title="Whisper Models"
-              description="Download and manage transcription models"
-            >
-              {modelsData.models.map((model: WhisperModel) => (
-                <div key={model.name} className="flex items-center justify-between py-3">
-                  <div>
-                    <div className="text-sm text-text-primary">{model.name}</div>
-                    <div className="text-xs text-text-muted">{model.size_mb} MB</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {model.status === "downloaded" ? (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-status-idle/20 text-status-idle">
-                        Downloaded
-                      </span>
-                    ) : model.status === "downloading" ? (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-400/20 text-blue-400 flex items-center gap-1.5">
-                        <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Downloading...
-                      </span>
-                    ) : model.status === "error" ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-status-error" title={model.error ?? ""}>
-                          Failed
-                        </span>
-                        <button
-                          onClick={() => downloadMutation.mutate(model.name)}
-                          className="text-xs px-2 py-0.5 rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => downloadMutation.mutate(model.name)}
-                        disabled={downloadMutation.isPending}
-                        className="text-xs px-3 py-1 rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
-                      >
-                        Download
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </Section>
+            <ModelSection
+              models={modelsData.models}
+              onDownload={(name) => downloadMutation.mutate(name)}
+              downloading={downloadMutation.isPending}
+            />
           )}
 
           {/* Summarisation */}
@@ -682,6 +800,7 @@ export function Settings() {
               <Toggle
                 checked={form.diarisation.enabled}
                 onChange={(v) => set("diarisation", "enabled", v)}
+                label="Enable diarisation"
               />
             </Field>
             {form.diarisation.enabled && (
@@ -742,6 +861,7 @@ export function Settings() {
               <Toggle
                 checked={form.markdown.enabled}
                 onChange={(v) => set("markdown", "enabled", v)}
+                label="Enable markdown output"
               />
             </Field>
             {form.markdown.enabled && (
@@ -775,6 +895,7 @@ export function Settings() {
                 <Field label="Include transcript">
                   <Toggle
                     checked={form.markdown.include_full_transcript}
+                    label="Include full transcript"
                     onChange={(v) =>
                       set("markdown", "include_full_transcript", v)
                     }
@@ -793,6 +914,7 @@ export function Settings() {
               <Toggle
                 checked={form.notion.enabled}
                 onChange={(v) => set("notion", "enabled", v)}
+                label="Enable Notion output"
               />
             </Field>
             {form.notion.enabled && (
@@ -952,6 +1074,7 @@ export function Settings() {
         <InfoRow label="App" value="MeetingMind" />
         <InfoRow label="Version" value="0.1.0" />
         <InfoRow label="Platform" value="macOS (Tauri)" />
+        <UpdateChecker />
       </Section>
     </div>
   );

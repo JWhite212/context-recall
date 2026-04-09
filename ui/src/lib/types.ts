@@ -152,6 +152,7 @@ export interface WhisperModel {
   repo: string;
   size_mb: number;
   status: "downloaded" | "not_downloaded" | "downloading" | "error";
+  percent: number;
   error: string | null;
 }
 
@@ -195,4 +196,5 @@ export type WSEvent =
   | { type: "pipeline.error"; meeting_id: string | null; stage: string; error: string }
   | { type: "transcript.segment"; meeting_id: string | null; segment: TranscriptSegment }
   | { type: "audio.level"; system_rms: number; mic_rms: number }
+  | { type: "model.download.progress"; model: string; percent: number; error?: string }
   | { type: "daemon.status"; state: DaemonState };

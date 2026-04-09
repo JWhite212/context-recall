@@ -51,6 +51,7 @@ class ApiServer:
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._server: uvicorn.Server | None = None
+        self._retention_task: asyncio.Task | None = None
 
         # State accessors (set by MeetingMind before start).
         self._get_daemon_state = lambda: "idle"
@@ -103,6 +104,7 @@ class ApiServer:
 
         export_routes.init(self.repo)
         resummarise_routes.init(self.repo)
+        models_routes.init(self.event_bus)
 
         # Register REST routers with auth dependency.
         auth_deps = [Depends(verify_token)]
@@ -122,8 +124,10 @@ class ApiServer:
             try:
                 while True:
                     await websocket.receive_text()
-            except (WebSocketDisconnect, Exception):
+            except WebSocketDisconnect:
                 pass
+            except Exception:
+                logger.exception("WebSocket error")
             finally:
                 self.ws_manager.disconnect(websocket)
 
@@ -131,25 +135,20 @@ class ApiServer:
 
     async def _run_async(self) -> None:
         """Async entry point for the server thread."""
-        self._loop = asyncio.get_event_loop()
+        self._loop = asyncio.get_running_loop()
         self.event_bus.set_loop(self._loop)
 
         # Wire EventBus → WebSocket broadcast.
         self.event_bus.subscribe_async(self.ws_manager.broadcast)
 
-        # Connect database.
+        # Connect database and create repository.
         await self.db.connect()
         self.repo = MeetingRepository(self.db)
 
-        # Re-init routes now that repo is ready.
-        meetings_routes.init(self.repo)
-        export_routes.init(self.repo)
-        resummarise_routes.init(self.repo)
-
         # Run data retention cleanup on startup.
         try:
-            config = load_config()
-            r = config.retention
+            app_config = load_config()
+            r = app_config.retention
             if r.audio_retention_days > 0 or r.record_retention_days > 0:
                 result = await self.repo.cleanup_old_meetings(
                     r.audio_retention_days, r.record_retention_days
@@ -158,18 +157,51 @@ class ApiServer:
         except Exception as e:
             logger.warning("Retention cleanup failed: %s", e)
 
+        # Create the app (routes are initialized here with the ready repo).
         self._app = self._create_app()
 
-        config = uvicorn.Config(
+        # Schedule periodic retention cleanup (every 6 hours).
+        self._retention_task = asyncio.create_task(
+            self._periodic_retention_cleanup()
+        )
+
+        uvi_config = uvicorn.Config(
             app=self._app,
             host=self.host,
             port=self.port,
             log_level="warning",
             access_log=False,
         )
-        self._server = uvicorn.Server(config)
+        self._server = uvicorn.Server(uvi_config)
         logger.info("API server starting on http://%s:%d", self.host, self.port)
-        await self._server.serve()
+        try:
+            await self._server.serve()
+        finally:
+            # Clean up background tasks and database on shutdown.
+            if self._retention_task and not self._retention_task.done():
+                self._retention_task.cancel()
+                try:
+                    await self._retention_task
+                except asyncio.CancelledError:
+                    pass
+            await self.db.close()
+
+    async def _periodic_retention_cleanup(self) -> None:
+        """Run data retention cleanup every 6 hours."""
+        interval = 6 * 3600  # 6 hours
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                config = load_config()
+                r = config.retention
+                if r.audio_retention_days > 0 or r.record_retention_days > 0:
+                    result = await self.repo.cleanup_old_meetings(
+                        r.audio_retention_days, r.record_retention_days
+                    )
+                    if result["audio_deleted"] or result["records_deleted"]:
+                        logger.info("Periodic retention cleanup: %s", result)
+            except Exception as e:
+                logger.warning("Periodic retention cleanup failed: %s", e)
 
     def _thread_target(self) -> None:
         """Target for the background thread."""
@@ -186,7 +218,10 @@ class ApiServer:
         logger.info("API server thread started")
 
     def stop(self) -> None:
-        """Signal the server to shut down."""
+        """Signal the server to shut down.
+
+        Cleanup (task cancellation, DB close) happens in _run_async's finally block.
+        """
         if self._server:
             self._server.should_exit = True
         if self._thread:

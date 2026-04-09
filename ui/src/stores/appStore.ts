@@ -6,6 +6,11 @@ interface AudioLevels {
   mic: number;
 }
 
+interface ModelProgress {
+  percent: number;
+  error?: string;
+}
+
 interface AppState {
   /** WebSocket connection status. */
   wsConnected: boolean;
@@ -19,6 +24,9 @@ interface AppState {
 
   /** Live audio levels (RMS, 0.0–1.0). */
   audioLevels: AudioLevels;
+
+  /** Model download progress from WebSocket events. */
+  modelProgress: Record<string, ModelProgress>;
 
   /** Handle a WebSocket event. */
   handleEvent: (event: WSEvent) => void;
@@ -34,6 +42,7 @@ export const useAppStore = create<AppState>((set) => ({
   pipelineStage: null,
   liveSegments: [],
   audioLevels: { system: 0, mic: 0 },
+  modelProgress: {},
 
   handleEvent: (event) => {
     switch (event.type) {
@@ -53,6 +62,14 @@ export const useAppStore = create<AppState>((set) => ({
         break;
       case "audio.level":
         set({ audioLevels: { system: event.system_rms ?? 0, mic: event.mic_rms ?? 0 } });
+        break;
+      case "model.download.progress":
+        set((state) => ({
+          modelProgress: {
+            ...state.modelProgress,
+            [event.model]: { percent: event.percent, error: event.error },
+          },
+        }));
         break;
     }
   },
