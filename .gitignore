@@ -19,5 +19,12 @@ __pycache__/
 ui/src-tauri/target/
 ui/dist/
 
+# Bundled daemon binary (built via PyInstaller, copied into Tauri resources)
+ui/src-tauri/resources/meetingmind-daemon
+
+# PyInstaller output
+dist/
+build/
+
 # Node
 ui/node_modules/

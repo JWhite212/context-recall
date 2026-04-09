@@ -39,6 +39,15 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, Stri
     }
 }
 
+/// Return the absolute path to the bundled daemon binary.
+#[tauri::command]
+fn daemon_binary_path(app: tauri::AppHandle) -> Result<String, String> {
+    app.path()
+        .resource_dir()
+        .map(|p| p.join("meetingmind-daemon").display().to_string())
+        .map_err(|e| e.to_string())
+}
+
 /// Download and install the pending update found by check_for_updates.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
@@ -69,6 +78,7 @@ pub fn run() {
             tray::update_tray_state,
             check_for_updates,
             install_update,
+            daemon_binary_path,
         ])
         .setup(|app| {
             tray::setup(app)?;

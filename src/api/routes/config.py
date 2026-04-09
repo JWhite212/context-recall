@@ -14,9 +14,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from src.utils.config import (
+    ApiConfig,
     AppConfig,
     AudioConfig,
-    ApiConfig,
     DetectionConfig,
     DiarisationConfig,
     LoggingConfig,
@@ -104,7 +104,7 @@ def _deep_merge(
     return merged
 
 
-@router.get("/api/config")
+@router.get("/api/config", summary="Get current configuration")
 async def get_config():
     raw = _read_yaml()
     full = _full_config_dict(raw)
@@ -127,7 +127,7 @@ class ConfigUpdateBody(BaseModel):
     retention: dict | None = None
 
 
-@router.put("/api/config")
+@router.put("/api/config", summary="Update configuration")
 async def update_config(body: ConfigUpdateBody):
     if not _config_path:
         raise HTTPException(status_code=500, detail="Config path not set")

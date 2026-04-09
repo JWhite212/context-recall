@@ -38,7 +38,8 @@ export function MeetingList() {
         statusFilter !== "all" ? statusFilter : undefined,
       ),
     enabled: daemonRunning,
-    refetchInterval: 10000,
+    staleTime: 10_000,
+    refetchInterval: 10_000,
   });
 
   const meetings = data?.meetings ?? [];

@@ -6,6 +6,8 @@ import time
 
 from fastapi import APIRouter
 
+from src.api.schemas import HealthResponse, StatusResponse
+
 router = APIRouter()
 
 
@@ -21,12 +23,12 @@ def init(get_daemon_state, get_active_meeting):
     _get_active_meeting = get_active_meeting
 
 
-@router.get("/api/health")
+@router.get("/api/health", response_model=HealthResponse, summary="Health check")
 async def health():
     return {"status": "ok", "timestamp": time.time()}
 
 
-@router.get("/api/status")
+@router.get("/api/status", response_model=StatusResponse, summary="Daemon status")
 async def status():
     state = _get_daemon_state() if _get_daemon_state else "unknown"
     active_meeting = _get_active_meeting() if _get_active_meeting else None

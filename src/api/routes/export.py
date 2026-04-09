@@ -11,7 +11,7 @@ import time
 
 import yaml
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import PlainTextResponse, JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 logger = logging.getLogger("meetingmind.api.export")
 
@@ -26,7 +26,7 @@ def init(repo) -> None:
     _repo = repo
 
 
-@router.post("/api/export/{meeting_id}")
+@router.post("/api/export/{meeting_id}", summary="Export meeting as Markdown or JSON")
 async def export_meeting(
     meeting_id: str,
     format: str = Query("markdown", pattern="^(markdown|json)$"),

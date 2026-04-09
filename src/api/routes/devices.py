@@ -7,10 +7,12 @@ GET /api/devices — returns available audio input devices.
 import sounddevice as sd
 from fastapi import APIRouter
 
+from src.api.schemas import DeviceListResponse
+
 router = APIRouter()
 
 
-@router.get("/api/devices")
+@router.get("/api/devices", response_model=DeviceListResponse, summary="List audio devices")
 async def list_devices():
     devices = sd.query_devices()
     inputs = []

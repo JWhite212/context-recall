@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from src.api.schemas import DeleteResponse, MeetingListResponse
 from src.utils.config import load_config
 
 router = APIRouter()
@@ -21,7 +22,7 @@ def init(repo):
     _repo = repo
 
 
-@router.get("/api/meetings")
+@router.get("/api/meetings", response_model=MeetingListResponse, summary="List meetings")
 async def list_meetings(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -43,7 +44,7 @@ async def list_meetings(
     }
 
 
-@router.get("/api/meetings/{meeting_id}")
+@router.get("/api/meetings/{meeting_id}", summary="Get meeting by ID")
 async def get_meeting(meeting_id: str):
     meeting = await _repo.get_meeting(meeting_id)
     if not meeting:
@@ -51,7 +52,9 @@ async def get_meeting(meeting_id: str):
     return meeting.to_dict()
 
 
-@router.delete("/api/meetings/{meeting_id}")
+@router.delete(
+    "/api/meetings/{meeting_id}", response_model=DeleteResponse, summary="Delete meeting"
+)
 async def delete_meeting(meeting_id: str):
     meeting = await _repo.get_meeting(meeting_id)
     if not meeting:
@@ -68,7 +71,7 @@ async def delete_meeting(meeting_id: str):
     return {"deleted": True}
 
 
-@router.get("/api/meetings/{meeting_id}/audio")
+@router.get("/api/meetings/{meeting_id}/audio", summary="Download meeting audio")
 async def get_meeting_audio(meeting_id: str):
     meeting = await _repo.get_meeting(meeting_id)
     if not meeting:
@@ -82,7 +85,7 @@ async def get_meeting_audio(meeting_id: str):
     except Exception:
         audio_dir = Path("/tmp/meetingmind").resolve()
     resolved = Path(meeting.audio_path).resolve()
-    if not str(resolved).startswith(str(audio_dir)):
+    if not resolved.is_relative_to(audio_dir):
         raise HTTPException(status_code=403, detail="Audio file not found")
 
     return FileResponse(

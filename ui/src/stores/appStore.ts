@@ -56,9 +56,10 @@ export const useAppStore = create<AppState>((set) => ({
         set({ pipelineStage: null, audioLevels: { system: 0, mic: 0 } });
         break;
       case "transcript.segment":
-        set((state) => ({
-          liveSegments: [...state.liveSegments, event.segment],
-        }));
+        set((state) => {
+          const segments = [...state.liveSegments, event.segment];
+          return { liveSegments: segments.length > 200 ? segments.slice(-200) : segments };
+        });
         break;
       case "audio.level":
         set({ audioLevels: { system: event.system_rms ?? 0, mic: event.mic_rms ?? 0 } });

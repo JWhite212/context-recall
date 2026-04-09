@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException
 
+from src.api.schemas import ModelDownloadResponse, ModelListResponse
+
 if TYPE_CHECKING:
     from src.api.events import EventBus
 
@@ -157,7 +159,7 @@ def _download_worker(model_name: str) -> None:
             })
 
 
-@router.get("/api/models")
+@router.get("/api/models", response_model=ModelListResponse, summary="List Whisper models")
 async def list_models():
     # Run the blocking cache scan in a thread pool to keep the event loop free.
     cached_repos = await asyncio.get_running_loop().run_in_executor(
@@ -193,7 +195,11 @@ async def list_models():
     return {"models": models}
 
 
-@router.post("/api/models/{model_name}/download")
+@router.post(
+    "/api/models/{model_name}/download",
+    response_model=ModelDownloadResponse,
+    summary="Download a model",
+)
 async def download_model(model_name: str):
     if model_name not in AVAILABLE_MODELS:
         raise HTTPException(status_code=404, detail=f"Unknown model: {model_name}")

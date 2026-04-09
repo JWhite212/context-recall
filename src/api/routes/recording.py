@@ -11,6 +11,8 @@ import time
 
 from fastapi import APIRouter, HTTPException
 
+from src.api.schemas import RecordStartResponse, RecordStopResponse
+
 logger = logging.getLogger("meetingmind.api.recording")
 
 router = APIRouter()
@@ -28,7 +30,7 @@ def init(start_recording, stop_recording, is_recording) -> None:
     _is_recording = is_recording
 
 
-@router.post("/api/record/start")
+@router.post("/api/record/start", response_model=RecordStartResponse, summary="Start recording")
 async def start_recording():
     if not _start_recording or not _is_recording:
         raise HTTPException(status_code=503, detail="Recording controls not available")
@@ -45,7 +47,7 @@ async def start_recording():
     return {"status": "recording", "started_at": time.time()}
 
 
-@router.post("/api/record/stop")
+@router.post("/api/record/stop", response_model=RecordStopResponse, summary="Stop recording")
 async def stop_recording():
     if not _stop_recording or not _is_recording:
         raise HTTPException(status_code=503, detail="Recording controls not available")

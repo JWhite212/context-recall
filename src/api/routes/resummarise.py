@@ -11,9 +11,10 @@ import logging
 import yaml
 from fastapi import APIRouter, HTTPException
 
+from src.api.schemas import ResummariseResponse
 from src.summariser import Summariser
 from src.transcriber import Transcript, TranscriptSegment
-from src.utils.config import SummarisationConfig, _build_dataclass, DEFAULT_CONFIG_PATH
+from src.utils.config import DEFAULT_CONFIG_PATH, SummarisationConfig, _build_dataclass
 
 logger = logging.getLogger("meetingmind.api.resummarise")
 
@@ -57,7 +58,11 @@ def _reconstruct_transcript(transcript_json: str, duration: float) -> Transcript
     )
 
 
-@router.post("/api/meetings/{meeting_id}/resummarise")
+@router.post(
+    "/api/meetings/{meeting_id}/resummarise",
+    response_model=ResummariseResponse,
+    summary="Re-summarise meeting",
+)
 async def resummarise_meeting(meeting_id: str):
     if not _repo:
         raise HTTPException(status_code=503, detail="Repository not available")
@@ -82,7 +87,9 @@ async def resummarise_meeting(meeting_id: str):
         summary = await asyncio.to_thread(summariser.summarise, transcript)
     except Exception as e:
         logger.error("Re-summarisation failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail="Summarisation failed. Check server logs for details.")
+        raise HTTPException(
+            status_code=500, detail="Summarisation failed. Check server logs for details."
+        )
 
     await _repo.update_meeting(
         meeting_id,

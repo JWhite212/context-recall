@@ -18,15 +18,15 @@ from src.api.events import EventBus
 from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
 from src.api.routes import export as export_routes
-from src.api.routes import resummarise as resummarise_routes
 from src.api.routes import meetings as meetings_routes
 from src.api.routes import models as models_routes
 from src.api.routes import recording as recording_routes
+from src.api.routes import resummarise as resummarise_routes
 from src.api.routes import status as status_routes
-from src.utils.config import DEFAULT_CONFIG_PATH, load_config
 from src.api.websocket import ConnectionManager
 from src.db.database import Database
 from src.db.repository import MeetingRepository
+from src.utils.config import DEFAULT_CONFIG_PATH, load_config
 
 logger = logging.getLogger("meetingmind.api")
 
@@ -74,6 +74,11 @@ class ApiServer:
     def _create_app(self) -> FastAPI:
         app = FastAPI(
             title="MeetingMind API",
+            description=(
+                "REST + WebSocket API for the MeetingMind daemon. "
+                "Provides meeting history, live recording controls, configuration, "
+                "model management, and real-time events."
+            ),
             version="0.1.0",
             docs_url="/docs",
         )
