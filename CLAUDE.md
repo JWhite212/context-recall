@@ -16,8 +16,14 @@ python3 -m src.main                    # Daemon: auto-detect Teams meetings
 python3 -m src.main --record-now       # Manual: record immediately, Ctrl+C to stop
 python3 -m src.main --process file.wav # Process an existing audio file
 
-# Verify imports (quick sanity check, no test suite exists)
+# Verify imports
 python3 -c "from src.main import MeetingMind"
+
+# Run tests
+pip install -r requirements-dev.txt
+python3 -m pytest tests/ -v           # Full test suite
+python3 -m pytest tests/ -x           # Stop on first failure
+ruff check src/ tests/                # Lint check
 ```
 
 ## Architecture
@@ -30,7 +36,9 @@ TeamsDetector → AudioCapture → Transcriber → Diariser → Summariser → W
 
 **`src/main.py`** — Orchestrator (`MeetingMind` class). Wires all components together, manages lifecycle. The detector's callbacks trigger start/stop on the capture, then `_process_audio()` runs the rest of the pipeline sequentially.
 
-**`src/detector.py`** — State machine (IDLE → ACTIVE → ENDING) that polls macOS `pgrep` and `lsof` to detect live Teams calls. Uses debounce (consecutive positive polls required). Has an AppleScript fallback checking window titles.
+**`src/detector.py`** — State machine (IDLE → ACTIVE → ENDING) with debounce. Delegates platform-specific detection (pgrep, lsof, osascript) to `src/platform/` implementations via `PlatformDetector` protocol.
+
+**`src/platform/`** — Platform abstraction layer. `PlatformDetector` protocol with `MacOSDetector` (macOS), plus Linux/Windows stubs.
 
 **`src/audio_capture.py`** — Records BlackHole (system audio) and microphone to **separate WAV files** on independent `sd.InputStream` threads, then post-merges with RMS normalisation. This architecture avoids clock-drift between the two audio devices. Source files can be kept for diarisation.
 
@@ -48,8 +56,8 @@ TeamsDetector → AudioCapture → Transcriber → Diariser → Summariser → W
 
 - **macOS only**: relies on BlackHole virtual audio driver, `pgrep`, `lsof`, and `osascript`.
 - **`config.yaml` is gitignored** — contains API keys. `config.example.yaml` is the tracked template.
-- **No test suite** exists. Verify changes with import checks and manual testing.
-- **No linting/formatting tools** are configured.
+- **Test suite** uses pytest + pytest-asyncio. Run with `python3 -m pytest tests/ -v`.
+- **Linting** uses ruff. Run with `ruff check src/ tests/`.
 - **`httpx`** is used by the Ollama backend but is an implicit dependency (installed transitively via `anthropic`).
 - Audio callbacks run on PortAudio threads — each writes to its own `sf.SoundFile` exclusively.
 - The `stop()` method on `AudioCapture` blocks (up to 30s) while post-merge runs.

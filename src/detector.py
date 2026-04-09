@@ -1,8 +1,8 @@
 """
-Teams meeting detector for macOS.
+Teams meeting detector.
 
 Determines whether a Microsoft Teams meeting is currently active by
-inspecting two independent signals:
+inspecting two independent signals via a platform-specific detector:
 
 1. Process-level: Is a Teams process running?
 2. Audio-level:   Is Teams actively using an audio input device?
@@ -11,17 +11,17 @@ The combination of both signals gives high confidence that a live call
 is in progress, avoiding false positives from simply having Teams open
 in the background.
 
-macOS-specific: uses `subprocess` calls to `pgrep` and `lsof` rather
-than platform-agnostic libraries, since BlackHole and the rest of the
-audio pipeline are inherently macOS-bound anyway.
+Platform-specific logic (pgrep, lsof, osascript on macOS) is isolated
+in ``src/platform/`` implementations behind the ``PlatformDetector``
+protocol, allowing future Windows/Linux support.
 """
 
 import logging
-import subprocess
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from src.platform.detector import PlatformDetector, create_detector
 from src.utils.config import DetectionConfig
 
 logger = logging.getLogger(__name__)
@@ -56,8 +56,13 @@ class TeamsDetector:
         detector.run()   # Blocking poll loop.
     """
 
-    def __init__(self, config: DetectionConfig):
+    def __init__(
+        self,
+        config: DetectionConfig,
+        platform: PlatformDetector | None = None,
+    ):
         self._config = config
+        self._platform = platform or create_detector()
         self._state = MeetingState.IDLE
         self._meeting_started_at: float = 0.0
         self._running = False
@@ -72,108 +77,8 @@ class TeamsDetector:
         return self._state
 
     # ------------------------------------------------------------------
-    # Detection heuristics
+    # Detection heuristics (delegated to PlatformDetector)
     # ------------------------------------------------------------------
-
-    def _is_teams_running(self) -> bool:
-        """Check if any Teams process is currently running."""
-        for name in self._config.process_names:
-            try:
-                result = subprocess.run(
-                    ["pgrep", "-x", name],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    return True
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                continue
-        return False
-
-    def _is_teams_using_audio(self) -> bool:
-        """
-        Check if Teams has active audio device handles open.
-
-        We look for specific file descriptors that indicate active audio
-        streaming, not just loaded libraries. Teams always loads CoreAudio
-        libraries but only opens device handles during a call.
-        """
-        for name in self._config.process_names:
-            try:
-                pgrep = subprocess.run(
-                    ["pgrep", "-x", name],
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                )
-                if pgrep.returncode != 0:
-                    continue
-
-                pids = pgrep.stdout.strip().split("\n")
-                for pid in pids:
-                    pid = pid.strip()
-                    if not pid:
-                        continue
-
-                    lsof = subprocess.run(
-                        ["lsof", "-p", pid],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    output = lsof.stdout.lower()
-
-                    # Only these patterns indicate active audio streaming
-                    # (not just having libraries loaded):
-                    active_indicators = [
-                        "ioaudioengine",       # Kernel audio device handle.
-                        "appleusbaudio",       # USB headset/mic device.
-                        "blackhole",           # Virtual audio loopback.
-                        "microsoftteamsaudio", # Teams' virtual audio device.
-                    ]
-                    if any(ind in output for ind in active_indicators):
-                        return True
-
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                continue
-
-        return False
-
-    def _is_teams_call_window_active(self) -> bool:
-        """
-        Fallback heuristic: check if a Teams window title suggests an
-        active call. Uses AppleScript to query window titles via
-        System Events (requires Accessibility permissions).
-
-        This is less reliable than the audio-device check but serves
-        as a useful secondary signal.
-        """
-        script = '''
-        tell application "System Events"
-            set teamsList to every process whose name contains "Teams"
-            repeat with teamsProc in teamsList
-                set winNames to name of every window of teamsProc
-                repeat with winName in winNames
-                    set lower to do shell script "echo " & quoted form of (winName as text) & " | tr '[:upper:]' '[:lower:]'"
-                    if lower contains "meeting" or lower contains "call with" or lower contains "in call" then
-                        return true
-                    end if
-                end repeat
-            end repeat
-        end tell
-        return false
-        '''
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return result.stdout.strip().lower() == "true"
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
 
     def _is_meeting_active(self) -> bool:
         """
@@ -183,16 +88,18 @@ class TeamsDetector:
         the audio check is inconclusive. This avoids requiring
         Accessibility permissions for the common case.
         """
-        if not self._is_teams_running():
+        names = self._config.process_names
+
+        if not self._platform.is_app_running(names):
             return False
 
-        if self._is_teams_using_audio():
+        if self._platform.is_app_using_audio(names):
             return True
 
         # Fallback to window title inspection if audio check is negative.
         # This catches cases where Teams uses WebRTC audio that doesn't
         # appear in lsof as a CoreAudio handle.
-        return self._is_teams_call_window_active()
+        return self._platform.is_call_window_active()
 
     # ------------------------------------------------------------------
     # State machine
