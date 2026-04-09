@@ -6,6 +6,7 @@ configuration object. Falls back to sensible defaults where possible.
 """
 
 import os
+import sys
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -13,8 +14,12 @@ from typing import Optional
 import yaml
 
 
-# Resolve project root as the directory two levels above this file.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# Resolve project root. Inside a PyInstaller frozen binary, __file__
+# doesn't exist in the usual sense — use sys.executable instead.
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 

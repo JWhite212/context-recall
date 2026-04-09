@@ -3,9 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { getMeetings } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
-import { LoadingBlock } from "../common/Spinner";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
+import { SkeletonCard } from "../common/Skeleton";
 
 function StatusCard() {
   const { daemonRunning, state, activeMeeting } = useDaemonStatus();
@@ -92,7 +92,13 @@ function RecentMeetings() {
     <div className="rounded-xl bg-surface-raised border border-border p-6">
       <h2 className="text-sm font-medium text-text-primary mb-4">Recent Meetings</h2>
       {isLoading ? (
-        <LoadingBlock label="Loading meetings..." />
+        <div role="status" aria-label="Loading meetings">
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
+          </div>
+        </div>
       ) : isError ? (
         <ErrorState message="Failed to load meetings." onRetry={() => refetch()} />
       ) : meetings.length === 0 ? (

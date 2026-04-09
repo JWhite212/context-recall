@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { startRecording, stopRecording } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
+import { useToast } from "../common/Toast";
 
 /* ------------------------------------------------------------------ */
 /*  Pipeline stage labels                                             */
@@ -79,14 +80,22 @@ export function LiveView() {
     segmentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [liveSegments.length]);
 
+  const toast = useToast();
+
   const startMutation = useMutation({
     mutationFn: startRecording,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["status"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["status"] });
+      toast.success("Recording started.");
+    },
   });
 
   const stopMutation = useMutation({
     mutationFn: stopRecording,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["status"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["status"] });
+      toast.info("Recording stopped. Processing will begin shortly.");
+    },
   });
 
   return (
@@ -127,6 +136,7 @@ export function LiveView() {
               stopMutation.isPending ||
               isProcessing
             }
+            aria-label={isRecording ? "Stop recording" : "Start recording"}
             className={`mt-2 px-6 py-2 rounded-full text-sm font-medium transition-colors ${
               isRecording
                 ? "bg-status-error text-white hover:opacity-90"
@@ -169,7 +179,7 @@ export function LiveView() {
 
       {/* Pipeline progress */}
       {(isRecording || isProcessing) && (
-        <div className="rounded-xl bg-surface-raised border border-border p-5">
+        <div className="rounded-xl bg-surface-raised border border-border p-5" aria-busy={isProcessing}>
           <h2 className="text-sm font-medium text-text-primary mb-4">
             Pipeline
           </h2>
@@ -215,7 +225,7 @@ export function LiveView() {
           <h2 className="text-sm font-medium text-text-primary mb-3">
             Live Transcript
           </h2>
-          <div className="max-h-80 overflow-y-auto space-y-2">
+          <div className="max-h-80 overflow-y-auto space-y-2" aria-live="polite">
             {liveSegments.map((seg, i) => (
               <div key={i} className="flex gap-3 text-sm">
                 <span className="text-text-muted font-mono text-xs pt-0.5 shrink-0 w-12 text-right">
@@ -284,14 +294,21 @@ function LevelMeter({
       <span className="text-xs text-text-muted w-12 text-right shrink-0">
         {label}
       </span>
-      <div className="flex-1 h-2 rounded-full bg-border overflow-hidden">
+      <div
+        className="flex-1 h-2 rounded-full bg-border overflow-hidden"
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${label} audio level`}
+      >
         <div
           className={`h-full rounded-full transition-[width] duration-100 ${color}`}
           style={{ width: `${pct}%` }}
         />
       </div>
       <span className="text-[10px] text-text-muted w-8 font-mono tabular-nums">
-        {pct > 0 ? `${Math.round(20 * Math.log10(value + 1e-10))}` : "—"}
+        {pct > 0 ? `${Math.round(20 * Math.log10(value + 1e-10))}` : "\u2014"}
       </span>
     </div>
   );

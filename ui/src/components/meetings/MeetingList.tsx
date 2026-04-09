@@ -4,9 +4,9 @@ import { useNavigate } from "react-router-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { getMeetings } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
-import { LoadingBlock } from "../common/Spinner";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
+import { SkeletonMeetingRow } from "../common/Skeleton";
 import type { Meeting, MeetingStatus } from "../../lib/types";
 
 const STATUS_FILTERS: { label: string; value: MeetingStatus | "all" }[] = [
@@ -78,6 +78,8 @@ export function MeetingList() {
                   setStatusFilter(f.value);
                   setPage(0);
                 }}
+                aria-label={`Filter by ${f.label}`}
+                aria-pressed={statusFilter === f.value}
                 className={`px-3 py-1 text-xs rounded-full transition-colors ${
                   statusFilter === f.value
                     ? "bg-accent text-white"
@@ -91,7 +93,13 @@ export function MeetingList() {
 
           {/* Meeting list */}
           {isLoading ? (
-            <LoadingBlock label="Loading meetings..." />
+            <div role="status" aria-label="Loading meetings">
+              <div className="flex flex-col gap-1">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <SkeletonMeetingRow key={i} />
+                ))}
+              </div>
+            </div>
           ) : isError ? (
             <ErrorState message="Failed to load meetings." onRetry={() => refetch()} />
           ) : meetings.length === 0 ? (
@@ -117,6 +125,7 @@ export function MeetingList() {
                 <button
                   disabled={page === 0}
                   onClick={() => setPage((p) => p - 1)}
+                  aria-label="Previous page"
                   className="px-3 py-1 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   Prev
@@ -127,6 +136,7 @@ export function MeetingList() {
                 <button
                   disabled={page >= totalPages - 1}
                   onClick={() => setPage((p) => p + 1)}
+                  aria-label="Next page"
                   className="px-3 py-1 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   Next
@@ -159,9 +169,11 @@ function VirtualMeetingList({
   // For small lists, skip virtualisation overhead.
   if (meetings.length <= 30) {
     return (
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1" role="list">
         {meetings.map((m) => (
-          <MeetingRow key={m.id} meeting={m} onSelect={onSelect} />
+          <div key={m.id} role="listitem">
+            <MeetingRow meeting={m} onSelect={onSelect} />
+          </div>
         ))}
       </div>
     );
@@ -174,6 +186,7 @@ function VirtualMeetingList({
     >
       <div
         className="relative"
+        role="list"
         style={{ height: virtualizer.getTotalSize() }}
       >
         {virtualizer.getVirtualItems().map((virtual) => {
@@ -181,6 +194,7 @@ function VirtualMeetingList({
           return (
             <div
               key={m.id}
+              role="listitem"
               className="absolute left-0 right-0"
               style={{
                 top: virtual.start,

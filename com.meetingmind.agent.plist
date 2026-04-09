@@ -20,14 +20,20 @@
 
     <key>ProgramArguments</key>
     <array>
-        <!-- Update these paths to match your installation. -->
-        <string>/path/to/meeting-mind/.venv/bin/python</string>
-        <string>-m</string>
-        <string>src.main</string>
+        <!--
+            Production (PyInstaller binary):
+              <string>/Applications/MeetingMind.app/Contents/Resources/meetingmind-daemon</string>
+
+            Development (Python venv):
+              <string>/path/to/meeting-mind/.venv/bin/python3</string>
+              <string>-m</string>
+              <string>src.main</string>
+        -->
+        <string>/Applications/MeetingMind.app/Contents/Resources/meetingmind-daemon</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/path/to/meeting-mind</string>
+    <string>/Applications/MeetingMind.app/Contents/Resources</string>
 
     <!-- Start automatically on login. -->
     <key>RunAtLoad</key>
@@ -44,10 +50,10 @@
     <key>ThrottleInterval</key>
     <integer>30</integer>
 
-    <!-- Log stdout and stderr for debugging. -->
+    <!-- Log to ~/Library/Logs for easier debugging. -->
     <key>StandardOutPath</key>
-    <string>/tmp/meetingmind-stdout.log</string>
+    <string>/Users/USER/Library/Logs/meetingmind/stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/meetingmind-stderr.log</string>
+    <string>/Users/USER/Library/Logs/meetingmind/stderr.log</string>
 </dict>
 </plist>

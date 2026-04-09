@@ -11,6 +11,7 @@ import { MeetingDetail } from "./components/meetings/MeetingDetail";
 import { Settings } from "./components/settings/Settings";
 import { LiveView } from "./components/live/LiveView";
 import { CommandPalette } from "./components/common/CommandPalette";
+import { ToastProvider } from "./components/common/Toast";
 import {
   OnboardingWizard,
   isOnboardingComplete,
@@ -103,7 +104,9 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <AppShell />
+        <ToastProvider>
+          <AppShell />
+        </ToastProvider>
       </BrowserRouter>
     </QueryClientProvider>
   );

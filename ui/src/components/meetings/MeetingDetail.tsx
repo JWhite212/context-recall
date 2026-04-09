@@ -9,6 +9,7 @@ import { AudioPlayer, type AudioSeekHandle } from "./AudioPlayer";
 import { LoadingBlock } from "../common/Spinner";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
+import { useToast } from "../common/Toast";
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -156,10 +157,13 @@ export function MeetingDetail() {
     enabled: !!id,
   });
 
+  const toast = useToast();
+
   const deleteM = useMutation({
     mutationFn: () => deleteMeeting(id!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      toast.success("Meeting deleted.");
       navigate("/meetings");
     },
   });
@@ -323,14 +327,19 @@ export function MeetingDetail() {
             <button
               onClick={async () => {
                 setExportOpen(false);
-                const md = await exportMeeting(id!, "markdown");
-                const blob = new Blob([md], { type: "text/markdown" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `${meeting.title || "meeting"}.md`;
-                a.click();
-                URL.revokeObjectURL(url);
+                try {
+                  const md = await exportMeeting(id!, "markdown");
+                  const blob = new Blob([md], { type: "text/markdown" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${meeting.title || "meeting"}.md`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast.success("Exported as Markdown.");
+                } catch {
+                  toast.error("Failed to export Markdown.");
+                }
               }}
               role="menuitem"
               className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
@@ -340,14 +349,19 @@ export function MeetingDetail() {
             <button
               onClick={async () => {
                 setExportOpen(false);
-                const json = await exportMeeting(id!, "json");
-                const blob = new Blob([json], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `${meeting.title || "meeting"}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
+                try {
+                  const json = await exportMeeting(id!, "json");
+                  const blob = new Blob([json], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = `${meeting.title || "meeting"}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast.success("Exported as JSON.");
+                } catch {
+                  toast.error("Failed to export JSON.");
+                }
               }}
               role="menuitem"
               className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
@@ -359,6 +373,7 @@ export function MeetingDetail() {
                 setExportOpen(false);
                 const md = meeting.summary_markdown || "";
                 await navigator.clipboard.writeText(md);
+                toast.success("Summary copied to clipboard.");
               }}
               role="menuitem"
               className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"

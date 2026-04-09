@@ -1,10 +1,13 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useBlocker } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getConfig, updateConfig, getModels, downloadModel } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
 import { useTheme } from "../../hooks/useTheme";
+import { useToast } from "../common/Toast";
+import { Tooltip } from "../common/Tooltip";
 import type { Theme } from "../../hooks/useTheme";
 import type { AppConfig, WhisperModel } from "../../lib/types";
 
@@ -50,10 +53,11 @@ function Field({
   help?: string;
   children: React.ReactNode;
 }) {
+  const fieldId = label.toLowerCase().replace(/\s+/g, '-');
   return (
     <div className="flex items-start justify-between gap-4 py-3">
       <div className="min-w-0 pt-1">
-        <div className="text-sm text-text-primary">{label}</div>
+        <label htmlFor={fieldId} className="text-sm text-text-primary">{label}</label>
         {help && <p className="text-xs text-text-muted mt-0.5">{help}</p>}
       </div>
       <div className="shrink-0">{children}</div>
@@ -71,13 +75,14 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl bg-surface-raised border border-border p-5">
+    <fieldset className="rounded-xl bg-surface-raised border border-border p-5">
+      <legend className="sr-only">{title}</legend>
       <h2 className="text-sm font-medium text-text-primary">{title}</h2>
       {description && (
         <p className="text-xs text-text-muted mt-1">{description}</p>
       )}
       <div className="divide-y divide-border mt-3">{children}</div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -261,6 +266,7 @@ export function Settings() {
   const wsConnected = useAppStore((s) => s.wsConnected);
   const queryClient = useQueryClient();
   const { theme, setTheme: applyTheme } = useTheme();
+  const toast = useToast();
 
   const { data: fetchedConfig, isLoading: configLoading } = useQuery({
     queryKey: ["config"],
@@ -299,6 +305,12 @@ export function Settings() {
       setForm(data);
       setSavedConfig(data);
       setShowRestart(true);
+      toast.success("Settings saved successfully.");
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to save settings.",
+      );
     },
   });
 
@@ -309,6 +321,13 @@ export function Settings() {
       JSON.stringify(form) !== JSON.stringify(savedConfig),
     [form, savedConfig],
   );
+
+  const discardChanges = useCallback(() => {
+    if (savedConfig) setForm(savedConfig);
+  }, [savedConfig]);
+
+  // Block navigation when there are unsaved changes.
+  const blocker = useBlocker(isDirty);
 
   function set<S extends keyof AppConfig, K extends string & keyof AppConfig[S]>(
     section: S,
@@ -341,7 +360,35 @@ export function Settings() {
     setShowSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
 
   return (
-    <div className="flex flex-col gap-4 p-6 max-w-3xl">
+    <div className="flex flex-col gap-4 p-6 max-w-3xl" role="form" aria-label="Application settings">
+      {/* Navigation blocker dialog */}
+      {blocker.state === "blocked" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="rounded-xl bg-surface-raised border border-border p-6 max-w-sm shadow-lg">
+            <h2 className="text-sm font-medium text-text-primary mb-2">
+              Discard unsaved changes?
+            </h2>
+            <p className="text-xs text-text-muted mb-4">
+              You have unsaved settings changes. Are you sure you want to leave?
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => blocker.reset()}
+                className="px-3 py-1.5 text-xs rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+              >
+                Stay
+              </button>
+              <button
+                onClick={() => blocker.proceed()}
+                className="px-3 py-1.5 text-xs rounded-lg bg-status-error text-white hover:opacity-90 transition-colors"
+              >
+                Discard & Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-lg font-semibold text-text-primary">Settings</h1>
@@ -359,6 +406,28 @@ export function Settings() {
           </button>
         )}
       </div>
+
+      {/* Unsaved changes sticky banner */}
+      {isDirty && (
+        <div className="sticky top-0 z-10 rounded-lg bg-accent/10 border border-accent/30 px-4 py-3 flex items-center justify-between">
+          <p className="text-sm text-accent">You have unsaved changes</p>
+          <div className="flex gap-2">
+            <button
+              onClick={discardChanges}
+              className="px-3 py-1 text-xs rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              onClick={() => form && saveMutation.mutate(form)}
+              disabled={saveMutation.isPending}
+              className="px-3 py-1 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+            >
+              {saveMutation.isPending ? "Saving..." : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Restart banner */}
       {showRestart && (
@@ -632,16 +701,19 @@ export function Settings() {
               </select>
             </Field>
             <Field label="Compute type">
-              <select
-                value={form.transcription.compute_type}
-                onChange={(e) =>
-                  set("transcription", "compute_type", e.target.value)
-                }
-                className={SELECT}
-              >
-                <option value="auto">auto</option>
-                <option value="cpu">cpu</option>
-              </select>
+              <Tooltip content="Processing precision. 'auto' selects the best option for your hardware.">
+                <select
+                  id="compute-type"
+                  value={form.transcription.compute_type}
+                  onChange={(e) =>
+                    set("transcription", "compute_type", e.target.value)
+                  }
+                  className={SELECT}
+                >
+                  <option value="auto">auto</option>
+                  <option value="cpu">cpu</option>
+                </select>
+              </Tooltip>
             </Field>
             <Field label="Language">
               <select
@@ -671,17 +743,20 @@ export function Settings() {
               label="VAD threshold"
               help="0.0–1.0 (lower keeps more audio)"
             >
-              <input
-                type="number"
-                min={0}
-                max={1}
-                step={0.05}
-                value={form.transcription.vad_threshold}
-                onChange={(e) =>
-                  set("transcription", "vad_threshold", Number(e.target.value))
-                }
-                className={NUM}
-              />
+              <Tooltip content="Voice Activity Detection sensitivity. Higher values require louder speech to trigger.">
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  id="vad-threshold"
+                  value={form.transcription.vad_threshold}
+                  onChange={(e) =>
+                    set("transcription", "vad_threshold", Number(e.target.value))
+                  }
+                  className={NUM}
+                />
+              </Tooltip>
             </Field>
           </Section>
 
@@ -754,6 +829,8 @@ export function Settings() {
                     <button
                       type="button"
                       onClick={() => toggleSecret("anthropic")}
+                      aria-pressed={!!showSecrets["anthropic"]}
+                      aria-label={showSecrets["anthropic"] ? "Hide API key" : "Show API key"}
                       className="text-xs text-text-muted hover:text-text-secondary"
                     >
                       {showSecrets["anthropic"] ? "Hide" : "Show"}
@@ -832,21 +909,24 @@ export function Settings() {
                   label="Energy threshold"
                   help="How much louder one source must be (0.1–5.0)"
                 >
-                  <input
-                    type="number"
-                    min={0.1}
-                    max={5}
-                    step={0.1}
-                    value={form.diarisation.energy_ratio_threshold}
-                    onChange={(e) =>
-                      set(
-                        "diarisation",
-                        "energy_ratio_threshold",
-                        Number(e.target.value),
-                      )
-                    }
-                    className={NUM}
-                  />
+                  <Tooltip content="Minimum energy ratio between sources to distinguish speakers.">
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={5}
+                      step={0.1}
+                      id="energy-threshold"
+                      value={form.diarisation.energy_ratio_threshold}
+                      onChange={(e) =>
+                        set(
+                          "diarisation",
+                          "energy_ratio_threshold",
+                          Number(e.target.value),
+                        )
+                      }
+                      className={NUM}
+                    />
+                  </Tooltip>
                 </Field>
               </>
             )}
@@ -932,6 +1012,8 @@ export function Settings() {
                     <button
                       type="button"
                       onClick={() => toggleSecret("notion")}
+                      aria-pressed={!!showSecrets["notion"]}
+                      aria-label={showSecrets["notion"] ? "Hide API key" : "Show API key"}
                       className="text-xs text-text-muted hover:text-text-secondary"
                     >
                       {showSecrets["notion"] ? "Hide" : "Show"}

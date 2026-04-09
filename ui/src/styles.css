@@ -9,7 +9,7 @@
   --color-accent-hover: oklch(0.7 0.2 250);
   --color-text-primary: oklch(0.95 0 0);
   --color-text-secondary: oklch(0.65 0 0);
-  --color-text-muted: oklch(0.45 0 0);
+  --color-text-muted: oklch(0.55 0 0);
   --color-border: oklch(0.3 0.01 260);
   --color-status-recording: oklch(0.65 0.25 25);
   --color-status-idle: oklch(0.6 0.15 150);

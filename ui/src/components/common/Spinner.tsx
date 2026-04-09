@@ -24,7 +24,7 @@ export function Spinner({ className = "" }: { className?: string }) {
 
 export function LoadingBlock({ label = "Loading..." }: { label?: string }) {
   return (
-    <div className="flex items-center gap-2.5 py-8 justify-center">
+    <div className="flex items-center gap-2.5 py-8 justify-center" role="status" aria-label={label} aria-live="polite">
       <Spinner />
       <span className="text-sm text-text-muted">{label}</span>
     </div>
