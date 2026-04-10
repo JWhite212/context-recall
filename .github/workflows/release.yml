@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*'
 
+# Least-privilege default for GITHUB_TOKEN. Build jobs only need to read
+# the repository; the `release` job below overrides this to `contents: write`
+# so it can publish a GitHub Release.
+permissions:
+  contents: read
+
 jobs:
   build-daemon:
     runs-on: macos-14

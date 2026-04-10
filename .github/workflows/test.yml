@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege default for GITHUB_TOKEN. Both jobs only need to read
+# the repository contents; no job in this workflow writes back to GitHub.
+permissions:
+  contents: read
+
 jobs:
   python-tests:
     runs-on: macos-latest
