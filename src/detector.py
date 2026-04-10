@@ -17,7 +17,10 @@ protocol, allowing future Windows/Linux support.
 """
 
 import logging
+import subprocess
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -65,12 +68,13 @@ class TeamsDetector:
         self._platform = platform or create_detector()
         self._state = MeetingState.IDLE
         self._meeting_started_at: float = 0.0
-        self._running = False
+        self._stop_event = threading.Event()
         self._consecutive_detections: int = 0
+        self._consecutive_end_detections: int = 0
 
         # Callbacks — set these from the orchestrator.
-        self.on_meeting_start: callable = lambda event: None
-        self.on_meeting_end: callable = lambda event: None
+        self.on_meeting_start: Callable[[MeetingEvent], None] = lambda event: None
+        self.on_meeting_end: Callable[[MeetingEvent], None] = lambda event: None
 
     @property
     def state(self) -> MeetingState:
@@ -134,31 +138,45 @@ class TeamsDetector:
                     logger.debug("Detection interrupted — resetting counter.")
                 self._consecutive_detections = 0
 
-        elif self._state == MeetingState.ACTIVE and not meeting_active:
-            ended_at = time.time()
-            duration = ended_at - self._meeting_started_at
+        elif self._state == MeetingState.ACTIVE:
+            if not meeting_active:
+                self._consecutive_end_detections += 1
+                required_end = self._config.required_consecutive_end_detections
+                if self._consecutive_end_detections >= required_end:
+                    ended_at = time.time()
+                    duration = ended_at - self._meeting_started_at
+                    self._consecutive_end_detections = 0
 
-            if duration < self._config.min_meeting_duration_seconds:
-                logger.info(
-                    f"Meeting lasted {duration:.0f}s (below "
-                    f"{self._config.min_meeting_duration_seconds}s threshold) "
-                    f"— discarding."
-                )
-            else:
-                logger.info(
-                    f"Meeting ended after {duration:.0f}s — processing."
-                )
-                self.on_meeting_end(
-                    MeetingEvent(
-                        state=MeetingState.ENDING,
-                        started_at=self._meeting_started_at,
-                        ended_at=ended_at,
-                        duration_seconds=duration,
+                    if duration < self._config.min_meeting_duration_seconds:
+                        logger.info(
+                            f"Meeting lasted {duration:.0f}s (below "
+                            f"{self._config.min_meeting_duration_seconds}s "
+                            f"threshold) — discarding."
+                        )
+                    else:
+                        logger.info(
+                            f"Meeting ended after {duration:.0f}s "
+                            f"— processing."
+                        )
+                        self.on_meeting_end(
+                            MeetingEvent(
+                                state=MeetingState.ENDING,
+                                started_at=self._meeting_started_at,
+                                ended_at=ended_at,
+                                duration_seconds=duration,
+                            )
+                        )
+
+                    self._state = MeetingState.IDLE
+                    self._meeting_started_at = 0.0
+                else:
+                    logger.debug(
+                        "Possible meeting end (%d/%d confirmations)",
+                        self._consecutive_end_detections,
+                        required_end,
                     )
-                )
-
-            self._state = MeetingState.IDLE
-            self._meeting_started_at = 0.0
+            else:
+                self._consecutive_end_detections = 0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -167,21 +185,24 @@ class TeamsDetector:
     def run(self) -> None:
         """
         Blocking poll loop. Call this from the main thread or a
-        dedicated thread. Set self._running = False to stop.
+        dedicated thread. Use stop() to signal exit.
         """
-        self._running = True
+        self._stop_event.clear()
         logger.info(
-            f"Detector started. Polling every "
-            f"{self._config.poll_interval_seconds}s."
+            "Detector started. Polling every %ds.",
+            self._config.poll_interval_seconds,
         )
-        while self._running:
+        while not self._stop_event.is_set():
             try:
                 self._tick()
-            except Exception as e:
-                logger.error(f"Detector tick error: {e}", exc_info=True)
-            time.sleep(self._config.poll_interval_seconds)
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning("Transient detection error: %s", e, exc_info=True)
+            except Exception:
+                logger.exception("Unexpected error in detector — stopping.")
+                break
+            self._stop_event.wait(timeout=self._config.poll_interval_seconds)
 
     def stop(self) -> None:
         """Signal the poll loop to exit."""
-        self._running = False
+        self._stop_event.set()
         logger.info("Detector stopped.")

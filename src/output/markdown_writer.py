@@ -14,6 +14,7 @@ import os
 import time
 from pathlib import Path
 
+import yaml as _yaml
 from slugify import slugify
 
 from src.summariser import MeetingSummary
@@ -54,20 +55,33 @@ class MarkdownWriter:
             time=time_str,
             slug=title_slug or "meeting",
         )
-        filepath = vault_path / filename
+
+        # Sanitize filename to prevent directory traversal.
+        filename = filename.replace("/", "_").replace("\\", "_").lstrip(".")
+        filepath = (vault_path / filename).resolve()
+        if not filepath.is_relative_to(vault_path.resolve()):
+            raise ValueError(
+                f"Generated filename would escape the vault directory: "
+                f"{filename!r}"
+            )
 
         # Build YAML frontmatter for Obsidian Dataview compatibility.
-        tags_yaml = ", ".join(f'"{t}"' for t in summary.tags)
         duration_min = int(duration_seconds / 60)
+        frontmatter = {
+            "title": summary.title,
+            "date": date_str,
+            "time": time_str.replace("-", ":"),
+            "duration_minutes": duration_min,
+            "tags": summary.tags,
+            "type": "meeting-note",
+        }
+        frontmatter_yaml = _yaml.dump(
+            frontmatter, default_flow_style=False, allow_unicode=True
+        ).rstrip()
 
         content_parts = [
             "---",
-            f"title: \"{summary.title}\"",
-            f"date: {date_str}",
-            f"time: {time_str.replace('-', ':')}",
-            f"duration_minutes: {duration_min}",
-            f"tags: [{tags_yaml}]",
-            "type: meeting-note",
+            frontmatter_yaml,
             "---",
             "",
             summary.raw_markdown,
@@ -92,5 +106,5 @@ class MarkdownWriter:
         content = "\n".join(content_parts)
         filepath.write_text(content, encoding="utf-8")
 
-        logger.info(f"Markdown written: {filepath}")
+        logger.info("Markdown written: %s", filepath)
         return filepath

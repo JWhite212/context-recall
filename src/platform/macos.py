@@ -27,7 +27,11 @@ class MacOSDetector:
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     return True
-            except (subprocess.TimeoutExpired, FileNotFoundError):
+            except subprocess.TimeoutExpired:
+                logger.warning("pgrep timed out checking for %r", name)
+                continue
+            except FileNotFoundError:
+                logger.error("pgrep not found — is it installed?")
                 continue
         return False
 
@@ -50,10 +54,10 @@ class MacOSDetector:
                 if pgrep.returncode != 0:
                     continue
 
-                pids = pgrep.stdout.strip().split("\n")
-                for pid in pids:
-                    pid = pid.strip()
-                    if not pid:
+                pids = pgrep.stdout.strip().splitlines()
+                for raw_pid in pids:
+                    pid = raw_pid.strip()
+                    if not pid or not pid.isdigit():
                         continue
 
                     lsof = subprocess.run(
@@ -73,7 +77,11 @@ class MacOSDetector:
                     if any(ind in output for ind in active_indicators):
                         return True
 
-            except (subprocess.TimeoutExpired, FileNotFoundError):
+            except subprocess.TimeoutExpired:
+                logger.warning("pgrep/lsof timed out for %r", name)
+                continue
+            except FileNotFoundError:
+                logger.error("pgrep or lsof not found — is it installed?")
                 continue
 
         return False

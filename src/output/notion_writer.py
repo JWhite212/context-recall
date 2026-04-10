@@ -88,10 +88,20 @@ class NotionWriter:
 
         return blocks
 
+    _NOTION_TEXT_LIMIT = 2000
+
     @staticmethod
     def _rich_text(text: str) -> list[dict]:
-        """Wrap plain text in Notion's rich_text format."""
-        return [{"type": "text", "text": {"content": text}}]
+        """Wrap plain text in Notion's rich_text format, splitting if needed."""
+        if len(text) <= NotionWriter._NOTION_TEXT_LIMIT:
+            return [{"type": "text", "text": {"content": text}}]
+        chunks = []
+        for i in range(0, len(text), NotionWriter._NOTION_TEXT_LIMIT):
+            chunks.append({
+                "type": "text",
+                "text": {"content": text[i:i + NotionWriter._NOTION_TEXT_LIMIT]},
+            })
+        return chunks
 
     def _heading_block(self, text: str, level: int) -> dict:
         heading_type = f"heading_{min(level, 3)}"
@@ -133,6 +143,11 @@ class NotionWriter:
 
         Returns the URL of the created page.
         """
+        if not self._config.database_id:
+            raise ValueError(
+                "Notion database ID not set. Add it to config.yaml "
+                "under notion.database_id."
+            )
         client = self._get_client()
         props = self._config.properties
         date_str = time.strftime("%Y-%m-%d", time.localtime(started_at))
@@ -177,12 +192,19 @@ class NotionWriter:
 
         # Append remaining blocks if the summary exceeded 100.
         if len(blocks) > 100:
-            for i in range(100, len(blocks), 100):
+            logger.info(
+                "Summary has %d blocks; appending in batches "
+                "(Notion limit: 100 per request).",
+                len(blocks),
+            )
+            for batch_num, i in enumerate(
+                range(100, len(blocks), 100), start=2
+            ):
                 batch = blocks[i : i + 100]
                 client.blocks.children.append(
                     block_id=page_id,
                     children=batch,
                 )
 
-        logger.info(f"Notion page created: {page_url}")
+        logger.info("Notion page created: %s", page_url)
         return page_url

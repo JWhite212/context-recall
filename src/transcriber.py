@@ -11,6 +11,7 @@ in ~/.cache/huggingface/hub/ by default.
 """
 
 import logging
+import time as _time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -68,7 +69,7 @@ class Transcript:
 
     @property
     def word_count(self) -> int:
-        return len(self.full_text.split())
+        return sum(len(seg.text.split()) for seg in self.segments)
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-compatible dict for database storage."""
@@ -98,8 +99,9 @@ class Transcriber:
             return self._model
 
         logger.info(
-            f"Loading faster-whisper model '{self._config.model_size}' "
-            f"(compute_type={self._config.compute_type})..."
+            "Loading faster-whisper model '%s' (compute_type=%s)...",
+            self._config.model_size,
+            self._config.compute_type,
         )
 
         # Determine compute type for Apple Silicon.
@@ -140,8 +142,8 @@ class Transcriber:
 
         model = self._load_model()
 
-        logger.info(f"Transcribing {audio_path}...")
-        start_time = __import__("time").time()
+        logger.info("Transcribing %s...", audio_path)
+        start_time = _time.monotonic()
 
         segments_iter, info = model.transcribe(
             str(audio_path),
@@ -167,9 +169,13 @@ class Transcriber:
                 try:
                     on_segment(ts)
                 except Exception:
-                    pass
+                    logger.warning(
+                        "on_segment callback failed for segment at %.1fs",
+                        ts.start,
+                        exc_info=True,
+                    )
 
-        elapsed = __import__("time").time() - start_time
+        elapsed = _time.monotonic() - start_time
         transcript = Transcript(
             segments=segments,
             language=info.language,
@@ -178,9 +184,12 @@ class Transcriber:
         )
 
         logger.info(
-            f"Transcription complete: {transcript.word_count} words, "
-            f"{len(segments)} segments, {elapsed:.1f}s elapsed "
-            f"({info.duration / elapsed:.1f}x realtime)."
+            "Transcription complete: %d words, %d segments, "
+            "%.1fs elapsed (%.1fx realtime).",
+            transcript.word_count,
+            len(segments),
+            elapsed,
+            info.duration / elapsed if elapsed > 0 else 0,
         )
 
         return transcript

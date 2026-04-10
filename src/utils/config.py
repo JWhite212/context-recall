@@ -5,13 +5,18 @@ Reads config.yaml from the project root and exposes a typed
 configuration object. Falls back to sensible defaults where possible.
 """
 
+import dataclasses
+import logging
 import os
+import re
 import sys
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 # Resolve project root. Inside a PyInstaller frozen binary, __file__
@@ -23,14 +28,26 @@ else:
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 
 
+_SAFE_PROCESS_NAME = re.compile(r"^[\w\s.()\-]+$")
+
+
 @dataclass
 class DetectionConfig:
     poll_interval_seconds: int = 3
     min_meeting_duration_seconds: int = 30
     required_consecutive_detections: int = 3  # Debounce: consecutive positive polls needed.
+    required_consecutive_end_detections: int = 2  # Debounce for meeting end.
     process_names: list[str] = field(
         default_factory=lambda: ["Microsoft Teams", "MSTeams", "Teams"]
     )
+
+    def __post_init__(self) -> None:
+        for name in self.process_names:
+            if not _SAFE_PROCESS_NAME.match(name):
+                raise ValueError(
+                    f"Invalid process name {name!r}: only alphanumeric, "
+                    f"spaces, dots, parens, and hyphens allowed"
+                )
 
 
 @dataclass
@@ -42,7 +59,7 @@ class AudioConfig:
     system_volume: float = 1.0  # System audio gain after normalisation (0.0–2.0).
     sample_rate: int = 16000
     channels: int = 1
-    temp_audio_dir: str = "/tmp/meetingmind"
+    temp_audio_dir: str = "~/Library/Caches/MeetingMind"
     keep_source_files: bool = False  # Keep separate source WAVs (for diarisation).
 
 
@@ -63,6 +80,16 @@ class SummarisationConfig:
     max_tokens: int = 4096
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
+
+    def __repr__(self) -> str:
+        key_display = "****" if self.anthropic_api_key else "<not set>"
+        return (
+            f"SummarisationConfig(backend={self.backend!r}, "
+            f"anthropic_api_key={key_display!r}, "
+            f"model={self.model!r}, max_tokens={self.max_tokens}, "
+            f"ollama_base_url={self.ollama_base_url!r}, "
+            f"ollama_model={self.ollama_model!r})"
+        )
 
 
 @dataclass
@@ -86,6 +113,15 @@ class NotionConfig:
             "status": "Status",
         }
     )
+
+    def __repr__(self) -> str:
+        key_display = "****" if self.api_key else "<not set>"
+        return (
+            f"NotionConfig(enabled={self.enabled!r}, "
+            f"api_key={key_display!r}, "
+            f"database_id={self.database_id!r}, "
+            f"properties={self.properties!r})"
+        )
 
 
 @dataclass
@@ -140,7 +176,7 @@ def _build_dataclass(cls, raw: dict):
     don't correspond to fields. This makes the config forward-compatible:
     old configs won't break if new fields are added.
     """
-    valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+    valid_fields = {f.name for f in dataclasses.fields(cls)}
     filtered = {k: v for k, v in raw.items() if k in valid_fields}
     return cls(**filtered)
 
@@ -155,7 +191,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
     path = config_path or DEFAULT_CONFIG_PATH
 
     if not path.exists():
-        print(f"[config] No config found at {path}, using defaults.")
+        logger.warning("No config found at %s — using defaults.", path)
         return AppConfig()
 
     with open(path, "r") as f:

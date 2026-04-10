@@ -18,9 +18,11 @@ starts automatically on login and runs in the background.
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
 import time
@@ -138,10 +140,7 @@ class MeetingMind:
 
     def _on_meeting_start(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting begins."""
-        self._meeting_started_at = event.started_at or time.time()
         logger.info("Starting audio capture...")
-
-        self._emit("meeting.started", started_at=self._meeting_started_at)
 
         # Wire audio level callback for live metering.
         def _on_level(system_rms: float, mic_rms: float) -> None:
@@ -156,8 +155,13 @@ class MeetingMind:
         try:
             self._capture.start()
         except Exception as e:
-            logger.error(f"Failed to start audio capture: {e}", exc_info=True)
+            logger.error("Failed to start audio capture: %s", e, exc_info=True)
             self._emit("pipeline.error", stage="capture", error=str(e))
+            return
+
+        # Only update state after capture has started successfully.
+        self._meeting_started_at = event.started_at or time.time()
+        self._emit("meeting.started", started_at=self._meeting_started_at)
 
     def _on_meeting_end(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting ends."""
@@ -203,20 +207,25 @@ class MeetingMind:
         # Persist audio to a durable location if the API server is running.
         persistent_audio_path = audio_path
         if self._api_server and self._api_server.repo:
-            import shutil
-            audio_dir = Path(os.path.expanduser("~/.local/share/meetingmind/audio"))
+            audio_dir = Path(os.path.expanduser(
+                "~/Library/Application Support/MeetingMind/audio"
+            ))
             audio_dir.mkdir(parents=True, exist_ok=True)
             persistent_audio_path = audio_dir / audio_path.name
             if audio_path != persistent_audio_path:
-                shutil.copy2(audio_path, persistent_audio_path)
+                try:
+                    os.link(audio_path, persistent_audio_path)
+                except OSError:
+                    shutil.copy2(audio_path, persistent_audio_path)
 
         # Create meeting record in DB.
         if self._api_server and self._api_server.repo and self._api_server.loop:
-            import asyncio
             loop = self._api_server.loop
             try:
                 future = asyncio.run_coroutine_threadsafe(
-                    self._api_server.repo.create_meeting(started_at=started_at, status="transcribing"),
+                    self._api_server.repo.create_meeting(
+                        started_at=started_at, status="transcribing"
+                    ),
                     loop,
                 )
                 meeting_id = future.result(timeout=5)
@@ -230,7 +239,7 @@ class MeetingMind:
                     loop,
                 )
             except Exception as e:
-                logger.warning(f"Failed to create meeting record: {e}")
+                logger.warning("Failed to create meeting record: %s", e)
 
         # Step 1: Transcribe.
         logger.info("Transcribing audio...")
@@ -248,15 +257,15 @@ class MeetingMind:
                 audio_path, on_segment=on_segment
             )
         except Exception as e:
-            logger.error(f"Transcription failed: {e}", exc_info=True)
+            logger.error("Transcription failed: %s", e, exc_info=True)
             self._emit("pipeline.error", meeting_id=meeting_id, stage="transcribing", error=str(e))
             self._db_update(meeting_id, status="error")
             return
 
         if transcript.word_count < 5:
             logger.warning(
-                f"Transcript too short ({transcript.word_count} words). "
-                f"Skipping summarisation."
+                "Transcript too short (%d words). Skipping summarisation.",
+                transcript.word_count,
             )
             self._db_update(meeting_id, status="error")
             return
@@ -276,7 +285,7 @@ class MeetingMind:
                         transcript, sys_path, mic_path
                     )
                 except Exception as e:
-                    logger.error(f"Diarisation failed: {e}", exc_info=True)
+                    logger.error("Diarisation failed: %s", e, exc_info=True)
 
         # Step 3: Summarise.
         logger.info("Generating summary...")
@@ -284,7 +293,7 @@ class MeetingMind:
         try:
             summary = self._summariser.summarise(transcript)
         except Exception as e:
-            logger.error(f"Summarisation failed: {e}", exc_info=True)
+            logger.error("Summarisation failed: %s", e, exc_info=True)
             self._emit("pipeline.error", meeting_id=meeting_id, stage="summarising", error=str(e))
             self._db_update(meeting_id, status="error")
             return
@@ -311,48 +320,72 @@ class MeetingMind:
                 md_path = self._md_writer.write(
                     summary, transcript, started_at, duration_seconds
                 )
-                logger.info(f"Markdown output: {md_path}")
+                logger.info("Markdown output: %s", md_path)
             except Exception as e:
-                logger.error(f"Markdown write failed: {e}", exc_info=True)
+                logger.error("Markdown write failed: %s", e, exc_info=True)
 
         if self._notion_writer:
             try:
                 page_url = self._notion_writer.write(
                     summary, transcript, started_at, duration_seconds
                 )
-                logger.info(f"Notion output: {page_url}")
+                logger.info("Notion output: %s", page_url)
             except Exception as e:
-                logger.error(f"Notion write failed: {e}", exc_info=True)
+                logger.error("Notion write failed: %s", e, exc_info=True)
 
         self._emit("pipeline.complete", meeting_id=meeting_id, title=summary.title)
         self._active_meeting_id = None
         logger.info("Processing complete.")
 
     def _db_update(self, meeting_id: str | None, **fields) -> None:
-        """Helper to update a meeting record in the database (fire-and-forget)."""
+        """Update a meeting record in the database (fire-and-forget).
+
+        Logs failures but does not raise, so the pipeline continues
+        even if the DB write fails.
+        """
         if not meeting_id or not self._api_server or not self._api_server.repo:
             return
         loop = self._api_server.loop
         if not loop or loop.is_closed():
             return
-        import asyncio
         try:
-            asyncio.run_coroutine_threadsafe(
+            future = asyncio.run_coroutine_threadsafe(
                 self._api_server.repo.update_meeting(meeting_id, **fields),
                 loop,
             )
+
+            def _log_db_error(fut):
+                exc = fut.exception()
+                if exc:
+                    logger.error(
+                        "DB update failed for meeting %s: %s", meeting_id, exc
+                    )
+
+            future.add_done_callback(_log_db_error)
         except Exception:
-            pass
+            logger.error(
+                "Failed to schedule DB update for meeting %s",
+                meeting_id,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Manual recording (called from API)
     # ------------------------------------------------------------------
 
     def api_start_recording(self) -> None:
-        """Start a manual recording session via the API."""
+        """Start a manual recording session via the API.
+
+        Raises AudioCaptureError if the audio device cannot be opened.
+        """
+        try:
+            self._capture.start()
+        except Exception:
+            logger.error("API recording start failed", exc_info=True)
+            self._emit("pipeline.error", stage="capture", error="Failed to start audio capture")
+            raise
         self._meeting_started_at = time.time()
         self._emit("meeting.started", started_at=self._meeting_started_at)
-        self._capture.start()
 
     def api_stop_recording(self) -> None:
         """Stop a manual recording and trigger processing. Runs synchronously."""
@@ -406,27 +439,29 @@ class MeetingMind:
         # Start the API server for UI communication.
         self._start_api_server()
 
-        # Handle graceful shutdown.
+        # Handle graceful shutdown — signal handler only sets a flag;
+        # heavy cleanup runs on the main thread after the poll loop exits.
         def shutdown_handler(signum, frame):
             logger.info("Shutdown signal received.")
             self._detector.stop()
-            if self._capture.is_recording:
-                logger.info("Stopping active recording...")
-                audio_path = self._capture.stop()
-                if audio_path and audio_path.exists():
-                    duration = time.time() - self._meeting_started_at
-                    self._process_audio(
-                        audio_path, self._meeting_started_at, duration
-                    )
-            if self._api_server:
-                self._api_server.stop()
-            sys.exit(0)
 
         signal.signal(signal.SIGINT, shutdown_handler)
         signal.signal(signal.SIGTERM, shutdown_handler)
 
-        # Blocking poll loop.
+        # Blocking poll loop — exits when stop() is called.
         self._detector.run()
+
+        # Graceful cleanup after the detector loop exits.
+        if self._capture.is_recording:
+            logger.info("Stopping active recording...")
+            audio_path = self._capture.stop()
+            if audio_path and audio_path.exists():
+                duration = time.time() - self._meeting_started_at
+                self._process_audio(
+                    audio_path, self._meeting_started_at, duration
+                )
+        if self._api_server:
+            self._api_server.stop()
 
     def run_record_now(self) -> None:
         """
@@ -448,24 +483,33 @@ class MeetingMind:
         audio_path = self._capture.stop()
         duration = time.time() - started_at
 
-        if audio_path and audio_path.exists():
-            self._process_audio(audio_path, started_at, duration)
-        else:
-            logger.error("No audio captured.")
+        try:
+            if audio_path and audio_path.exists():
+                self._process_audio(audio_path, started_at, duration)
+            else:
+                logger.error("No audio captured.")
+        finally:
+            if self._api_server:
+                self._api_server.stop()
 
     def run_process_file(self, audio_path: str) -> None:
         """
         Skip detection and capture; process an existing audio file
         directly through the transcribe -> summarise -> output pipeline.
+
+        Raises FileNotFoundError if the audio file does not exist.
         """
         path = Path(audio_path)
         if not path.exists():
-            logger.error(f"File not found: {path}")
-            sys.exit(1)
+            raise FileNotFoundError(f"Audio file not found: {path}")
 
         self._start_api_server()
-        logger.info(f"Processing existing file: {path}")
-        self._process_audio(path)
+        logger.info("Processing existing file: %s", path)
+        try:
+            self._process_audio(path)
+        finally:
+            if self._api_server:
+                self._api_server.stop()
 
 
 def main():
@@ -495,12 +539,16 @@ def main():
 
     app = MeetingMind(config_path)
 
-    if args.process:
-        app.run_process_file(args.process)
-    elif args.record_now:
-        app.run_record_now()
-    else:
-        app.run_daemon()
+    try:
+        if args.process:
+            app.run_process_file(args.process)
+        elif args.record_now:
+            app.run_record_now()
+        else:
+            app.run_daemon()
+    except FileNotFoundError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
 
 if __name__ == "__main__":
