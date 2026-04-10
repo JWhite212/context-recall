@@ -31,7 +31,7 @@ MeetingMind runs silently in the background, watching for active Teams calls. Wh
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          MeetingMind Daemon (Python)                     │
+│                          MeetingMind Daemon (Python)                    │
 │                                                                         │
 │  ┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌───────────┐  │
 │  │ Detector │───▶│Audio Capture │───▶│ Transcriber  │───▶│ Diariser  │  │
@@ -43,7 +43,7 @@ MeetingMind runs silently in the background, watching for active Teams calls. Wh
 │  │   REST API     │    │  WebSocket │    │      Summariser           │  │
 │  │  (FastAPI)     │    │   Events   │    │   (Ollama / Claude)       │  │
 │  └───────┬────────┘    └──────┬─────┘    └─────────────┬─────────────┘  │
-│          │                    │                         │                │
+│          │                    │                        │               │
 │  ┌───────▼────────────────────▼─────┐    ┌─────────────▼─────────────┐  │
 │  │         SQLite Database          │    │   Markdown / Notion       │  │
 │  │   (meetings, transcripts, FTS)   │    │       Output              │  │
@@ -51,7 +51,7 @@ MeetingMind runs silently in the background, watching for active Teams calls. Wh
 └─────────────────────┬───────────────────────────────────────────────────┘
                       │ REST + WebSocket (127.0.0.1:9876)
 ┌─────────────────────▼───────────────────────────────────────────────────┐
-│                    MeetingMind Desktop App (Tauri + React)               │
+│                    MeetingMind Desktop App (Tauri + React)              │
 │                                                                         │
 │  Dashboard │ Meetings │ Live View │ Settings │ Onboarding │ System Tray │
 └─────────────────────────────────────────────────────────────────────────┘
