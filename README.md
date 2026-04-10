@@ -43,7 +43,7 @@ MeetingMind runs silently in the background, watching for active Teams calls. Wh
 │  │   REST API     │    │  WebSocket │    │      Summariser           │  │
 │  │  (FastAPI)     │    │   Events   │    │   (Ollama / Claude)       │  │
 │  └───────┬────────┘    └──────┬─────┘    └─────────────┬─────────────┘  │
-│          │                    │                        │               │
+│          │                    │                        │                │
 │  ┌───────▼────────────────────▼─────┐    ┌─────────────▼─────────────┐  │
 │  │         SQLite Database          │    │   Markdown / Notion       │  │
 │  │   (meetings, transcripts, FTS)   │    │       Output              │  │
