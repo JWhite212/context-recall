@@ -28,6 +28,11 @@ class TestTranscriptSegment:
         seg = TranscriptSegment(start=86400.0, end=86401.0, text="day")
         assert seg.timestamp == "[24:00:00]"
 
+    def test_timestamp_fractional_seconds(self):
+        seg = TranscriptSegment(start=3661.7, end=3670.0, text="hello")
+        # int(3661.7) == 3661 → 1h 1m 1s (truncates, does not round).
+        assert seg.timestamp == "[01:01:01]"
+
 
 # ------------------------------------------------------------------
 # Transcript tests
@@ -73,6 +78,22 @@ class TestTranscript:
         transcript = Transcript(segments=self._make_segments())
         # "Hello everyone." = 2, "How are you?" = 3, "Let's get started." = 3
         assert transcript.word_count == 8
+
+    def test_word_count_cjk_no_spaces(self):
+        """CJK text without spaces counts as one 'word' per segment (str.split behaviour)."""
+        segments = [
+            TranscriptSegment(start=0.0, end=5.0, text="\u4f1a\u8bae\u8ba8\u8bba"),
+        ]
+        transcript = Transcript(segments=segments)
+        assert transcript.word_count == 1
+
+    def test_timestamped_text_empty_text_segment(self):
+        segments = [
+            TranscriptSegment(start=0.0, end=1.0, text=""),
+        ]
+        transcript = Transcript(segments=segments)
+        # f"{timestamp} {text.strip()}" produces a trailing space for empty text.
+        assert transcript.timestamped_text == "[00:00:00] "
 
     def test_to_dict_round_trip(self):
         segments = self._make_segments()

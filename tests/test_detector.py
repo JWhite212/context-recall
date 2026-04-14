@@ -345,3 +345,110 @@ class TestDetectorRunLoop:
         # run() should break out of the loop and return (not hang).
         detector.run()
         assert detector.state == MeetingState.IDLE
+
+    def test_start_callback_exception_stops_loop(
+        self, detection_config, fake_platform
+    ):
+        detector = TeamsDetector(detection_config, platform=fake_platform)
+        start_cb = MagicMock(side_effect=RuntimeError("callback failed"))
+        detector.on_meeting_start = start_cb
+
+        fake_platform.app_running = True
+        fake_platform.audio_active = True
+
+        # run() blocks, so execute on a thread.
+        t = threading.Thread(target=detector.run, daemon=True)
+        t.start()
+        t.join(timeout=5)
+
+        # The callback exception is caught by the generic except Exception,
+        # which breaks the loop — so the thread should have stopped.
+        assert not t.is_alive()
+        start_cb.assert_called_once()
+
+    @patch("src.detector.time")
+    def test_end_callback_exception_stops_loop(
+        self, mock_time, detection_config, fake_platform
+    ):
+        mock_time.time.side_effect = [100.0, 200.0]
+
+        detector = TeamsDetector(detection_config, platform=fake_platform)
+        end_cb = MagicMock(side_effect=RuntimeError("end callback failed"))
+        detector.on_meeting_end = end_cb
+
+        # Move to ACTIVE via _tick() (bypasses run loop).
+        fake_platform.app_running = True
+        fake_platform.audio_active = True
+        detector._tick()
+        detector._tick()
+        assert detector.state == MeetingState.ACTIVE
+
+        # Now make detection go negative so the next ticks trigger end.
+        fake_platform.app_running = False
+        fake_platform.audio_active = False
+
+        # run() will tick and hit the end callback which raises.
+        t = threading.Thread(target=detector.run, daemon=True)
+        t.start()
+        t.join(timeout=5)
+
+        assert not t.is_alive()
+        end_cb.assert_called_once()
+
+
+# ------------------------------------------------------------------
+# Rapid oscillation tests
+# ------------------------------------------------------------------
+
+
+class TestDetectorRapidOscillation:
+    """Verify state machine counters reset across repeated transitions."""
+
+    @patch("src.detector.time")
+    def test_rapid_oscillation_no_state_leak(
+        self, mock_time, detection_config, fake_platform
+    ):
+        # Provide timestamps for two full start/end cycles.
+        mock_time.time.side_effect = [100.0, 200.0, 300.0, 400.0]
+
+        detector = TeamsDetector(detection_config, platform=fake_platform)
+        start_cb = MagicMock()
+        end_cb = MagicMock()
+        detector.on_meeting_start = start_cb
+        detector.on_meeting_end = end_cb
+
+        # --- Cycle 1: detect meeting ---
+        fake_platform.app_running = True
+        fake_platform.audio_active = True
+        detector._tick()
+        detector._tick()
+        assert detector.state == MeetingState.ACTIVE
+        assert start_cb.call_count == 1
+
+        # --- Cycle 1: lose detection → back to IDLE ---
+        fake_platform.app_running = False
+        fake_platform.audio_active = False
+        detector._tick()
+        detector._tick()
+        assert detector.state == MeetingState.IDLE
+        assert end_cb.call_count == 1
+
+        # --- Cycle 2: detect meeting again ---
+        fake_platform.app_running = True
+        fake_platform.audio_active = True
+        # A single tick should NOT start a meeting — the counter
+        # must have reset to 0 when we returned to IDLE.
+        detector._tick()
+        assert detector.state == MeetingState.IDLE
+
+        detector._tick()
+        assert detector.state == MeetingState.ACTIVE
+        assert start_cb.call_count == 2
+
+        # --- Cycle 2: lose detection again ---
+        fake_platform.app_running = False
+        fake_platform.audio_active = False
+        detector._tick()
+        detector._tick()
+        assert detector.state == MeetingState.IDLE
+        assert end_cb.call_count == 2

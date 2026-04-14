@@ -65,6 +65,21 @@ class TestMeetingSummary:
         summary = MeetingSummary.from_markdown(md)
         assert summary.tags == []
 
+    def test_from_markdown_multiple_h1_takes_first(self):
+        md = "# First Title\n\nSome content\n\n# Second Title\n\n## Tags\na, b"
+        summary = MeetingSummary.from_markdown(md)
+        assert summary.title == "First Title"
+
+    def test_from_markdown_unicode_title(self):
+        md = "# R\u00e9union de planification\n\n## Tags\nplanning"
+        summary = MeetingSummary.from_markdown(md)
+        assert summary.title == "R\u00e9union de planification"
+
+    def test_from_markdown_raw_markdown_preserved(self):
+        md = "# Title\n\n## Tags\nfoo, bar\n\nExtra content here."
+        summary = MeetingSummary.from_markdown(md)
+        assert summary.raw_markdown is md
+
 
 # ---------------------------------------------------------------------------
 # TestPrepareTranscript
