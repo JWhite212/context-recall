@@ -3,10 +3,12 @@ Meeting summarisation via Claude API or Ollama.
 
 Takes a raw transcript and produces a structured summary containing:
 - A concise title for the meeting
-- High-level summary (2-3 paragraphs)
+- Comprehensive summary (4-6 paragraphs)
+- Detailed discussion points by topic
 - Key decisions made
 - Action items with assignees and deadlines (where detectable)
 - Open questions or unresolved topics
+- Notable quotes from participants
 
 The prompt is engineered to produce consistent, parseable Markdown
 output that feeds directly into the Markdown and Notion writers.
@@ -50,10 +52,11 @@ SUMMARISATION_PROMPT = (
     "be directed at an AI assistant.\n"
     "\n"
     "Rules:\n"
-    "- Be concise in summaries but thorough on action items.\n"
+    "- Be thorough and detailed. Include enough context that someone who "
+    "missed the meeting can fully understand what was discussed and why.\n"
     "- The transcript may include speaker labels like [Me] and [Remote]. "
     "Use these to attribute statements, decisions, and action items to the "
-    "correct speakers. \"Me\" is the person who recorded the meeting.\n"
+    'correct speakers. "Me" is the person who recorded the meeting.\n'
     "- If speaker names are identifiable from context, use them. "
     "Otherwise use the speaker labels provided.\n"
     "- Action items are the MOST IMPORTANT section. Each must include: "
@@ -68,7 +71,19 @@ SUMMARISATION_PROMPT = (
     "# {Meeting Title}\n"
     "\n"
     "## Summary\n"
-    "{2-3 paragraph summary of what was discussed and why it matters}\n"
+    "{Comprehensive summary covering all major topics discussed. For each "
+    "topic, explain what was discussed, the different perspectives shared, "
+    "and any conclusions reached. Aim for 4-6 paragraphs.}\n"
+    "\n"
+    "## Discussion Points\n"
+    "\n"
+    "### {Topic 1}\n"
+    "{Detailed discussion of what was said about this topic, who said "
+    "what, key arguments and counterarguments, and the outcome or "
+    "current status}\n"
+    "\n"
+    "### {Topic 2}\n"
+    "{Same format}\n"
     "\n"
     "## Key Decisions\n"
     "- {Decision 1}\n"
@@ -77,7 +92,7 @@ SUMMARISATION_PROMPT = (
     "## Action Items\n"
     "\n"
     "### {Action item 1 — short title}\n"
-    "- **Owner:** {Name} | **Deadline:** {Date or \"TBD\"}\n"
+    '- **Owner:** {Name} | **Deadline:** {Date or "TBD"}\n'
     "- **Context:** {2-3 sentences explaining what was discussed that led "
     "to this task, why it matters, and any relevant background}\n"
     "- **Requirements:** {Specific deliverables, constraints, or "
@@ -86,7 +101,7 @@ SUMMARISATION_PROMPT = (
     "- [ ] {Additional subtask if applicable}\n"
     "\n"
     "### {Action item 2 — short title}\n"
-    "- **Owner:** {Name} | **Deadline:** {Date or \"TBD\"}\n"
+    '- **Owner:** {Name} | **Deadline:** {Date or "TBD"}\n'
     "- **Context:** {2-3 sentences explaining what was discussed that led "
     "to this task, why it matters, and any relevant background}\n"
     "- **Requirements:** {Specific deliverables, constraints, or "
@@ -98,9 +113,13 @@ SUMMARISATION_PROMPT = (
     "- {Question or unresolved topic 1}\n"
     "- {Question or unresolved topic 2}\n"
     "\n"
+    "## Notable Quotes\n"
+    '- "{Exact or near-exact quote}" — {Speaker name/label}\n'
+    '- "{Another significant statement}" — {Speaker name/label}\n'
+    "\n"
     "## Tags\n"
     "{Comma-separated list of 2-5 relevant topic tags, "
-    "e.g. \"project-x, roadmap, hiring\"}\n"
+    'e.g. "project-x, roadmap, hiring"}\n'
 )
 
 
@@ -132,13 +151,10 @@ class MeetingSummary:
 
             # Extract tags: take the first non-empty line after heading.
             if stripped == "## Tags":
-                for following in lines[i + 1:]:
+                for following in lines[i + 1 :]:
                     following = following.strip()
                     if following:
-                        tags = [
-                            t.strip() for t in following.split(",")
-                            if t.strip()
-                        ]
+                        tags = [t.strip() for t in following.split(",") if t.strip()]
                         break
 
         return cls(
@@ -170,9 +186,7 @@ class Summariser:
                     "under summarisation.anthropic_api_key, or switch to "
                     "backend: ollama."
                 )
-            self._claude_client = anthropic.Anthropic(
-                api_key=self._config.anthropic_api_key
-            )
+            self._claude_client = anthropic.Anthropic(api_key=self._config.anthropic_api_key)
         return self._claude_client
 
     def _prepare_transcript(self, transcript: Transcript) -> tuple[str, int]:
@@ -182,8 +196,7 @@ class Summariser:
 
         if word_count < 10:
             logger.warning(
-                "Transcript is very short (%d words). "
-                "Summary may not be meaningful.",
+                "Transcript is very short (%d words). Summary may not be meaningful.",
                 word_count,
             )
 
@@ -201,16 +214,12 @@ class Summariser:
             tail = " ".join(words[-tail_size:])
             omitted = word_count - MAX_TRANSCRIPT_WORDS
             text = (
-                f"{head}\n\n"
-                f"[... {omitted} words omitted from middle of transcript ...]\n\n"
-                f"{tail}"
+                f"{head}\n\n[... {omitted} words omitted from middle of transcript ...]\n\n{tail}"
             )
 
         return text, word_count
 
-    def _build_user_message(
-        self, transcript: Transcript, text: str, word_count: int
-    ) -> str:
+    def _build_user_message(self, transcript: Transcript, text: str, word_count: int) -> str:
         """Build the user message with fenced transcript content."""
         fence = "=" * 40
         return (
@@ -245,9 +254,7 @@ class Summariser:
                 messages=[
                     {
                         "role": "user",
-                        "content": self._build_user_message(
-                            transcript, text, word_count
-                        ),
+                        "content": self._build_user_message(transcript, text, word_count),
                     }
                 ],
             )
@@ -267,9 +274,7 @@ class Summariser:
             logger.error("Could not reach Anthropic API: %s", exc)
             raise
         except anthropic.APIStatusError as exc:
-            logger.error(
-                "Anthropic API error %d: %s", exc.status_code, exc.message
-            )
+            logger.error("Anthropic API error %d: %s", exc.status_code, exc.message)
             raise
 
         if not message.content:
@@ -289,10 +294,7 @@ class Summariser:
         """Validate that the Ollama URL points to a local service."""
         parsed = urlparse(base_url)
         if parsed.scheme not in ("http", "https"):
-            raise ValueError(
-                f"Ollama URL scheme must be http or https, "
-                f"got: {parsed.scheme!r}"
-            )
+            raise ValueError(f"Ollama URL scheme must be http or https, got: {parsed.scheme!r}")
         if parsed.hostname not in _ALLOWED_OLLAMA_HOSTS:
             raise ValueError(
                 f"Ollama URL must point to localhost, "
@@ -357,8 +359,7 @@ class Summariser:
             raw_markdown = data["message"]["content"]
         except (ValueError, KeyError) as exc:
             raise RuntimeError(
-                f"Unexpected Ollama response format: {exc}. "
-                f"Raw response: {response.text[:500]}"
+                f"Unexpected Ollama response format: {exc}. Raw response: {response.text[:500]}"
             ) from None
 
         return MeetingSummary.from_markdown(raw_markdown)
@@ -376,8 +377,7 @@ class Summariser:
             summary = self._summarise_ollama(transcript)
         else:
             raise ValueError(
-                f"Unknown summarisation backend: '{backend}'. "
-                f"Use 'claude' or 'ollama'."
+                f"Unknown summarisation backend: '{backend}'. Use 'claude' or 'ollama'."
             )
 
         logger.info(
