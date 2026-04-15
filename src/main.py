@@ -19,6 +19,7 @@ starts automatically on login and runs in the background.
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -57,9 +58,7 @@ class MeetingMind:
         self._transcriber = Transcriber(self._config.transcription)
         self._summariser = Summariser(self._config.summarisation)
         self._diariser = (
-            Diariser(self._config.diarisation)
-            if self._config.diarisation.enabled
-            else None
+            Diariser(self._config.diarisation) if self._config.diarisation.enabled else None
         )
 
         # If diarisation is enabled, keep source files for comparison.
@@ -68,18 +67,20 @@ class MeetingMind:
 
         # Output writers (initialised based on config).
         self._md_writer = (
-            MarkdownWriter(self._config.markdown)
-            if self._config.markdown.enabled
-            else None
+            MarkdownWriter(self._config.markdown) if self._config.markdown.enabled else None
         )
         self._notion_writer = (
-            NotionWriter(self._config.notion)
-            if self._config.notion.enabled
-            else None
+            NotionWriter(self._config.notion) if self._config.notion.enabled else None
         )
 
         self._meeting_started_at: float = 0.0
         self._active_meeting_id: str | None = None
+
+        # Background processing executor for non-blocking pipeline runs.
+        self._processing_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="pipeline"
+        )
+        self._processing_futures: list[concurrent.futures.Future] = []
 
         # API server and event system (initialised lazily in run_daemon).
         self._api_server = None
@@ -176,11 +177,33 @@ class MeetingMind:
             logger.error("No audio file produced. Skipping processing.")
             return
 
-        self._process_audio(
+        # Capture meeting_id before clearing so background thread has it.
+        meeting_id = self._active_meeting_id
+
+        # Clear active meeting ID so the next meeting can start fresh.
+        self._active_meeting_id = None
+
+        # Remove completed futures.
+        self._processing_futures = [f for f in self._processing_futures if not f.done()]
+
+        future = self._processing_executor.submit(
+            self._process_audio,
             audio_path=audio_path,
             started_at=event.started_at,
             duration_seconds=event.duration_seconds,
+            meeting_id=meeting_id,
         )
+        self._processing_futures.append(future)
+
+        # Log any exceptions from the background thread.
+        future.add_done_callback(self._on_processing_done)
+
+    def _on_processing_done(self, future: concurrent.futures.Future) -> None:
+        """Log exceptions from background processing threads."""
+        try:
+            future.result()
+        except Exception:
+            logger.error("Background processing failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Processing pipeline
@@ -191,6 +214,7 @@ class MeetingMind:
         audio_path: Path,
         started_at: float = 0.0,
         duration_seconds: float = 0.0,
+        meeting_id: str | None = None,
     ) -> None:
         """
         Run the full pipeline on a captured audio file:
@@ -202,14 +226,13 @@ class MeetingMind:
         if started_at == 0.0:
             started_at = time.time()
 
-        meeting_id = self._active_meeting_id
+        if meeting_id is None:
+            meeting_id = self._active_meeting_id
 
         # Persist audio to a durable location if the API server is running.
         persistent_audio_path = audio_path
         if self._api_server and self._api_server.repo:
-            audio_dir = Path(os.path.expanduser(
-                "~/Library/Application Support/MeetingMind/audio"
-            ))
+            audio_dir = Path(os.path.expanduser("~/Library/Application Support/MeetingMind/audio"))
             audio_dir.mkdir(parents=True, exist_ok=True)
             persistent_audio_path = audio_dir / audio_path.name
             if audio_path != persistent_audio_path:
@@ -253,9 +276,7 @@ class MeetingMind:
             )
 
         try:
-            transcript = self._transcriber.transcribe(
-                audio_path, on_segment=on_segment
-            )
+            transcript = self._transcriber.transcribe(audio_path, on_segment=on_segment)
         except Exception as e:
             logger.error("Transcription failed: %s", e, exc_info=True)
             self._emit("pipeline.error", meeting_id=meeting_id, stage="transcribing", error=str(e))
@@ -281,9 +302,7 @@ class MeetingMind:
                 logger.info("Running speaker diarisation...")
                 self._emit("pipeline.stage", meeting_id=meeting_id, stage="diarising")
                 try:
-                    transcript = self._diariser.diarise(
-                        transcript, sys_path, mic_path
-                    )
+                    transcript = self._diariser.diarise(transcript, sys_path, mic_path)
                 except Exception as e:
                     logger.error("Diarisation failed: %s", e, exc_info=True)
 
@@ -317,9 +336,7 @@ class MeetingMind:
 
         if self._md_writer:
             try:
-                md_path = self._md_writer.write(
-                    summary, transcript, started_at, duration_seconds
-                )
+                md_path = self._md_writer.write(summary, transcript, started_at, duration_seconds)
                 logger.info("Markdown output: %s", md_path)
             except Exception as e:
                 logger.error("Markdown write failed: %s", e, exc_info=True)
@@ -357,9 +374,7 @@ class MeetingMind:
             def _log_db_error(fut):
                 exc = fut.exception()
                 if exc:
-                    logger.error(
-                        "DB update failed for meeting %s: %s", meeting_id, exc
-                    )
+                    logger.error("DB update failed for meeting %s: %s", meeting_id, exc)
 
             future.add_done_callback(_log_db_error)
         except Exception:
@@ -457,9 +472,22 @@ class MeetingMind:
             audio_path = self._capture.stop()
             if audio_path and audio_path.exists():
                 duration = time.time() - self._meeting_started_at
-                self._process_audio(
-                    audio_path, self._meeting_started_at, duration
-                )
+                self._process_audio(audio_path, self._meeting_started_at, duration)
+
+        # Wait for any in-flight background processing to complete.
+        if self._processing_futures:
+            logger.info(
+                "Waiting for %d background processing task(s)...",
+                len([f for f in self._processing_futures if not f.done()]),
+            )
+            for future in self._processing_futures:
+                try:
+                    future.result(timeout=600)
+                except Exception:
+                    logger.error("Processing task failed during shutdown", exc_info=True)
+            self._processing_futures.clear()
+        self._processing_executor.shutdown(wait=False)
+
         if self._api_server:
             self._api_server.stop()
 

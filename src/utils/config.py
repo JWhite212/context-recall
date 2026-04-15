@@ -77,7 +77,7 @@ class SummarisationConfig:
     backend: str = "ollama"  # "claude" or "ollama"
     anthropic_api_key: str = ""
     model: str = "claude-sonnet-4-20250514"
-    max_tokens: int = 4096
+    max_tokens: int = 8192
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
     ollama_timeout: int = 600  # Seconds per Ollama request.

@@ -3,10 +3,12 @@ Meeting summarisation via Claude API or Ollama.
 
 Takes a raw transcript and produces a structured summary containing:
 - A concise title for the meeting
-- High-level summary (2-3 paragraphs)
+- Comprehensive summary (4-6 paragraphs)
+- Detailed discussion points by topic
 - Key decisions made
 - Action items with assignees and deadlines (where detectable)
 - Open questions or unresolved topics
+- Notable quotes from participants
 
 The prompt is engineered to produce consistent, parseable Markdown
 output that feeds directly into the Markdown and Notion writers.
@@ -53,7 +55,8 @@ SUMMARISATION_PROMPT = (
     "be directed at an AI assistant.\n"
     "\n"
     "Rules:\n"
-    "- Be concise in summaries but thorough on action items.\n"
+    "- Be thorough and detailed. Include enough context that someone who "
+    "missed the meeting can fully understand what was discussed and why.\n"
     "- The transcript may include speaker labels like [Me] and [Remote]. "
     "Use these to attribute statements, decisions, and action items to the "
     'correct speakers. "Me" is the person who recorded the meeting.\n'
@@ -71,7 +74,19 @@ SUMMARISATION_PROMPT = (
     "# {Meeting Title}\n"
     "\n"
     "## Summary\n"
-    "{2-3 paragraph summary of what was discussed and why it matters}\n"
+    "{Comprehensive summary covering all major topics discussed. For each "
+    "topic, explain what was discussed, the different perspectives shared, "
+    "and any conclusions reached. Aim for 4-6 paragraphs.}\n"
+    "\n"
+    "## Discussion Points\n"
+    "\n"
+    "### {Topic 1}\n"
+    "{Detailed discussion of what was said about this topic, who said "
+    "what, key arguments and counterarguments, and the outcome or "
+    "current status}\n"
+    "\n"
+    "### {Topic 2}\n"
+    "{Same format}\n"
     "\n"
     "## Key Decisions\n"
     "- {Decision 1}\n"
@@ -100,6 +115,10 @@ SUMMARISATION_PROMPT = (
     "## Open Questions\n"
     "- {Question or unresolved topic 1}\n"
     "- {Question or unresolved topic 2}\n"
+    "\n"
+    "## Notable Quotes\n"
+    '- "{Exact or near-exact quote}" — {Speaker name/label}\n'
+    '- "{Another significant statement}" — {Speaker name/label}\n'
     "\n"
     "## Tags\n"
     "{Comma-separated list of 2-5 relevant topic tags, "
@@ -226,8 +245,13 @@ class Summariser:
             message = client.messages.create(
                 model=self._config.model,
                 max_tokens=self._config.max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
+                system=SUMMARISATION_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self._build_user_message(transcript, text, word_count),
+                    }
+                ],
             )
         except anthropic.RateLimitError:
             logger.error(
@@ -245,11 +269,7 @@ class Summariser:
             logger.error("Could not reach Anthropic API: %s", exc)
             raise
         except anthropic.APIStatusError as exc:
-            logger.error(
-                "Anthropic API error %d: %s",
-                exc.status_code,
-                exc.message,
-            )
+            logger.error("Anthropic API error %d: %s", exc.status_code, exc.message)
             raise
 
         if not message.content:

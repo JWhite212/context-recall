@@ -9,9 +9,23 @@
   <img src="https://img.shields.io/badge/platform-macOS-blue" alt="macOS">
   <img src="https://img.shields.io/badge/python-3.11%2B-green" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/tauri-v2-blueviolet" alt="Tauri v2">
+  <img src="https://img.shields.io/badge/frontend-React%20%7C%20TypeScript-informational" alt="React + TypeScript">
   <img src="https://img.shields.io/badge/transcription-faster--whisper-orange" alt="faster-whisper">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT License">
 </p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#prerequisites">Prerequisites</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#configuration-reference">Configuration</a> ·
+  <a href="#development">Development</a> ·
+  <a href="#roadmap">Roadmap</a>
+</p>
+
+![MeetingMind dashboard](docs/screenshots/dashboard.png)
 
 ---
 
@@ -29,33 +43,41 @@ MeetingMind runs silently in the background, watching for active Teams calls. Wh
 
 ## How It Works
 
+```mermaid
+flowchart TB
+    subgraph Daemon["MeetingMind Daemon · Python"]
+        direction TB
+        Detect["Detector<br/>(pgrep · lsof · osascript)"]
+        Capture["Audio Capture<br/>(BlackHole + Microphone)"]
+        Transcribe["Transcriber<br/>(faster-whisper)"]
+        Diarise["Diariser<br/>(energy-based RMS)"]
+        Summarise["Summariser<br/>(Ollama / Claude)"]
+        API["REST + WebSocket API<br/>127.0.0.1:9876 · FastAPI"]
+        DB[("SQLite + FTS5<br/>meetings · transcripts")]
+        Output["Output Writers<br/>Markdown · Notion"]
+
+        Detect --> Capture --> Transcribe --> Diarise --> Summarise --> Output
+        Summarise --> DB
+        API <--> DB
+    end
+
+    subgraph UI["MeetingMind Desktop App · Tauri v2 + React"]
+        direction LR
+        Dash["Dashboard"]
+        Meet["Meetings"]
+        Live["Live View"]
+        Settings["Settings"]
+        Onboard["Onboarding"]
+        Tray["System Tray"]
+    end
+
+    API <-->|REST · WebSocket| UI
+
+    style Daemon fill:#0f172a,stroke:#334155,color:#e2e8f0
+    style UI fill:#0f172a,stroke:#334155,color:#e2e8f0
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          MeetingMind Daemon (Python)                    │
-│                                                                         │
-│  ┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌───────────┐  │
-│  │ Detector │───▶│Audio Capture │───▶│ Transcriber  │───▶│ Diariser  │  │
-│  │ (macOS)  │    │(BlackHole +  │    │(faster-      │    │(Me vs     │  │
-│  │          │    │ Microphone)  │    │ whisper)     │    │ Remote)   │  │
-│  └──────────┘    └──────────────┘    └──────────────┘    └─────┬─────┘  │
-│                                                                │        │
-│  ┌────────────────┐    ┌────────────┐    ┌─────────────────────▼─────┐  │
-│  │   REST API     │    │  WebSocket │    │      Summariser           │  │
-│  │  (FastAPI)     │    │   Events   │    │   (Ollama / Claude)       │  │
-│  └───────┬────────┘    └──────┬─────┘    └─────────────┬─────────────┘  │
-│          │                    │                        │                │
-│  ┌───────▼────────────────────▼─────┐    ┌─────────────▼─────────────┐  │
-│  │         SQLite Database          │    │   Markdown / Notion       │  │
-│  │   (meetings, transcripts, FTS)   │    │       Output              │  │
-│  └──────────────────────────────────┘    └───────────────────────────┘  │
-└─────────────────────┬───────────────────────────────────────────────────┘
-                      │ REST + WebSocket (127.0.0.1:9876)
-┌─────────────────────▼───────────────────────────────────────────────────┐
-│                    MeetingMind Desktop App (Tauri + React)              │
-│                                                                         │
-│  Dashboard │ Meetings │ Live View │ Settings │ Onboarding │ System Tray │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+
+A single diagram can only show so much — see [Audio Pipeline](#audio-pipeline) and [Speaker Diarisation](#speaker-diarisation) below for the rationale behind the dual-file capture and the energy-based speaker labelling.
 
 ## Why Other Participants Can't Tell
 
@@ -67,10 +89,34 @@ MeetingMind does neither. It captures your local system audio via a loopback dri
 
 > **Note:** Recording meetings may have legal implications depending on your jurisdiction. Many regions operate under "one-party consent" laws, meaning you can record a conversation you participate in. Verify the laws and policies that apply to you before use.
 
-<!-- Screenshots (add when available)
-![Dashboard](docs/screenshots/dashboard.png)
-![Meeting Detail](docs/screenshots/meeting-detail.png)
--->
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <img src="docs/screenshots/meetings.png" alt="Meeting history with full-text search" />
+      <br />
+      <sub><b>Meeting history</b> — browse, filter, and full-text search across every recorded meeting, transcript, and summary.</sub>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <img src="docs/screenshots/live-recording.png" alt="Live recording view with waveform" />
+      <br />
+      <sub><b>Live view</b> — real-time audio meters, streaming transcript, and waveform playback with click-to-seek.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top" width="50%">
+      <img src="docs/screenshots/settings-general.png" alt="General settings pane" />
+      <br />
+      <sub><b>General settings</b> — audio devices, meeting detection, diarisation, and export paths — no YAML editing required.</sub>
+    </td>
+    <td align="center" valign="top" width="50%">
+      <img src="docs/screenshots/settings-advanced.png" alt="Advanced settings pane" />
+      <br />
+      <sub><b>Advanced settings</b> — transcription models, summarisation backend (Ollama or Claude), and Notion integration.</sub>
+    </td>
+  </tr>
+</table>
 
 ## Features
 
@@ -554,6 +600,27 @@ Ensure the Ollama server is running (`ollama serve`) and listening on the config
 - Use a headset with good mic isolation for best results. Open speakers cause crosstalk.
 - Adjust `diarisation.energy_ratio_threshold` — lower values (e.g. `1.2`) are more decisive, higher values (e.g. `2.0`) require a bigger energy difference.
 
+## Roadmap
+
+Short-term and exploratory directions. Contributions or issue-tracked suggestions welcome.
+
+- **Windows and Linux support** — platform stubs exist at `src/platform/windows.py` and `src/platform/linux.py`. Needs WASAPI loopback (Windows) and PulseAudio / PipeWire monitor sources (Linux) to replace BlackHole.
+- **More meeting platforms** — extend the detector to recognise Zoom, Google Meet, Slack Huddles, and Discord calls alongside Teams.
+- **Model-based diarisation** — optional upgrade path from energy-based labelling to `pyannote.audio` for multi-speaker calls where two remote participants need to be distinguished.
+- **Speaker name enrichment** — attach real participant names by cross-referencing the Teams meeting invitation or participant list.
+- **Retrieval across meeting history** — vector-index transcripts so the app can answer questions like *"what did we decide about the pricing model last quarter?"* across the full archive.
+- **Summary templates** — user-definable prompts so each team can shape summaries around their own rituals (stand-ups, retros, 1:1s).
+
+## Author
+
+**Jamie White** — early-career software engineer building Meeting Mind as a personal product focused on local-first, privacy-respecting tooling.
+
+- Portfolio — <https://jamie-white-portfolio.vercel.app>
+- GitHub — [@JWhite212](https://github.com/JWhite212)
+- LinkedIn — <https://www.linkedin.com/in/jamie-white-swe/>
+
+If you are hiring for a software engineering role and want to discuss how Meeting Mind was built — from the dual-source audio pipeline to on-device transcription, speaker diarisation, and the Tauri-based desktop shell — email **jamiecs@live.co.uk**.
+
 ## License
 
-MIT
+Released under the [MIT License](LICENSE).
