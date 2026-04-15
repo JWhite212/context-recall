@@ -87,6 +87,7 @@ summarisation:
   # Install: https://ollama.com  then: ollama pull llama3.1:8b
   ollama_base_url: "http://localhost:11434"
   ollama_model: "llama3.1:8b"
+  ollama_timeout: 600  # Seconds per Ollama request (default: 600)
 
   # --- Claude settings (used when backend: claude) ---
   anthropic_api_key: "sk-ant-..."

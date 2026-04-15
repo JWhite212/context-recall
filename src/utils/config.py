@@ -54,8 +54,8 @@ class DetectionConfig:
 class AudioConfig:
     blackhole_device_name: str = "BlackHole 2ch"
     mic_device_name: str = ""  # Empty = system default input device.
-    mic_enabled: bool = True   # Mix microphone input with system audio.
-    mic_volume: float = 1.0    # Mic gain relative to system audio (0.0–2.0).
+    mic_enabled: bool = True  # Mix microphone input with system audio.
+    mic_volume: float = 1.0  # Mic gain relative to system audio (0.0–2.0).
     system_volume: float = 1.0  # System audio gain after normalisation (0.0–2.0).
     sample_rate: int = 16000
     channels: int = 1
@@ -80,6 +80,7 @@ class SummarisationConfig:
     max_tokens: int = 4096
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
+    ollama_timeout: int = 600  # Seconds per Ollama request.
 
     def __repr__(self) -> str:
         key_display = "****" if self.anthropic_api_key else "<not set>"
@@ -127,8 +128,8 @@ class NotionConfig:
 @dataclass
 class DiarisationConfig:
     enabled: bool = False
-    speaker_name: str = "Me"           # Label for the local user.
-    remote_label: str = "Remote"       # Label for remote participants.
+    speaker_name: str = "Me"  # Label for the local user.
+    remote_label: str = "Remote"  # Label for remote participants.
     energy_ratio_threshold: float = 1.5  # How much louder one source must be.
 
 
@@ -147,7 +148,7 @@ class ApiConfig:
 
 @dataclass
 class RetentionConfig:
-    audio_retention_days: int = 0   # 0 = keep forever.
+    audio_retention_days: int = 0  # 0 = keep forever.
     record_retention_days: int = 0  # 0 = keep forever.
 
 
@@ -200,15 +201,9 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
     config = AppConfig(
         detection=_build_dataclass(DetectionConfig, raw.get("detection", {})),
         audio=_build_dataclass(AudioConfig, raw.get("audio", {})),
-        transcription=_build_dataclass(
-            TranscriptionConfig, raw.get("transcription", {})
-        ),
-        summarisation=_build_dataclass(
-            SummarisationConfig, raw.get("summarisation", {})
-        ),
-        diarisation=_build_dataclass(
-            DiarisationConfig, raw.get("diarisation", {})
-        ),
+        transcription=_build_dataclass(TranscriptionConfig, raw.get("transcription", {})),
+        summarisation=_build_dataclass(SummarisationConfig, raw.get("summarisation", {})),
+        diarisation=_build_dataclass(DiarisationConfig, raw.get("diarisation", {})),
         markdown=_build_dataclass(MarkdownConfig, raw.get("markdown", {})),
         notion=_build_dataclass(NotionConfig, raw.get("notion", {})),
         logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
