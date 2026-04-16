@@ -31,6 +31,14 @@ datas += collect_data_files("faster_whisper")
 binaries += collect_dynamic_libs("ctranslate2")
 datas += collect_data_files("ctranslate2")
 
+# MLX and MLX Whisper: Apple Silicon ML framework.
+try:
+    binaries += collect_dynamic_libs("mlx")
+    datas += collect_data_files("mlx")
+    datas += collect_data_files("mlx_whisper")
+except Exception:
+    pass  # Not available on non-Apple Silicon
+
 # sounddevice: PortAudio shared library.
 binaries += collect_dynamic_libs("sounddevice")
 datas += collect_data_files("sounddevice")
@@ -53,6 +61,9 @@ a = Analysis(
         "numpy",
         "sounddevice",
         "soundfile",
+        # MLX Whisper (Apple Silicon GPU transcription)
+        "mlx",
+        "mlx_whisper",
         # API server
         "uvicorn",
         "uvicorn.logging",
@@ -102,6 +113,14 @@ a = Analysis(
         "src.api.routes.models",
         "src.api.routes.export",
         "src.api.routes.resummarise",
+        "src.api.routes.reprocess",
+        "src.api.routes.search",
+        "src.api.routes.speakers",
+        "src.api.routes.templates",
+        "src.api.schemas",
+        "src.templates",
+        "src.embeddings",
+        "src.pyannote_diariser",
         "src.db",
         "src.db.database",
         "src.db.repository",
@@ -112,7 +131,9 @@ a = Analysis(
         "src.utils.config",
     ]
     + collect_submodules("uvicorn")
-    + collect_submodules("starlette"),
+    + collect_submodules("starlette")
+    + collect_submodules("mlx")
+    + collect_submodules("mlx_whisper"),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
