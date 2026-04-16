@@ -32,7 +32,7 @@ from pathlib import Path
 
 from src.audio_capture import AudioCapture
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
-from src.diariser import Diariser
+from src.diariser import EnergyDiariser, create_diariser
 from src.output.markdown_writer import MarkdownWriter
 from src.output.notion_writer import NotionWriter
 from src.summariser import Summariser
@@ -59,11 +59,11 @@ class MeetingMind:
         self._transcriber = Transcriber(self._config.transcription)
         self._summariser = Summariser(self._config.summarisation)
         self._diariser = (
-            Diariser(self._config.diarisation) if self._config.diarisation.enabled else None
+            create_diariser(self._config.diarisation) if self._config.diarisation.enabled else None
         )
 
-        # If diarisation is enabled, keep source files for comparison.
-        if self._diariser:
+        # Energy backend needs separate source files; pyannote uses combined audio.
+        if self._diariser and isinstance(self._diariser, EnergyDiariser):
             self._config.audio.keep_source_files = True
 
         # Output writers (initialised based on config).
@@ -295,17 +295,24 @@ class MeetingMind:
         if duration_seconds == 0.0:
             duration_seconds = transcript.duration_seconds
 
-        # Step 2: Diarise (if enabled and source files are available).
+        # Step 2: Diarise (if enabled).
         if self._diariser:
-            sys_path = self._capture.system_audio_path
-            mic_path = self._capture.mic_audio_path
-            if sys_path and mic_path:
-                logger.info("Running speaker diarisation...")
-                self._emit("pipeline.stage", meeting_id=meeting_id, stage="diarising")
-                try:
-                    transcript = self._diariser.diarise(transcript, sys_path, mic_path)
-                except Exception as e:
-                    logger.error("Diarisation failed: %s", e, exc_info=True)
+            logger.info("Running speaker diarisation...")
+            self._emit("pipeline.stage", meeting_id=meeting_id, stage="diarising")
+            try:
+                if isinstance(self._diariser, EnergyDiariser):
+                    # Energy backend needs separate system/mic files.
+                    sys_path = self._capture.system_audio_path
+                    mic_path = self._capture.mic_audio_path
+                    if sys_path and mic_path:
+                        transcript = self._diariser.diarise(transcript, sys_path, mic_path)
+                    else:
+                        logger.warning("Source audio files not available for energy diarisation")
+                else:
+                    # Pyannote and other backends use the combined audio file.
+                    transcript = self._diariser.diarise(transcript, audio_path)
+            except Exception as e:
+                logger.error("Diarisation failed: %s", e, exc_info=True)
 
         # Load default template for summarisation.
         template = None
