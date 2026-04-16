@@ -30,7 +30,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from src.audio_capture import AudioCapture
+from src.audio_capture import AudioCapture, AudioCaptureError
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
 from src.diariser import EnergyDiariser, create_diariser
 from src.output.markdown_writer import MarkdownWriter
@@ -207,6 +207,58 @@ class MeetingMind:
             logger.error("Background processing failed", exc_info=True)
 
     # ------------------------------------------------------------------
+    # Audio persistence
+    # ------------------------------------------------------------------
+
+    def _persist_audio(
+        self,
+        audio_path: Path,
+        started_at: float,
+        *,
+        meeting_id: str | None = None,
+        status: str = "transcribing",
+    ) -> tuple[Path, str | None]:
+        """Persist audio to a durable location and create a DB record.
+
+        Returns (persistent_audio_path, meeting_id).
+        """
+        persistent_audio_path = audio_path
+        if self._api_server and self._api_server.repo:
+            audio_dir = Path(os.path.expanduser("~/Library/Application Support/MeetingMind/audio"))
+            audio_dir.mkdir(parents=True, exist_ok=True)
+            persistent_audio_path = (audio_dir / audio_path.name).resolve()
+            if not str(persistent_audio_path).startswith(str(audio_dir.resolve())):
+                raise ValueError(
+                    f"Refusing to write audio outside audio_dir: {persistent_audio_path}"
+                )
+            if audio_path != persistent_audio_path:
+                try:
+                    os.link(audio_path, persistent_audio_path)
+                except OSError:
+                    shutil.copy2(audio_path, persistent_audio_path)
+
+        if self._api_server and self._api_server.repo and self._api_server.loop:
+            loop = self._api_server.loop
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._api_server.repo.create_meeting(started_at=started_at, status=status),
+                    loop,
+                )
+                meeting_id = future.result(timeout=5)
+                self._active_meeting_id = meeting_id
+                asyncio.run_coroutine_threadsafe(
+                    self._api_server.repo.update_meeting(
+                        meeting_id,
+                        audio_path=str(persistent_audio_path),
+                    ),
+                    loop,
+                )
+            except Exception as e:
+                logger.warning("Failed to create meeting record: %s", e)
+
+        return persistent_audio_path, meeting_id
+
+    # ------------------------------------------------------------------
     # Processing pipeline
     # ------------------------------------------------------------------
 
@@ -230,40 +282,9 @@ class MeetingMind:
         if meeting_id is None:
             meeting_id = self._active_meeting_id
 
-        # Persist audio to a durable location if the API server is running.
-        persistent_audio_path = audio_path
-        if self._api_server and self._api_server.repo:
-            audio_dir = Path(os.path.expanduser("~/Library/Application Support/MeetingMind/audio"))
-            audio_dir.mkdir(parents=True, exist_ok=True)
-            persistent_audio_path = audio_dir / audio_path.name
-            if audio_path != persistent_audio_path:
-                try:
-                    os.link(audio_path, persistent_audio_path)
-                except OSError:
-                    shutil.copy2(audio_path, persistent_audio_path)
-
-        # Create meeting record in DB.
-        if self._api_server and self._api_server.repo and self._api_server.loop:
-            loop = self._api_server.loop
-            try:
-                future = asyncio.run_coroutine_threadsafe(
-                    self._api_server.repo.create_meeting(
-                        started_at=started_at, status="transcribing"
-                    ),
-                    loop,
-                )
-                meeting_id = future.result(timeout=5)
-                self._active_meeting_id = meeting_id
-                # Update with audio path.
-                asyncio.run_coroutine_threadsafe(
-                    self._api_server.repo.update_meeting(
-                        meeting_id,
-                        audio_path=str(persistent_audio_path),
-                    ),
-                    loop,
-                )
-            except Exception as e:
-                logger.warning("Failed to create meeting record: %s", e)
+        persistent_audio_path, meeting_id = self._persist_audio(
+            audio_path, started_at, meeting_id=meeting_id, status="transcribing"
+        )
 
         # Step 1: Transcribe.
         logger.info("Transcribing audio...")
@@ -447,6 +468,17 @@ class MeetingMind:
 
         Raises AudioCaptureError if the audio device cannot be opened.
         """
+
+        # Wire audio level callback for live metering.
+        def _on_level(system_rms: float, mic_rms: float) -> None:
+            self._emit(
+                "audio.level",
+                system_rms=round(system_rms, 6),
+                mic_rms=round(mic_rms, 6),
+            )
+
+        self._capture.on_audio_level = _on_level
+
         try:
             self._capture.start()
         except Exception:
@@ -465,6 +497,27 @@ class MeetingMind:
         if audio_path and audio_path.exists():
             duration = time.time() - started_at
             self._process_audio(audio_path, started_at, duration)
+
+    def api_stop_recording_deferred(self) -> str:
+        """Stop a manual recording but defer processing.
+
+        Persists the audio file and creates a meeting record with
+        status ``"pending"`` so the user can trigger processing later.
+
+        Returns the meeting ID.
+        """
+        started_at = self._meeting_started_at
+        duration = time.time() - started_at
+        self._emit("meeting.ended", duration=duration)
+        audio_path = self._capture.stop()
+
+        if not audio_path or not audio_path.exists():
+            raise AudioCaptureError("No audio file produced")
+
+        _, meeting_id = self._persist_audio(audio_path, started_at, status="pending")
+        if meeting_id:
+            self._db_update(meeting_id, duration_seconds=duration, ended_at=started_at + duration)
+        return meeting_id or ""
 
     # ------------------------------------------------------------------
     # Run modes
@@ -491,6 +544,7 @@ class MeetingMind:
         self._api_server.set_recording_controls(
             start=self.api_start_recording,
             stop=self.api_stop_recording,
+            stop_deferred=self.api_stop_recording_deferred,
             is_recording=lambda: self._capture.is_recording,
         )
         self._api_server.start()

@@ -104,8 +104,13 @@ export async function startRecording(): Promise<RecordingStartResponse> {
   });
 }
 
-export async function stopRecording(): Promise<RecordingStopResponse> {
-  return request<RecordingStopResponse>("/api/record/stop", { method: "POST" });
+export async function stopRecording(
+  defer = false,
+): Promise<RecordingStopResponse> {
+  const params = defer ? "?defer=true" : "";
+  return request<RecordingStopResponse>(`/api/record/stop${params}`, {
+    method: "POST",
+  });
 }
 
 export async function getDevices(): Promise<DevicesResponse> {

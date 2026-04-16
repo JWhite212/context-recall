@@ -13,6 +13,7 @@ import type { Meeting, MeetingStatus } from "../../lib/types";
 const STATUS_FILTERS: { label: string; value: MeetingStatus | "all" }[] = [
   { label: "All", value: "all" },
   { label: "Complete", value: "complete" },
+  { label: "Pending", value: "pending" },
   { label: "Recording", value: "recording" },
   { label: "Error", value: "error" },
 ];
@@ -386,7 +387,9 @@ function MeetingRow({
               ? "bg-status-idle/20 text-status-idle"
               : m.status === "error"
                 ? "bg-status-error/20 text-status-error"
-                : "bg-blue-400/20 text-blue-400"
+                : m.status === "pending"
+                  ? "bg-amber-400/20 text-amber-400"
+                  : "bg-blue-400/20 text-blue-400"
           }`}
         >
           {m.status}

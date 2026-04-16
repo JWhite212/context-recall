@@ -30,7 +30,8 @@ function formatElapsed(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  if (h > 0)
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
@@ -42,9 +43,9 @@ function useElapsedTimer(startedAt: number | null): number {
       setElapsed(0);
       return;
     }
-    setElapsed(Math.max(0, (Date.now() / 1000) - startedAt));
+    setElapsed(Math.max(0, Date.now() / 1000 - startedAt));
     const interval = setInterval(() => {
-      setElapsed(Math.max(0, (Date.now() / 1000) - startedAt));
+      setElapsed(Math.max(0, Date.now() / 1000 - startedAt));
     }, 1000);
     return () => clearInterval(interval);
   }, [startedAt]);
@@ -90,11 +91,21 @@ export function LiveView() {
     },
   });
 
+  const [showStopDialog, setShowStopDialog] = useState(false);
+
   const stopMutation = useMutation({
-    mutationFn: stopRecording,
-    onSuccess: () => {
+    mutationFn: (defer: boolean) => stopRecording(defer),
+    onSuccess: (_data, defer) => {
       queryClient.invalidateQueries({ queryKey: ["status"] });
-      toast.info("Recording stopped. Processing will begin shortly.");
+      setShowStopDialog(false);
+      if (defer) {
+        toast.info("Recording saved. Process it later from Meetings.");
+      } else {
+        toast.info("Recording stopped. Processing will begin shortly.");
+      }
+    },
+    onError: () => {
+      setShowStopDialog(false);
     },
   });
 
@@ -126,15 +137,13 @@ export function LiveView() {
         </div>
 
         {/* Start/Stop button */}
-        {daemonRunning && (
+        {daemonRunning && !showStopDialog && (
           <button
             onClick={() =>
-              isRecording ? stopMutation.mutate() : startMutation.mutate()
+              isRecording ? setShowStopDialog(true) : startMutation.mutate()
             }
             disabled={
-              startMutation.isPending ||
-              stopMutation.isPending ||
-              isProcessing
+              startMutation.isPending || stopMutation.isPending || isProcessing
             }
             aria-label={isRecording ? "Stop recording" : "Start recording"}
             className={`mt-2 px-6 py-2 rounded-full text-sm font-medium transition-colors ${
@@ -157,6 +166,35 @@ export function LiveView() {
           </button>
         )}
 
+        {/* Stop confirmation dialog */}
+        {showStopDialog && (
+          <div className="mt-2 flex flex-col items-center gap-3">
+            <p className="text-sm text-text-secondary">Stop recording and...</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => stopMutation.mutate(false)}
+                disabled={stopMutation.isPending}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 transition-colors"
+              >
+                {stopMutation.isPending ? "Stopping..." : "Process Now"}
+              </button>
+              <button
+                onClick={() => stopMutation.mutate(true)}
+                disabled={stopMutation.isPending}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-surface-raised text-text-primary border border-border hover:bg-surface transition-colors disabled:opacity-50"
+              >
+                Process Later
+              </button>
+            </div>
+            <button
+              onClick={() => setShowStopDialog(false)}
+              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
         {(startMutation.isError || stopMutation.isError) && (
           <p className="text-xs text-status-error mt-1">
             {((startMutation.error || stopMutation.error) as Error)?.message}
@@ -171,7 +209,11 @@ export function LiveView() {
             Audio Levels
           </h2>
           <div className="flex flex-col gap-3">
-            <LevelMeter label="System" value={audioLevels.system} color="bg-status-idle" />
+            <LevelMeter
+              label="System"
+              value={audioLevels.system}
+              color="bg-status-idle"
+            />
             <LevelMeter label="Mic" value={audioLevels.mic} color="bg-accent" />
           </div>
         </div>
@@ -179,7 +221,10 @@ export function LiveView() {
 
       {/* Pipeline progress */}
       {(isRecording || isProcessing) && (
-        <div className="rounded-xl bg-surface-raised border border-border p-5" aria-busy={isProcessing}>
+        <div
+          className="rounded-xl bg-surface-raised border border-border p-5"
+          aria-busy={isProcessing}
+        >
           <h2 className="text-sm font-medium text-text-primary mb-4">
             Pipeline
           </h2>
@@ -225,7 +270,10 @@ export function LiveView() {
           <h2 className="text-sm font-medium text-text-primary mb-3">
             Live Transcript
           </h2>
-          <div className="max-h-80 overflow-y-auto space-y-2" aria-live="polite">
+          <div
+            className="max-h-80 overflow-y-auto space-y-2"
+            aria-live="polite"
+          >
             {liveSegments.map((seg, i) => (
               <div key={i} className="flex gap-3 text-sm">
                 <span className="text-text-muted font-mono text-xs pt-0.5 shrink-0 w-12 text-right">
@@ -234,9 +282,7 @@ export function LiveView() {
                 {seg.speaker && (
                   <span
                     className={`text-xs font-medium pt-0.5 shrink-0 w-16 ${
-                      seg.speaker === "Me"
-                        ? "text-accent"
-                        : "text-status-idle"
+                      seg.speaker === "Me" ? "text-accent" : "text-status-idle"
                     }`}
                   >
                     {seg.speaker}
@@ -251,29 +297,33 @@ export function LiveView() {
       )}
 
       {/* Empty state */}
-      {!isRecording && !isProcessing && liveSegments.length === 0 && daemonRunning && (
-        <div className="rounded-xl bg-surface-raised border border-border p-8 flex flex-col items-center gap-3">
-          <svg
-            width="40"
-            height="40"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="text-text-muted"
-          >
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-            <line x1="12" y1="19" x2="12" y2="23" />
-            <line x1="8" y1="23" x2="16" y2="23" />
-          </svg>
-          <p className="text-sm text-text-muted text-center">
-            Start a manual recording or wait for a meeting to be auto-detected.
-          </p>
-        </div>
-      )}
+      {!isRecording &&
+        !isProcessing &&
+        liveSegments.length === 0 &&
+        daemonRunning && (
+          <div className="rounded-xl bg-surface-raised border border-border p-8 flex flex-col items-center gap-3">
+            <svg
+              width="40"
+              height="40"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="text-text-muted"
+            >
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
+            <p className="text-sm text-text-muted text-center">
+              Start a manual recording or wait for a meeting to be
+              auto-detected.
+            </p>
+          </div>
+        )}
     </div>
   );
 }

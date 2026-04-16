@@ -66,15 +66,17 @@ class ApiServer:
         # Recording controls (set by MeetingMind before start).
         self._start_recording = None
         self._stop_recording = None
+        self._stop_recording_deferred = None
         self._is_recording = None
 
     def set_state_accessors(self, get_daemon_state, get_active_meeting) -> None:
         self._get_daemon_state = get_daemon_state
         self._get_active_meeting = get_active_meeting
 
-    def set_recording_controls(self, start, stop, is_recording) -> None:
+    def set_recording_controls(self, start, stop, stop_deferred, is_recording) -> None:
         self._start_recording = start
         self._stop_recording = stop
+        self._stop_recording_deferred = stop_deferred
         self._is_recording = is_recording
 
     def _create_app(self) -> FastAPI:
@@ -109,7 +111,12 @@ class ApiServer:
         status_routes.init(self._get_daemon_state, self._get_active_meeting)
         meetings_routes.init(self.repo)
         config_routes.init(DEFAULT_CONFIG_PATH)
-        recording_routes.init(self._start_recording, self._stop_recording, self._is_recording)
+        recording_routes.init(
+            self._start_recording,
+            self._stop_recording,
+            self._stop_recording_deferred,
+            self._is_recording,
+        )
 
         export_routes.init(self.repo)
         resummarise_routes.init(self.repo)

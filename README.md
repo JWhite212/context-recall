@@ -1,16 +1,20 @@
 <p align="center">
-  <h1 align="center">MeetingMind</h1>
-  <p align="center">
-    A macOS desktop app that automatically detects Microsoft Teams meetings, transcribes them locally, and produces structured AI-powered summaries — completely offline and invisible to other participants.
-  </p>
+  <img src="ui/src-tauri/icons/icon.png" width="120" alt="MeetingMind icon" />
+</p>
+
+<h1 align="center">MeetingMind</h1>
+
+<p align="center">
+  <strong>A macOS desktop app that automatically detects Microsoft Teams meetings, transcribes them locally with Apple Silicon GPU acceleration, and produces structured AI-powered summaries — completely offline and invisible to other participants.</strong>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS-blue" alt="macOS">
-  <img src="https://img.shields.io/badge/python-3.11%2B-green" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/tauri-v2-blueviolet" alt="Tauri v2">
-  <img src="https://img.shields.io/badge/frontend-React%20%7C%20TypeScript-informational" alt="React + TypeScript">
-  <img src="https://img.shields.io/badge/transcription-faster--whisper-orange" alt="faster-whisper">
+  <img src="https://img.shields.io/badge/platform-macOS_(Apple_Silicon)-blue?logo=apple" alt="macOS Apple Silicon">
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/tauri-v2-24C8D8?logo=tauri&logoColor=white" alt="Tauri v2">
+  <img src="https://img.shields.io/badge/react-18-61DAFB?logo=react&logoColor=white" alt="React 18">
+  <img src="https://img.shields.io/badge/typescript-5-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5">
+  <img src="https://img.shields.io/badge/transcription-MLX_Whisper-FF6F00" alt="MLX Whisper">
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT License">
 </p>
 
@@ -18,12 +22,15 @@
   <a href="#features">Features</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#screenshots">Screenshots</a> ·
-  <a href="#prerequisites">Prerequisites</a> ·
+  <a href="#getting-started">Getting started</a> ·
   <a href="#usage">Usage</a> ·
-  <a href="#configuration-reference">Configuration</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#api-reference">API</a> ·
   <a href="#development">Development</a> ·
   <a href="#roadmap">Roadmap</a>
 </p>
+
+---
 
 ![MeetingMind dashboard](docs/screenshots/dashboard.png)
 
@@ -31,15 +38,26 @@
 
 ## Overview
 
-MeetingMind runs silently in the background, watching for active Teams calls. When a meeting starts, it captures both sides of the conversation — remote participants via system audio loopback and your voice via the microphone — then runs the recording through local speech-to-text and an AI summariser to produce structured notes with action items, decisions, and key topics.
+MeetingMind runs silently in the background, watching for active Teams calls. When a meeting starts, it captures both sides of the conversation — remote participants via system audio loopback and your voice via the microphone — then runs the recording through on-device speech-to-text and an AI summariser to produce structured notes with action items, decisions, and key topics.
 
-**Output formats:**
-- **Markdown** — Obsidian-compatible `.md` files with YAML frontmatter (Dataview-queryable)
-- **Notion** — Native database pages with headings, bullets, and to-do items
+Everything runs locally on your Mac. No cloud transcription, no bots joining calls, no data leaving your machine (unless you opt into the Claude API for summarisation).
 
-**Summarisation backends:**
-- **Ollama** — Free, fully local, no API key needed
-- **Claude API** — Anthropic's Claude for higher-quality summaries (requires API credits)
+### Output Formats
+
+| Format               | Description                                                                |
+| -------------------- | -------------------------------------------------------------------------- |
+| **Markdown**         | Obsidian-compatible `.md` files with YAML frontmatter (Dataview-queryable) |
+| **Notion**           | Native database pages with headings, bullets, and to-do items              |
+| **JSON / Clipboard** | Export any meeting via the API or desktop app                              |
+
+### Summarisation Backends
+
+| Backend        | Cost        | Privacy                      | Quality                 |
+| -------------- | ----------- | ---------------------------- | ----------------------- |
+| **Ollama**     | Free        | Fully local                  | Good (depends on model) |
+| **Claude API** | API credits | Transcript sent to Anthropic | Excellent               |
+
+---
 
 ## How It Works
 
@@ -47,47 +65,84 @@ MeetingMind runs silently in the background, watching for active Teams calls. Wh
 flowchart TB
     subgraph Daemon["MeetingMind Daemon · Python"]
         direction TB
-        Detect["Detector<br/>(pgrep · lsof · osascript)"]
-        Capture["Audio Capture<br/>(BlackHole + Microphone)"]
-        Transcribe["Transcriber<br/>(faster-whisper)"]
-        Diarise["Diariser<br/>(energy-based RMS)"]
-        Summarise["Summariser<br/>(Ollama / Claude)"]
-        API["REST + WebSocket API<br/>127.0.0.1:9876 · FastAPI"]
-        DB[("SQLite + FTS5<br/>meetings · transcripts")]
-        Output["Output Writers<br/>Markdown · Notion"]
+        Detect["🔍 Detector<br/><sub>pgrep · lsof · osascript</sub>"]
+        Capture["🎙️ Audio Capture<br/><sub>BlackHole + Microphone</sub>"]
+        Transcribe["📝 Transcriber<br/><sub>MLX Whisper · Apple Silicon GPU</sub>"]
+        Diarise["👥 Diariser<br/><sub>Energy RMS / PyAnnote</sub>"]
+        Summarise["🤖 Summariser<br/><sub>Ollama / Claude API</sub>"]
+        Templates["📋 Templates<br/><sub>standup · retro · 1:1 · custom</sub>"]
+        API["🌐 REST + WebSocket API<br/><sub>FastAPI · 127.0.0.1:9876</sub>"]
+        DB[("💾 SQLite + FTS5<br/><sub>meetings · transcripts · embeddings</sub>")]
+        Output["📤 Output Writers<br/><sub>Markdown · Notion</sub>"]
 
         Detect --> Capture --> Transcribe --> Diarise --> Summarise --> Output
+        Templates -.-> Summarise
         Summarise --> DB
         API <--> DB
     end
 
     subgraph UI["MeetingMind Desktop App · Tauri v2 + React"]
         direction LR
-        Dash["Dashboard"]
-        Meet["Meetings"]
-        Live["Live View"]
-        Settings["Settings"]
-        Onboard["Onboarding"]
-        Tray["System Tray"]
+        Dash["📊 Dashboard"]
+        Meet["📋 Meetings"]
+        Search["🔍 Search"]
+        Live["🎤 Live View"]
+        Settings["⚙️ Settings"]
+        Onboard["🚀 Onboarding"]
+        Tray["🖥️ System Tray"]
     end
 
-    API <-->|REST · WebSocket| UI
+    API <-->|"REST · WebSocket"| UI
 
     style Daemon fill:#0f172a,stroke:#334155,color:#e2e8f0
     style UI fill:#0f172a,stroke:#334155,color:#e2e8f0
 ```
 
-A single diagram can only show so much — see [Audio Pipeline](#audio-pipeline) and [Speaker Diarisation](#speaker-diarisation) below for the rationale behind the dual-file capture and the energy-based speaker labelling.
+### Request Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant D as TeamsDetector
+    participant A as AudioCapture
+    participant T as Transcriber (MLX)
+    participant S as Diariser
+    participant M as Summariser
+    participant DB as SQLite + FTS5
+    participant WS as WebSocket
+    participant UI as Desktop App
+
+    D->>D: Poll every 3s (pgrep, lsof, osascript)
+    D->>A: Meeting detected (3 consecutive polls)
+    A->>A: Record BlackHole + Mic to separate WAVs
+    Note over A: Independent streams avoid clock drift
+    D->>A: Meeting ended
+    A->>A: RMS normalise + merge source files
+    A->>T: merged.wav
+    T->>T: MLX Whisper on Apple Silicon GPU
+    T->>S: Transcript with timestamps
+    S->>S: Energy RMS or PyAnnote labelling
+    S->>M: Labelled transcript
+    M->>M: Generate summary (Ollama/Claude)
+    M->>DB: Store meeting + transcript + summary
+    DB->>WS: Broadcast "meeting_complete" event
+    WS->>UI: Real-time update
+```
+
+---
 
 ## Why Other Participants Can't Tell
 
 Teams notifies participants when:
+
 - A **recording is started via the Teams UI**
 - A **bot joins** the meeting
 
 MeetingMind does neither. It captures your local system audio via a loopback driver (BlackHole), which is functionally identical to listening through your speakers. No network traffic, no bot, no Teams API calls — from everyone else's perspective, nothing has changed.
 
-> **Note:** Recording meetings may have legal implications depending on your jurisdiction. Many regions operate under "one-party consent" laws, meaning you can record a conversation you participate in. Verify the laws and policies that apply to you before use.
+> [!NOTE]
+> Recording meetings may have legal implications depending on your jurisdiction. Many regions operate under "one-party consent" laws, meaning you can record a conversation you participate in. Verify the laws and policies that apply to you before use.
+
+---
 
 ## Screenshots
 
@@ -96,61 +151,140 @@ MeetingMind does neither. It captures your local system audio via a loopback dri
     <td align="center" valign="top" width="50%">
       <img src="docs/screenshots/meetings.png" alt="Meeting history with full-text search" />
       <br />
-      <sub><b>Meeting history</b> — browse, filter, and full-text search across every recorded meeting, transcript, and summary.</sub>
+      <sub><b>Meeting History</b> — browse, filter, label, and full-text search across every recorded meeting, transcript, and summary.</sub>
     </td>
     <td align="center" valign="top" width="50%">
       <img src="docs/screenshots/live-recording.png" alt="Live recording view with waveform" />
       <br />
-      <sub><b>Live view</b> — real-time audio meters, streaming transcript, and waveform playback with click-to-seek.</sub>
+      <sub><b>Live View</b> — real-time audio meters, pipeline progress, streaming transcript, and waveform playback with click-to-seek.</sub>
     </td>
   </tr>
   <tr>
     <td align="center" valign="top" width="50%">
       <img src="docs/screenshots/settings-general.png" alt="General settings pane" />
       <br />
-      <sub><b>General settings</b> — audio devices, meeting detection, diarisation, and export paths — no YAML editing required.</sub>
+      <sub><b>General Settings</b> — audio devices, meeting detection, diarisation backend, and export paths — no YAML editing required.</sub>
     </td>
     <td align="center" valign="top" width="50%">
       <img src="docs/screenshots/settings-advanced.png" alt="Advanced settings pane" />
       <br />
-      <sub><b>Advanced settings</b> — transcription models, summarisation backend (Ollama or Claude), and Notion integration.</sub>
+      <sub><b>Advanced Settings</b> — MLX Whisper models, summarisation backend (Ollama or Claude), templates, and Notion integration.</sub>
     </td>
   </tr>
 </table>
 
+---
+
 ## Features
 
 ### Desktop App
-- **Native macOS app** — Tauri v2 desktop app with system tray, dark/light themes, and native notifications
-- **Meeting history** — Browse, search, and filter all recorded meetings with full-text search
+
+- **Native macOS app** — Tauri v2 desktop shell with system tray, dark/light themes, and native notifications
+- **Meeting history** — Browse, search, filter, and label all recorded meetings with full-text search (FTS5)
+- **Semantic search** — Vector-based search across transcripts using sentence-transformers embeddings
 - **Live view** — Real-time audio level meters, pipeline progress, and streaming transcript during recording
 - **Audio player** — Waveform visualisation with playback controls, speed adjustment, and click-to-seek from transcript
 - **Settings UI** — Full configuration through the app — no YAML editing required
-- **Command palette** — Cmd+K to quickly search meetings, start recording, or jump to settings
+- **Command palette** — `⌘K` to quickly search meetings, start recording, or jump to settings
 - **Onboarding wizard** — Guided setup for BlackHole, audio devices, permissions, and model downloads
-- **Model management** — Download and manage Whisper models with real-time progress
+- **Model management** — Download and manage MLX Whisper models with real-time progress tracking
+- **Summary templates** — Built-in templates (standard, standup, retro, 1:1, client-call) plus custom templates
+- **Meeting merge** — Combine split meetings that were recorded as separate sessions
+- **Speaker management** — Rename speaker labels across meetings
+- **Export** — Export meetings as Markdown, JSON, or copy to clipboard
 - **Auto-updates** — Built-in update checking via GitHub Releases
 - **Accessible** — WCAG AA compliant with full keyboard navigation and screen reader support
 
 ### Pipeline
+
 - **Automatic detection** — Monitors macOS process state and audio device usage with debounce to detect live Teams calls without manual intervention or false positives
 - **Dual-source audio** — Records system audio (remote participants) and microphone (your voice) to separate files, then merges with RMS normalisation so both sides are equally audible
-- **Local transcription** — Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2 backend) for fast, private, on-device speech-to-text
-- **Speaker diarisation** — Energy-based labelling distinguishes your voice ("Me") from remote participants ("Remote") in the transcript — no ML dependencies
-- **AI summarisation** — Produces structured summaries with title, key decisions, detailed action items (with full context, owners, deadlines, and subtasks), open questions, and topic tags
-- **Multiple backends** — Choose between free local Ollama models or the Claude API for summarisation
-
-### Output
-- **Obsidian integration** — Markdown output with YAML frontmatter designed for Obsidian Dataview queries
-- **Notion integration** — Creates native Notion database pages with proper headings, bullets, and to-do blocks
-- **Export** — Export meetings as Markdown, JSON, or copy to clipboard
+- **Apple Silicon GPU transcription** — Uses [MLX Whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) for ~10x faster on-device speech-to-text via the MLX framework
+- **Speaker diarisation** — Two backends: energy-based RMS comparison (no ML, zero dependencies) or [PyAnnote](https://github.com/pyannote/pyannote-audio) (ML-based, multi-speaker, requires torch)
+- **AI summarisation** — Produces structured summaries with title, key decisions, detailed action items (with owners, deadlines, subtasks), open questions, and topic tags
+- **Summary templates** — User-definable prompts for different meeting types (standups, retros, 1:1s, client calls)
+- **Reprocessing** — Re-run transcription and summarisation on any meeting from its existing audio file
 - **Data retention** — Configurable auto-cleanup of old audio files and meeting records
 
-## Prerequisites
+### Output
 
-### 1. BlackHole (Virtual Audio Driver)
+- **Obsidian integration** — Markdown output with YAML frontmatter designed for Obsidian Dataview queries
+- **Notion integration** — Creates native Notion database pages with proper headings, bullets, and to-do blocks
+- **Export** — Export meetings as Markdown, JSON, or copy to clipboard from the desktop app or API
 
-BlackHole creates a virtual audio device that captures system audio output via loopback.
+---
+
+## Audio Pipeline
+
+MeetingMind records system audio and microphone to **separate WAV files** using independent audio streams, then merges them after capture with RMS normalisation.
+
+```mermaid
+flowchart LR
+    BH["BlackHole 2ch<br/><sub>System audio</sub>"] --> S1["system.wav"]
+    MIC["Microphone<br/><sub>Your voice</sub>"] --> S2["mic.wav"]
+    S1 --> NORM["RMS Normalisation<br/><sub>Balance volume levels</sub>"]
+    S2 --> NORM
+    NORM --> MERGE["merged.wav<br/><sub>Both sides, equal volume</sub>"]
+    S1 -.->|"if diarisation enabled"| DIAR["Diariser<br/><sub>Compare energy per segment</sub>"]
+    S2 -.-> DIAR
+
+    style BH fill:#1e3a5f,stroke:#334155,color:#e2e8f0
+    style MIC fill:#1e3a5f,stroke:#334155,color:#e2e8f0
+```
+
+**Why separate files?**
+
+| Reason                     | Explanation                                                                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Eliminates clock drift** | Two hardware devices (e.g. BlackHole + USB headset) run on independent clocks. Real-time mixing causes progressive desync. Separate files avoid this entirely. |
+| **Balances volume**        | System audio is typically much quieter than a close-range mic. Post-capture normalisation brings both to the same RMS level.                                   |
+| **Enables diarisation**    | The separate source files allow energy comparison to determine who was speaking in each segment.                                                               |
+
+---
+
+## Speaker Diarisation
+
+MeetingMind supports two diarisation backends:
+
+### Energy-based (default)
+
+Zero dependencies. Compares RMS energy between system audio and microphone per transcript segment:
+
+- Mic significantly louder → **"Me"** (you were speaking)
+- System significantly louder → **"Remote"** (another participant)
+- Both similar → **"Me + Remote"** (crosstalk)
+
+### PyAnnote (optional)
+
+ML-based speaker diarisation via [pyannote.audio](https://github.com/pyannote/pyannote-audio). Requires `torch` and a HuggingFace token. Distinguishes multiple remote speakers by voice characteristics.
+
+```
+[00:01:23] [Remote] So the quarterly numbers show a 15% increase...
+[00:01:45] [Me] Right, and I think we should focus on the enterprise segment.
+[00:02:10] [Remote] Agreed. Let's draft the proposal by Friday.
+```
+
+> [!TIP]
+> Diarisation works best with headsets that isolate your mic from system audio. Open speakers cause crosstalk and reduce accuracy.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+| Requirement               | Purpose                                | Install                                                           |
+| ------------------------- | -------------------------------------- | ----------------------------------------------------------------- |
+| **macOS** (Apple Silicon) | MLX Whisper requires Apple Silicon GPU | —                                                                 |
+| **Python 3.11+**          | Daemon runtime                         | `brew install python@3.11`                                        |
+| **BlackHole 2ch**         | Virtual audio loopback driver          | `brew install blackhole-2ch`                                      |
+| **Ollama** (recommended)  | Free local summarisation               | `brew install ollama`                                             |
+| **Node.js 20+**           | Build desktop app (dev only)           | `brew install node`                                               |
+| **Rust** (stable)         | Build Tauri shell (dev only)           | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+
+### 1. BlackHole Setup
+
+BlackHole creates a virtual audio device that captures system audio via loopback.
 
 ```bash
 brew install blackhole-2ch
@@ -164,28 +298,20 @@ After installation, create a **Multi-Output Device** in Audio MIDI Setup:
 4. Set your real device as the clock source
 5. Set this Multi-Output Device as your system output (System Settings → Sound → Output)
 
-> **Important:** If you use a USB headset or external speakers, you must also configure **Teams** to use the Multi-Output Device (or "System Default") as its speaker output. Go to Teams → Settings → Devices → Speaker. If Teams sends audio directly to your headset, BlackHole won't capture it.
+> [!IMPORTANT]
+> If you use a USB headset or external speakers, also configure **Teams** to use the Multi-Output Device as its speaker output (Teams → Settings → Devices → Speaker). If Teams sends audio directly to your headset, BlackHole won't capture it.
 
 ### 2. Ollama (Local AI — Recommended)
 
-For free, fully local summarisation with no API key:
-
 ```bash
-# Install Ollama
 brew install ollama
-
-# Pull a model (llama3.1:8b is a good default)
-ollama pull llama3.1:8b
-
-# Start the Ollama server (runs on port 11434)
+ollama pull qwen3:30b-a3b    # or llama3.1:8b for lighter hardware
 ollama serve
 ```
 
-> Alternatively, you can use the Claude API by setting `backend: "claude"` in the config and providing an Anthropic API key.
+> Alternatively, set `backend: "claude"` in config and provide an Anthropic API key.
 
-### 3. Python Environment
-
-Requires Python 3.11+.
+### 3. Install
 
 ```bash
 git clone https://github.com/JWhite212/meeting-mind.git
@@ -193,29 +319,33 @@ cd meeting-mind
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp config.example.yaml config.yaml   # then edit with your values
 ```
 
-### 4. Configuration
+Or use the Makefile:
 
 ```bash
-cp config.example.yaml config.yaml
+make setup   # Creates venv, installs Python + UI dependencies
 ```
 
-Edit `config.yaml` to set:
+### 4. Configure
 
-| Setting | Description |
-|---------|-------------|
-| `summarisation.backend` | `"ollama"` (free, local) or `"claude"` (API) |
-| `summarisation.ollama_model` | Ollama model name (e.g. `"llama3.1:8b"`) |
-| `summarisation.anthropic_api_key` | Your Anthropic key (only if using Claude) |
-| `markdown.vault_path` | Path to your Obsidian vault meetings folder |
-| `audio.blackhole_device_name` | Usually `"BlackHole 2ch"` |
-| `audio.mic_device_name` | Microphone name (empty = system default) |
-| `audio.mic_volume` | Mic gain relative to system audio (`0.0`–`2.0`) |
-| `audio.system_volume` | System audio gain after normalisation (`0.0`–`2.0`) |
-| `diarisation.enabled` | `true` to label speakers as "Me" / "Remote" |
+Edit `config.yaml` — the essential settings:
+
+| Setting                           | Description                                  | Default                |
+| --------------------------------- | -------------------------------------------- | ---------------------- |
+| `summarisation.backend`           | `"ollama"` (free, local) or `"claude"` (API) | `ollama`               |
+| `summarisation.ollama_model`      | Ollama model name                            | `qwen3:30b-a3b`        |
+| `summarisation.anthropic_api_key` | Anthropic key (Claude backend only)          | —                      |
+| `audio.blackhole_device_name`     | BlackHole device name                        | `BlackHole 2ch`        |
+| `audio.mic_device_name`           | Microphone (empty = system default)          | `""`                   |
+| `diarisation.enabled`             | Label speakers as "Me" / "Remote"            | `false`                |
+| `diarisation.backend`             | `"energy"` (no ML) or `"pyannote"` (ML)      | `energy`               |
+| `markdown.vault_path`             | Obsidian vault meetings folder               | `~/Documents/Meetings` |
 
 See [`config.example.yaml`](config.example.yaml) for the full reference with all options documented.
+
+---
 
 ## Usage
 
@@ -225,7 +355,7 @@ See [`config.example.yaml`](config.example.yaml) for the full reference with all
 python3 -m src.main
 ```
 
-Polls for active Teams calls and automatically starts/stops recording. Intended for always-on background use. Detection uses debounce (3 consecutive positive polls over ~9 seconds) to prevent false positives.
+Polls for active Teams calls and automatically starts/stops recording. Detection uses debounce (3 consecutive positive polls over ~9 seconds) to prevent false positives.
 
 ### Manual Recording
 
@@ -241,21 +371,29 @@ Starts recording immediately without waiting for Teams detection. Press `Ctrl+C`
 python3 -m src.main --process /path/to/audio.wav
 ```
 
-Skip recording entirely and run an existing audio file through the transcription → summarisation → output pipeline.
+Skip recording and run an existing audio file through the full pipeline.
+
+### Desktop App
+
+```bash
+make dev     # Start Tauri + Vite dev server
+```
+
+Or for production:
+
+```bash
+make build   # Build daemon binary + Tauri .app/.dmg
+make install # Build + install launch agent
+```
 
 ### Run as a Launch Agent (Auto-Start on Login)
 
 ```bash
-# Edit com.meetingmind.agent.plist to set your actual paths, then:
 cp com.meetingmind.agent.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.meetingmind.agent.plist
 ```
 
-To stop:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.meetingmind.agent.plist
-```
+---
 
 ## Output
 
@@ -282,45 +420,20 @@ Followed by the AI-generated summary with sections for:
 
 - **Summary** — High-level overview of what was discussed and why it matters
 - **Key Decisions** — Decisions made during the meeting
-- **Action Items** — Each action item includes full context, specific requirements, owner, deadline, and concrete subtasks
+- **Action Items** — Each item includes full context, owner, deadline, and subtasks
 - **Open Questions** — Unresolved topics for follow-up
-- **Full Transcript** — Timestamped and speaker-labelled transcript (`[00:01:23] [Remote] So the quarterly numbers show...`)
+- **Full Transcript** — Timestamped and speaker-labelled (`[00:01:23] [Remote] So the quarterly numbers...`)
 
 ### Notion
 
 A new page is created in your configured Notion database with:
+
 - **Properties:** Title, Date, Tags (multi-select), Status
 - **Content:** Native Notion blocks — headings, bullets, and to-do items (not raw Markdown)
 
-## Audio Pipeline
+---
 
-MeetingMind records system audio and microphone to **separate WAV files** using independent audio streams, then merges them after capture with RMS normalisation. This design:
-
-- **Eliminates clock drift** — Two hardware devices (e.g. BlackHole virtual device and USB headset) run on independent clocks. Real-time mixing causes progressive desynchronisation. Separate files avoid this entirely.
-- **Balances volume levels** — System audio (remote participants) is typically much quieter than a close-range microphone. Post-capture normalisation brings both sources to the same RMS level before mixing.
-- **Enables speaker diarisation** — The separate source files allow energy-based comparison to determine who was speaking in each segment.
-
-## Speaker Diarisation
-
-When enabled, MeetingMind labels each transcript segment with a speaker identifier by comparing the RMS energy between the system audio and microphone recordings for each time window:
-
-- If the mic is significantly louder → **"Me"** (you were speaking)
-- If the system audio is significantly louder → **"Remote"** (another participant was speaking)
-- If both are similar → **"Me + Remote"** (crosstalk)
-
-This produces transcripts like:
-
-```
-[00:01:23] [Remote] So the quarterly numbers show a 15% increase...
-[00:01:45] [Me] Right, and I think we should focus on the enterprise segment.
-[00:02:10] [Remote] Agreed. Let's draft the proposal by Friday.
-```
-
-The summariser uses these labels to correctly attribute statements, decisions, and action items to the right participants.
-
-> **Tip:** Diarisation works best with headsets (like USB headsets) that isolate your mic from system audio. With open speakers, crosstalk reduces accuracy.
-
-## Configuration Reference
+## Configuration
 
 <details>
 <summary><strong>Full config.example.yaml</strong></summary>
@@ -328,10 +441,11 @@ The summariser uses these labels to correctly attribute statements, decisions, a
 ```yaml
 # Meeting Detection
 detection:
-  poll_interval_seconds: 3         # How often to check for active calls
-  min_meeting_duration_seconds: 30 # Ignore very short calls
-  required_consecutive_detections: 3  # Debounce: consecutive polls before recording
-  process_names:                   # Teams process names to monitor
+  poll_interval_seconds: 3
+  min_meeting_duration_seconds: 30
+  required_consecutive_detections: 3
+  min_gap_before_new_meeting: 60
+  process_names:
     - "Microsoft Teams"
     - "MSTeams"
     - "Teams"
@@ -339,38 +453,43 @@ detection:
 # Audio Capture
 audio:
   blackhole_device_name: "BlackHole 2ch"
-  mic_device_name: ""              # Empty = system default microphone
-  mic_enabled: true                # Capture your voice alongside system audio
-  mic_volume: 1.0                  # 0.0–2.0 gain for microphone input
-  system_volume: 1.0               # 0.0–2.0 gain for system audio after normalisation
-  sample_rate: 16000               # 16kHz mono — optimal for Whisper
+  mic_device_name: ""
+  mic_enabled: true
+  mic_volume: 1.0
+  system_volume: 1.0
+  sample_rate: 16000
   channels: 1
   temp_audio_dir: "/tmp/meetingmind"
-  keep_source_files: false         # Keep separate WAVs (auto-enabled with diarisation)
+  keep_source_files: false
 
-# Transcription
+# Transcription (MLX Whisper — Apple Silicon GPU)
 transcription:
-  model_size: "small.en"           # tiny.en | base.en | small.en | medium.en | large-v3
-  compute_type: "auto"             # int8 on Apple Silicon
-  language: "en"                   # "auto" for language detection
-  cpu_threads: 0                   # 0 = auto-detect
-  vad_threshold: 0.35              # 0.0–1.0, lower keeps more audio (default Whisper: 0.5)
+  model_size: "mlx-community/whisper-large-v3-turbo"
+  language: "en" # "auto" for language detection
+  vad_threshold: 0.35
 
 # Summarisation
 summarisation:
-  backend: "ollama"                # "ollama" or "claude"
+  backend: "ollama"
   ollama_base_url: "http://localhost:11434"
-  ollama_model: "llama3.1:8b"
-  anthropic_api_key: "sk-ant-..."  # Only needed for backend: claude
+  ollama_model: "qwen3:30b-a3b"
+  ollama_timeout: 600
+  ollama_num_ctx: 32768
+  anthropic_api_key: "sk-ant-..."
   model: "claude-sonnet-4-20250514"
   max_tokens: 4096
+  chunk_threshold_words: 20000
+  default_template: "standard" # standard | standup | retro | 1on1 | client-call
 
 # Speaker Diarisation
 diarisation:
-  enabled: false                   # Label speakers as "Me" vs "Remote"
-  speaker_name: "Me"               # Your label in the transcript
-  remote_label: "Remote"           # Remote participants' label
-  energy_ratio_threshold: 1.5      # How decisive the energy comparison must be
+  enabled: false
+  speaker_name: "Me"
+  remote_label: "Remote"
+  energy_ratio_threshold: 1.5
+  backend: "energy" # "energy" or "pyannote"
+  pyannote_model: "pyannote/speaker-diarization-3.1"
+  num_speakers: 0 # 0 = auto-detect (pyannote)
 
 # Output: Markdown
 markdown:
@@ -390,6 +509,17 @@ notion:
     tags: "Tags"
     status: "Status"
 
+# Data Retention
+retention:
+  audio_retention_days: 0 # 0 = keep forever
+  record_retention_days: 0
+
+# API Server
+api:
+  enabled: true
+  host: "127.0.0.1"
+  port: 9876
+
 # Logging
 logging:
   level: "INFO"
@@ -398,6 +528,53 @@ logging:
 
 </details>
 
+---
+
+## API Reference
+
+The daemon exposes a REST + WebSocket API at `http://127.0.0.1:9876`. Interactive Swagger docs available at [`/docs`](http://localhost:9876/docs) when running.
+
+All endpoints require HMAC token authentication. The WebSocket uses a message-based auth handshake.
+
+<details>
+<summary><strong>Endpoints</strong></summary>
+
+| Method   | Endpoint                            | Description                                   |
+| -------- | ----------------------------------- | --------------------------------------------- |
+| `GET`    | `/api/health`                       | Health check                                  |
+| `GET`    | `/api/status`                       | Daemon state + active meeting info            |
+| `GET`    | `/api/meetings`                     | List meetings (paginated, filterable)         |
+| `GET`    | `/api/meetings/{id}`                | Get meeting by ID                             |
+| `DELETE` | `/api/meetings/{id}`                | Delete meeting and audio                      |
+| `GET`    | `/api/meetings/{id}/audio`          | Download meeting audio file                   |
+| `PATCH`  | `/api/meetings/{id}/label`          | Set meeting label                             |
+| `POST`   | `/api/meetings/merge`               | Merge multiple meetings                       |
+| `GET`    | `/api/meetings/labels`              | Get distinct labels                           |
+| `POST`   | `/api/meetings/{id}/resummarise`    | Re-summarise with different template          |
+| `POST`   | `/api/meetings/{id}/reprocess`      | Reprocess from audio (transcribe + summarise) |
+| `POST`   | `/api/record/start`                 | Start recording manually                      |
+| `POST`   | `/api/record/stop`                  | Stop recording                                |
+| `GET`    | `/api/config`                       | Get current configuration                     |
+| `PUT`    | `/api/config`                       | Update configuration                          |
+| `GET`    | `/api/devices`                      | List audio input/output devices               |
+| `GET`    | `/api/models`                       | List available Whisper models                 |
+| `POST`   | `/api/models/download`              | Download a Whisper model                      |
+| `POST`   | `/api/search`                       | Full-text + semantic search                   |
+| `POST`   | `/api/search/reindex`               | Rebuild search index                          |
+| `GET`    | `/api/templates`                    | List summary templates                        |
+| `GET`    | `/api/templates/{name}`             | Get template by name                          |
+| `POST`   | `/api/templates`                    | Create custom template                        |
+| `DELETE` | `/api/templates/{name}`             | Delete custom template                        |
+| `PATCH`  | `/api/meetings/{id}/speakers/{sid}` | Rename speaker                                |
+| `GET`    | `/api/meetings/{id}/speakers`       | Get speakers for meeting                      |
+| `GET`    | `/api/speakers`                     | Get all known speakers                        |
+| `POST`   | `/api/export/{id}`                  | Export meeting (Markdown/JSON)                |
+| `WS`     | `/ws`                               | Real-time events (meeting updates, progress)  |
+
+</details>
+
+---
+
 ## Project Structure
 
 ```
@@ -405,61 +582,49 @@ meeting-mind/
 ├── config.example.yaml              # Config template (tracked)
 ├── meetingmind.spec                 # PyInstaller build spec
 ├── pyproject.toml                   # Project metadata, pytest & ruff config
-├── com.meetingmind.agent.plist      # launchd agent for auto-start
-├── scripts/
-│   ├── build_daemon.sh              # Build standalone daemon binary
-│   └── bump_version.sh              # Sync version across all manifests
-├── src/
-│   ├── __main__.py                  # Entry point for frozen binary
+├── Makefile                         # Build automation (setup, build, test, lint)
+├── com.meetingmind.agent.plist      # launchd agent for auto-start on login
+│
+├── src/                             # Python daemon
 │   ├── main.py                      # Orchestrator (MeetingMind class)
 │   ├── detector.py                  # State machine + debounce logic
-│   ├── audio_capture.py             # Dual-source audio recording + merge
-│   ├── transcriber.py               # faster-whisper speech-to-text
+│   ├── audio_capture.py             # Dual-source recording + RMS merge
+│   ├── transcriber.py               # MLX Whisper speech-to-text
 │   ├── diariser.py                  # Energy-based speaker labelling
+│   ├── pyannote_diariser.py         # PyAnnote ML-based diarisation
 │   ├── summariser.py                # AI summarisation (Ollama / Claude)
+│   ├── templates.py                 # Summary template system
+│   ├── embeddings.py                # Semantic search (sentence-transformers)
 │   ├── platform/
 │   │   ├── detector.py              # PlatformDetector protocol + factory
 │   │   ├── macos.py                 # macOS detection (pgrep, lsof, osascript)
-│   │   ├── linux.py                 # Linux stub (not yet implemented)
-│   │   └── windows.py               # Windows stub (not yet implemented)
+│   │   ├── linux.py                 # Linux stub
+│   │   └── windows.py               # Windows stub
 │   ├── api/
 │   │   ├── server.py                # FastAPI app + background thread
 │   │   ├── auth.py                  # HMAC token authentication
 │   │   ├── schemas.py               # Pydantic response models
 │   │   ├── events.py                # EventBus (sync/async pub-sub)
 │   │   ├── websocket.py             # WebSocket connection manager
-│   │   └── routes/
-│   │       ├── status.py            # GET /api/health, /api/status
-│   │       ├── meetings.py          # CRUD /api/meetings
-│   │       ├── recording.py         # POST /api/record/start, /stop
-│   │       ├── config.py            # GET/PUT /api/config
-│   │       ├── devices.py           # GET /api/devices
-│   │       ├── models.py            # GET /api/models, POST download
-│   │       ├── export.py            # POST /api/export/{id}
-│   │       └── resummarise.py       # POST /api/meetings/{id}/resummarise
+│   │   └── routes/                  # 14 route modules (see API Reference)
 │   ├── db/
-│   │   ├── database.py              # SQLite + FTS5 schema
-│   │   └── repository.py            # Meeting CRUD + search + retention
+│   │   ├── database.py              # SQLite + FTS5 schema + migrations
+│   │   └── repository.py            # Meeting CRUD, search, retention cleanup
 │   ├── output/
 │   │   ├── markdown_writer.py       # Obsidian-compatible .md output
 │   │   └── notion_writer.py         # Notion database page output
 │   └── utils/
-│       └── config.py                # YAML config loader (typed dataclasses)
-├── tests/
-│   ├── conftest.py                  # Shared fixtures (tmp DB, config, EventBus)
-│   ├── test_config.py               # Config loading and validation
-│   ├── test_repository.py           # Meeting CRUD, search, retention
-│   ├── test_events.py               # EventBus sync/async callbacks
-│   ├── test_platform.py             # Platform factory and protocol
-│   └── test_api.py                  # API integration tests (httpx)
-├── ui/                              # Tauri + React desktop app
+│       └── config.py                # YAML config → typed dataclasses
+│
+├── ui/                              # Tauri v2 + React desktop app
 │   ├── src/
 │   │   ├── App.tsx                  # Router + layout
 │   │   ├── components/
-│   │   │   ├── dashboard/           # Dashboard with stats and recent meetings
+│   │   │   ├── dashboard/           # Stats, recent meetings, quick actions
 │   │   │   ├── meetings/            # MeetingList, MeetingDetail, AudioPlayer
-│   │   │   ├── live/                # LiveView (real-time transcript + meters)
-│   │   │   ├── settings/            # Settings UI with all config sections
+│   │   │   ├── search/              # Full-text + semantic search UI
+│   │   │   ├── live/                # Real-time transcript + audio meters
+│   │   │   ├── settings/            # All config sections
 │   │   │   ├── onboarding/          # Setup wizard (permissions, devices, models)
 │   │   │   ├── layout/              # Sidebar navigation
 │   │   │   └── common/              # Toast, Skeleton, Tooltip, CommandPalette
@@ -467,92 +632,93 @@ meeting-mind/
 │   │   ├── stores/                  # Zustand state management
 │   │   └── lib/                     # API client, types, constants
 │   └── src-tauri/
-│       ├── src/lib.rs               # Tauri commands (auth, updates, daemon path)
+│       ├── src/lib.rs               # Tauri commands (auth, updates, daemon)
 │       ├── src/tray.rs              # System tray with dynamic menu
 │       └── tauri.conf.json          # App config, bundling, updater
+│
+├── tests/                           # 31 test files, ~5700 lines
+│   ├── conftest.py                  # Shared fixtures (tmp DB, config, EventBus)
+│   ├── test_api*.py                 # API integration tests (11 files)
+│   ├── test_repository.py           # Meeting CRUD, search, retention
+│   ├── test_config*.py              # Config loading, validation, edge cases
+│   ├── test_detector.py             # State machine transitions
+│   ├── test_summariser.py           # Both backends
+│   ├── test_templates.py            # Template CRUD + built-ins
+│   ├── test_embeddings.py           # Semantic search
+│   └── ...                          # Audio, diarisation, platform, orchestrator
+│
+├── scripts/
+│   ├── build_daemon.sh              # PyInstaller daemon binary
+│   ├── install.sh                   # Build + install launch agent
+│   ├── create_dmg.sh               # Create macOS .dmg installer
+│   ├── bump_version.sh              # Sync version across all manifests
+│   └── generate_icons.py            # Generate app icons from source
+│
 └── .github/workflows/
-    ├── test.yml                     # CI: lint + pytest + TypeScript check
+    ├── test.yml                     # CI: ruff lint + pytest + TypeScript check
     └── release.yml                  # CD: build daemon → build app → GitHub Release
 ```
 
+---
+
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| **Desktop app** | [Tauri v2](https://v2.tauri.app/) (Rust) + [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
-| **Styling** | [Tailwind CSS](https://tailwindcss.com/) |
-| **State management** | [Zustand](https://zustand.docs.pmnd.rs/) + [React Query](https://tanstack.com/query) |
-| **Animations** | [Framer Motion](https://www.framer.com/motion/) |
-| **Daemon API** | [FastAPI](https://fastapi.tiangolo.com/) + WebSocket |
-| **Database** | SQLite + FTS5 (via [aiosqlite](https://github.com/omnilib/aiosqlite)) |
-| **Audio capture** | [sounddevice](https://python-sounddevice.readthedocs.io/) + [BlackHole](https://existential.audio/blackhole/) |
-| **Transcription** | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2) |
-| **Summarisation** | [Ollama](https://ollama.com/) or [Claude API](https://docs.anthropic.com/) |
-| **Diarisation** | Energy-based RMS comparison (numpy) |
-| **Packaging** | [PyInstaller](https://pyinstaller.org/) (daemon binary) |
-| **CI/CD** | GitHub Actions (test, build, release) |
-| **Platform** | macOS (BlackHole, pgrep, lsof, osascript) |
+| Layer                | Technology                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Desktop app**      | [Tauri v2](https://v2.tauri.app/) (Rust) + [React 18](https://react.dev/) + [TypeScript 5](https://www.typescriptlang.org/) |
+| **Styling**          | [Tailwind CSS](https://tailwindcss.com/)                                                                                    |
+| **State management** | [Zustand](https://zustand.docs.pmnd.rs/) + [React Query](https://tanstack.com/query)                                        |
+| **Animations**       | [Framer Motion](https://www.framer.com/motion/)                                                                             |
+| **Daemon API**       | [FastAPI](https://fastapi.tiangolo.com/) + WebSocket                                                                        |
+| **Database**         | SQLite + FTS5 (via [aiosqlite](https://github.com/omnilib/aiosqlite))                                                       |
+| **Audio capture**    | [sounddevice](https://python-sounddevice.readthedocs.io/) + [BlackHole](https://existential.audio/blackhole/)               |
+| **Transcription**    | [MLX Whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) (Apple Silicon GPU)                             |
+| **Embeddings**       | [sentence-transformers](https://www.sbert.net/) (all-MiniLM-L6-v2)                                                          |
+| **Summarisation**    | [Ollama](https://ollama.com/) or [Claude API](https://docs.anthropic.com/)                                                  |
+| **Diarisation**      | Energy-based RMS (numpy) or [PyAnnote](https://github.com/pyannote/pyannote-audio)                                          |
+| **Packaging**        | [PyInstaller](https://pyinstaller.org/) (daemon binary) + Tauri bundler (.app/.dmg)                                         |
+| **CI/CD**            | GitHub Actions (lint, test, build, release)                                                                                 |
+| **Platform**         | macOS Apple Silicon                                                                                                         |
+
+---
 
 ## Development
 
-### Prerequisites
-
-- Python 3.11+
-- Node.js 20+
-- Rust (latest stable)
-- [BlackHole 2ch](https://existential.audio/blackhole/)
-
-### Backend (daemon)
+### Quick Start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-
-# Run daemon in dev mode
-python3 -m src.main
-
-# Run tests
-pytest -v
-
-# Lint
-ruff check src/ tests/
+make setup   # Create venv, install all dependencies
+make dev     # Start Tauri + Vite dev server with hot-reload
 ```
 
-### Frontend (desktop app)
+### Backend (Daemon)
+
+```bash
+source .venv/bin/activate
+python3 -m src.main           # Run daemon
+
+make test                     # Run pytest suite (31 test files)
+make lint                     # Run ruff linter
+```
+
+### Frontend (Desktop App)
 
 ```bash
 cd ui
 npm install
-
-# Dev mode (starts Vite + Tauri)
-npm run tauri dev
-
-# Type check
-npx tsc --noEmit
+npm run tauri dev             # Dev mode with hot-reload
+npx tsc --noEmit              # Type check
 ```
 
-### API Documentation
-
-The daemon serves interactive API docs at [http://localhost:9876/docs](http://localhost:9876/docs) (Swagger UI) when running.
-
-## Building
-
-### Daemon Binary (PyInstaller)
+### Build for Distribution
 
 ```bash
-./scripts/build_daemon.sh
-# Output: dist/meetingmind-daemon/meetingmind-daemon
-```
+make build                    # Build daemon binary + Tauri .app/.dmg
+make install                  # Build + install launch agent
 
-### Desktop App (Tauri)
-
-```bash
-# Copy daemon binary into Tauri resources first
-cp -r dist/meetingmind-daemon ui/src-tauri/resources/
-
-# Build the .app / .dmg
-cd ui && npm run tauri build
+# Or step by step:
+./scripts/build_daemon.sh     # PyInstaller → dist/meetingmind-daemon/
+cd ui && npm run tauri build  # Tauri → .app + .dmg
 ```
 
 ### Version Bumping
@@ -562,15 +728,22 @@ cd ui && npm run tauri build
 # Updates tauri.conf.json, Cargo.toml, and package.json
 ```
 
+### API Documentation
+
+The daemon serves interactive Swagger UI at [`http://localhost:9876/docs`](http://localhost:9876/docs) when running.
+
+---
+
 ## Troubleshooting
 
-### No audio captured (silent recording)
+<details>
+<summary><strong>No audio captured (silent recording)</strong></summary>
 
 1. Verify BlackHole is installed: `brew list blackhole-2ch`
 2. Check your system output is set to the Multi-Output Device (not directly to speakers)
-3. **Check Teams' speaker setting** — go to Teams → Settings → Devices → Speaker and ensure it's set to "Multi-Output Device" or "System Default". If Teams sends audio directly to your headset, BlackHole won't capture it.
+3. **Check Teams' speaker setting** — go to Teams → Settings → Devices → Speaker and ensure it's set to "Multi-Output Device" or "System Default"
 4. Run `python3 -m sounddevice` to confirm BlackHole appears as an input device
-5. Verify audio is flowing:
+5. Test audio capture:
 
 ```bash
 python3 -c "
@@ -583,43 +756,64 @@ print('Signal detected' if peak > 0.001 else 'SILENT — check audio routing')
 "
 ```
 
-### VAD removes all audio
+</details>
 
-The faster-whisper VAD filter discards segments it classifies as silence. If your audio is very quiet, the entire recording may be filtered out. Try lowering `transcription.vad_threshold` in your config (default: `0.35`, lower is less aggressive). Check that the Multi-Output Device is configured correctly and that your system volume is not muted.
+<details>
+<summary><strong>VAD removes all audio</strong></summary>
 
-### Daemon detects a meeting when Teams is just open
+The Whisper VAD filter discards segments classified as silence. If your audio is very quiet, the entire recording may be filtered out. Try lowering `transcription.vad_threshold` in your config (default: `0.35`, lower = less aggressive).
 
-The detector requires multiple consecutive positive polls (default: 3, or ~9 seconds) before triggering. If false positives persist, increase `detection.required_consecutive_detections` in your config.
+</details>
 
-### Ollama connection refused
+<details>
+<summary><strong>False positive meeting detection</strong></summary>
+
+The detector requires 3 consecutive positive polls (~9 seconds) before triggering. If false positives persist, increase `detection.required_consecutive_detections` in your config.
+
+</details>
+
+<details>
+<summary><strong>Ollama connection refused</strong></summary>
 
 Ensure the Ollama server is running (`ollama serve`) and listening on the configured port (default: `http://localhost:11434`).
 
-### Diarisation labels are inaccurate
+</details>
 
-- Use a headset with good mic isolation for best results. Open speakers cause crosstalk.
-- Adjust `diarisation.energy_ratio_threshold` — lower values (e.g. `1.2`) are more decisive, higher values (e.g. `2.0`) require a bigger energy difference.
+<details>
+<summary><strong>Diarisation labels are inaccurate</strong></summary>
+
+- Use a headset with good mic isolation. Open speakers cause crosstalk.
+- Adjust `diarisation.energy_ratio_threshold` — lower (e.g. `1.2`) is more decisive, higher (e.g. `2.0`) requires bigger energy differences.
+- For multi-speaker calls, switch to the `pyannote` backend for voice-characteristic-based labelling.
+
+</details>
+
+---
 
 ## Roadmap
 
-Short-term and exploratory directions. Contributions or issue-tracked suggestions welcome.
+Contributions and issue-tracked suggestions welcome.
 
-- **Windows and Linux support** — platform stubs exist at `src/platform/windows.py` and `src/platform/linux.py`. Needs WASAPI loopback (Windows) and PulseAudio / PipeWire monitor sources (Linux) to replace BlackHole.
-- **More meeting platforms** — extend the detector to recognise Zoom, Google Meet, Slack Huddles, and Discord calls alongside Teams.
-- **Model-based diarisation** — optional upgrade path from energy-based labelling to `pyannote.audio` for multi-speaker calls where two remote participants need to be distinguished.
-- **Speaker name enrichment** — attach real participant names by cross-referencing the Teams meeting invitation or participant list.
-- **Retrieval across meeting history** — vector-index transcripts so the app can answer questions like *"what did we decide about the pricing model last quarter?"* across the full archive.
-- **Summary templates** — user-definable prompts so each team can shape summaries around their own rituals (stand-ups, retros, 1:1s).
+- [ ] **Windows and Linux support** — platform stubs exist at `src/platform/`. Needs WASAPI loopback (Windows) and PulseAudio/PipeWire monitor sources (Linux).
+- [ ] **More meeting platforms** — extend the detector to recognise Zoom, Google Meet, Slack Huddles, and Discord calls.
+- [ ] **Speaker name enrichment** — attach real participant names by cross-referencing Teams meeting invitations.
+- [ ] **Cross-meeting retrieval** — query across meeting history: _"what did we decide about pricing last quarter?"_
+- [ ] **Real-time transcription** — stream transcript to the UI during recording (currently post-capture only).
+- [ ] **Calendar integration** — auto-tag meetings with calendar event titles and attendees.
+
+---
 
 ## Author
 
-**Jamie White** — early-career software engineer building Meeting Mind as a personal product focused on local-first, privacy-respecting tooling.
+**Jamie White** — early-career software engineer building MeetingMind as a personal product focused on local-first, privacy-respecting tooling.
 
-- Portfolio — <https://jamie-white-portfolio.vercel.app>
-- GitHub — [@JWhite212](https://github.com/JWhite212)
-- LinkedIn — <https://www.linkedin.com/in/jamie-white-swe/>
+<p>
+  <a href="https://jamie-white-portfolio.vercel.app">Portfolio</a> ·
+  <a href="https://github.com/JWhite212">GitHub</a> ·
+  <a href="https://www.linkedin.com/in/jamie-white-swe/">LinkedIn</a>
+</p>
 
-If you are hiring for a software engineering role and want to discuss how Meeting Mind was built — from the dual-source audio pipeline to on-device transcription, speaker diarisation, and the Tauri-based desktop shell — email **jamiecs@live.co.uk**.
+If you're hiring for a software engineering role and want to discuss how MeetingMind was built — from the dual-source audio pipeline to on-device GPU transcription, speaker diarisation, and the Tauri desktop shell — email **jamiecs@live.co.uk**.
 
 ## License
 

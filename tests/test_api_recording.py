@@ -27,10 +27,12 @@ def _reset_recording_globals():
     """Reset module-level globals before and after each test."""
     recording_routes._start_recording = None
     recording_routes._stop_recording = None
+    recording_routes._stop_recording_deferred = None
     recording_routes._is_recording = None
     yield
     recording_routes._start_recording = None
     recording_routes._stop_recording = None
+    recording_routes._stop_recording_deferred = None
     recording_routes._is_recording = None
 
 
@@ -47,6 +49,7 @@ def test_start_recording_success(_patch_auth):
     recording_routes.init(
         start_recording=lambda: started.append(True),
         stop_recording=lambda: None,
+        stop_deferred=lambda: "",
         is_recording=lambda: False,
     )
     app = _make_recording_app()
@@ -63,6 +66,7 @@ def test_start_recording_already_recording(_patch_auth):
     recording_routes.init(
         start_recording=lambda: None,
         stop_recording=lambda: None,
+        stop_deferred=lambda: "",
         is_recording=lambda: True,
     )
     app = _make_recording_app()
@@ -84,6 +88,7 @@ def test_stop_recording_success(_patch_auth):
     recording_routes.init(
         start_recording=lambda: None,
         stop_recording=lambda: stopped.append(True),
+        stop_deferred=lambda: "",
         is_recording=lambda: True,
     )
     app = _make_recording_app()
@@ -98,6 +103,7 @@ def test_stop_recording_not_recording(_patch_auth):
     recording_routes.init(
         start_recording=lambda: None,
         stop_recording=lambda: None,
+        stop_deferred=lambda: "",
         is_recording=lambda: False,
     )
     app = _make_recording_app()

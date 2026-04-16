@@ -121,10 +121,13 @@ class Transcriber:
 
         segments = []
         for seg_dict in result.get("segments", []):
+            text = seg_dict["text"].strip()
+            if not text:
+                continue
             ts = TranscriptSegment(
                 start=seg_dict["start"],
                 end=seg_dict["end"],
-                text=seg_dict["text"],
+                text=text,
             )
             segments.append(ts)
             if on_segment:

@@ -21,7 +21,8 @@ export type MeetingStatus =
   | "summarising"
   | "writing"
   | "complete"
-  | "error";
+  | "error"
+  | "pending";
 
 export interface Meeting {
   id: string;
@@ -188,7 +189,8 @@ export interface RecordingStartResponse {
 }
 
 export interface RecordingStopResponse {
-  status: "stopping";
+  status: "stopping" | "deferred";
+  meeting_id?: string;
 }
 
 /** Audio device info from the daemon. */

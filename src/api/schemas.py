@@ -31,6 +31,7 @@ class StatusResponse(BaseModel):
 
 class MeetingResponse(BaseModel):
     """Single meeting record (serialised via Meeting.to_dict())."""
+
     model_config = ConfigDict(extra="allow")
 
     id: str
@@ -61,6 +62,7 @@ class RecordStartResponse(BaseModel):
 
 class RecordStopResponse(BaseModel):
     status: str
+    meeting_id: str | None = None
 
 
 # ---------- Devices ----------

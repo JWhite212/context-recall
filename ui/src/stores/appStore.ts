@@ -50,19 +50,32 @@ export const useAppStore = create<AppState>((set) => ({
         set({ pipelineStage: event.stage });
         break;
       case "pipeline.complete":
-        set({ pipelineStage: null, liveSegments: [], audioLevels: { system: 0, mic: 0 } });
+        set({
+          pipelineStage: null,
+          liveSegments: [],
+          audioLevels: { system: 0, mic: 0 },
+        });
         break;
       case "pipeline.error":
         set({ pipelineStage: null, audioLevels: { system: 0, mic: 0 } });
         break;
       case "transcript.segment":
+        if (!event.segment?.text?.trim()) break;
         set((state) => {
           const segments = [...state.liveSegments, event.segment];
-          return { liveSegments: segments.length > 200 ? segments.slice(-200) : segments };
+          return {
+            liveSegments:
+              segments.length > 200 ? segments.slice(-200) : segments,
+          };
         });
         break;
       case "audio.level":
-        set({ audioLevels: { system: event.system_rms ?? 0, mic: event.mic_rms ?? 0 } });
+        set({
+          audioLevels: {
+            system: event.system_rms ?? 0,
+            mic: event.mic_rms ?? 0,
+          },
+        });
         break;
       case "model.download.progress":
         set((state) => ({
@@ -75,5 +88,10 @@ export const useAppStore = create<AppState>((set) => ({
     }
   },
 
-  resetLive: () => set({ pipelineStage: null, liveSegments: [], audioLevels: { system: 0, mic: 0 } }),
+  resetLive: () =>
+    set({
+      pipelineStage: null,
+      liveSegments: [],
+      audioLevels: { system: 0, mic: 0 },
+    }),
 }));
