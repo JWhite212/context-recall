@@ -10,6 +10,7 @@ import type {
   RecordingStartResponse,
   RecordingStopResponse,
   StatusResponse,
+  SummaryTemplate,
 } from "./types";
 
 import { API_BASE } from "./constants";
@@ -120,10 +121,17 @@ export async function downloadModel(name: string): Promise<{ status: string }> {
 
 export async function resummariseMeeting(
   id: string,
+  templateName?: string,
 ): Promise<{ meeting_id: string; title: string; tags: string[] }> {
-  return request(`/api/meetings/${encodeURIComponent(id)}/resummarise`, {
-    method: "POST",
-  });
+  const params = templateName
+    ? `?template_name=${encodeURIComponent(templateName)}`
+    : "";
+  return request(
+    `/api/meetings/${encodeURIComponent(id)}/resummarise${params}`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 export async function exportMeeting(
@@ -164,4 +172,27 @@ export async function setMeetingLabel(
 export async function getMeetingLabels(): Promise<string[]> {
   const data = await request<{ labels: string[] }>("/api/meetings/labels");
   return data.labels;
+}
+
+export async function getTemplates(): Promise<SummaryTemplate[]> {
+  return request<SummaryTemplate[]>("/api/templates");
+}
+
+export async function getTemplate(name: string): Promise<SummaryTemplate> {
+  return request<SummaryTemplate>(`/api/templates/${encodeURIComponent(name)}`);
+}
+
+export async function saveTemplate(
+  template: Omit<SummaryTemplate, never>,
+): Promise<SummaryTemplate> {
+  return request<SummaryTemplate>("/api/templates", {
+    method: "POST",
+    body: JSON.stringify(template),
+  });
+}
+
+export async function deleteTemplate(name: string): Promise<void> {
+  await request(`/api/templates/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
 }

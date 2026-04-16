@@ -10,6 +10,7 @@ import {
   resummariseMeeting,
   setMeetingLabel,
   getMeetingLabels,
+  getTemplates,
 } from "../../lib/api";
 import { API_BASE } from "../../lib/constants";
 import type { TranscriptSegment } from "../../lib/types";
@@ -252,8 +253,17 @@ export function MeetingDetail() {
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [resummariseOpen, setResummariseOpen] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState("standard");
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const resummariseMenuRef = useRef<HTMLDivElement>(null);
   const audioSeekRef = useRef<AudioSeekHandle | null>(null);
+
+  const { data: templates = [] } = useQuery({
+    queryKey: ["templates"],
+    queryFn: getTemplates,
+    staleTime: 60_000,
+  });
 
   // Close export dropdown on Escape or click outside.
   useEffect(() => {
@@ -276,6 +286,28 @@ export function MeetingDetail() {
       document.removeEventListener("mousedown", handleClick);
     };
   }, [exportOpen]);
+
+  // Close re-summarise popover on Escape or click outside.
+  useEffect(() => {
+    if (!resummariseOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setResummariseOpen(false);
+    };
+    const handleClick = (e: MouseEvent) => {
+      if (
+        resummariseMenuRef.current &&
+        !resummariseMenuRef.current.contains(e.target as Node)
+      ) {
+        setResummariseOpen(false);
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [resummariseOpen]);
 
   const {
     data: meeting,
@@ -300,10 +332,12 @@ export function MeetingDetail() {
   });
 
   const resummarise = useMutation({
-    mutationFn: () => resummariseMeeting(id!),
+    mutationFn: (templateName?: string) =>
+      resummariseMeeting(id!, templateName),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["meeting", id] });
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      setResummariseOpen(false);
     },
   });
 
@@ -438,27 +472,60 @@ export function MeetingDetail() {
       <div className="flex items-center gap-2">
         {/* Re-summarise */}
         {hasTranscript && (
-          <button
-            onClick={() => resummarise.mutate()}
-            disabled={resummarise.isPending}
-            className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
+          <div className="relative inline-block" ref={resummariseMenuRef}>
+            <button
+              onClick={() => setResummariseOpen(!resummariseOpen)}
+              disabled={resummarise.isPending}
+              className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
-              <polyline points="23 4 23 10 17 10" />
-              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-            </svg>
-            {resummarise.isPending ? "Summarising..." : "Re-summarise"}
-          </button>
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <polyline points="23 4 23 10 17 10" />
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+              {resummarise.isPending ? "Summarising..." : "Re-summarise"}
+            </button>
+            {resummariseOpen && (
+              <div className="absolute left-0 mt-1 w-56 rounded-lg bg-surface-raised border border-border shadow-lg z-10 p-3 flex flex-col gap-2">
+                <label className="text-xs text-text-muted">Template</label>
+                <select
+                  value={selectedTemplate}
+                  onChange={(e) => setSelectedTemplate(e.target.value)}
+                  className="w-full bg-surface border border-border rounded-lg px-2 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent appearance-none cursor-pointer"
+                >
+                  {templates.map((t) => (
+                    <option key={t.name} value={t.name}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex gap-2 justify-end mt-1">
+                  <button
+                    onClick={() => setResummariseOpen(false)}
+                    className="px-2 py-1 text-xs rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => resummarise.mutate(selectedTemplate)}
+                    disabled={resummarise.isPending}
+                    className="px-2 py-1 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                  >
+                    {resummarise.isPending ? "Summarising..." : "Re-summarise"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
         {resummarise.isError && (
           <span className="text-xs text-status-error">
