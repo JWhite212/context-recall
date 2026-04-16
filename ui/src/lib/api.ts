@@ -11,6 +11,7 @@ import type {
   RecordingStopResponse,
   ReindexResponse,
   SearchResponse,
+  SpeakerMapping,
   StatusResponse,
   SummaryTemplate,
 } from "./types";
@@ -213,4 +214,26 @@ export async function reindexMeetings(): Promise<ReindexResponse> {
   return request<ReindexResponse>("/api/search/reindex", {
     method: "POST",
   });
+}
+
+export async function getMeetingSpeakers(
+  meetingId: string,
+): Promise<SpeakerMapping[]> {
+  return request<SpeakerMapping[]>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/speakers`,
+  );
+}
+
+export async function setSpeakerName(
+  meetingId: string,
+  speakerId: string,
+  displayName: string,
+): Promise<void> {
+  await request(
+    `/api/meetings/${encodeURIComponent(meetingId)}/speakers/${encodeURIComponent(speakerId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ display_name: displayName }),
+    },
+  );
 }

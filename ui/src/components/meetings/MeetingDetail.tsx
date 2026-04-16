@@ -11,6 +11,7 @@ import {
   setMeetingLabel,
   getMeetingLabels,
   getTemplates,
+  setSpeakerName,
 } from "../../lib/api";
 import { API_BASE } from "../../lib/constants";
 import type { TranscriptSegment } from "../../lib/types";
@@ -50,12 +51,97 @@ function HighlightText({ text, query }: { text: string; query: string }) {
   );
 }
 
+const SPEAKER_COLORS = [
+  "text-blue-400",
+  "text-emerald-400",
+  "text-amber-400",
+  "text-purple-400",
+  "text-rose-400",
+  "text-cyan-400",
+  "text-orange-400",
+  "text-lime-400",
+];
+
+function getSpeakerColor(speaker: string, speakerList: string[]): string {
+  const idx = speakerList.indexOf(speaker);
+  return SPEAKER_COLORS[idx % SPEAKER_COLORS.length] || SPEAKER_COLORS[0];
+}
+
+function SpeakerLabel({
+  speaker,
+  meetingId,
+  color,
+  onRenamed,
+}: {
+  speaker: string;
+  meetingId: string;
+  color: string;
+  onRenamed: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(speaker);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const handleSubmit = async () => {
+    const trimmed = name.trim();
+    if (trimmed && trimmed !== speaker) {
+      try {
+        await setSpeakerName(meetingId, speaker, trimmed);
+        onRenamed();
+      } catch {
+        setName(speaker); // revert on error
+      }
+    }
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onBlur={handleSubmit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") handleSubmit();
+          if (e.key === "Escape") {
+            setName(speaker);
+            setEditing(false);
+          }
+        }}
+        className="px-1 py-0.5 text-xs rounded bg-surface border border-border text-text-primary w-24"
+      />
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setEditing(true)}
+      className={`${color} text-xs font-medium hover:underline cursor-pointer`}
+      title="Click to rename speaker"
+    >
+      [{speaker}]
+    </button>
+  );
+}
+
 function TranscriptView({
   json,
+  meetingId,
   onSeek,
+  onRenamed,
 }: {
   json: string;
+  meetingId: string;
   onSeek?: (seconds: number) => void;
+  onRenamed: () => void;
 }) {
   const [search, setSearch] = useState("");
 
@@ -72,6 +158,10 @@ function TranscriptView({
   if (segments.length === 0) {
     return <p className="text-sm text-text-muted">No transcript segments.</p>;
   }
+
+  const uniqueSpeakers = Array.from(
+    new Set(segments.map((s) => s.speaker).filter(Boolean)),
+  );
 
   const query = search.trim().toLowerCase();
   const filtered = query
@@ -100,9 +190,14 @@ function TranscriptView({
       {/* Segments */}
       <div className="flex flex-col gap-0.5">
         {filtered.map((seg, i) => (
-          <button
+          <div
             key={i}
             onClick={() => onSeek?.(seg.start)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") onSeek?.(seg.start);
+            }}
             className={`flex gap-3 py-1.5 px-1 rounded-md text-left transition-colors ${
               onSeek ? "hover:bg-sidebar-hover cursor-pointer" : ""
             }`}
@@ -112,17 +207,23 @@ function TranscriptView({
             </span>
             {seg.speaker && (
               <span
-                className={`text-[11px] font-medium w-14 shrink-0 pt-0.5 ${
-                  seg.speaker === "Me" ? "text-accent" : "text-status-idle"
-                }`}
+                className="w-14 shrink-0 pt-0.5"
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                role="presentation"
               >
-                {seg.speaker}
+                <SpeakerLabel
+                  speaker={seg.speaker}
+                  meetingId={meetingId}
+                  color={getSpeakerColor(seg.speaker, uniqueSpeakers)}
+                  onRenamed={onRenamed}
+                />
               </span>
             )}
             <span className="text-sm text-text-primary leading-relaxed">
               <HighlightText text={seg.text} query={search.trim()} />
             </span>
-          </button>
+          </div>
         ))}
         {query && filtered.length === 0 && (
           <p className="text-xs text-text-muted py-4 text-center">
@@ -703,8 +804,14 @@ export function MeetingDetail() {
             ) : activeTab === "transcript" && hasTranscript ? (
               <TranscriptView
                 json={meeting.transcript_json!}
+                meetingId={meeting.id}
                 onSeek={
                   hasAudio ? (s) => audioSeekRef.current?.seekTo(s) : undefined
+                }
+                onRenamed={() =>
+                  queryClient.invalidateQueries({
+                    queryKey: ["meeting", id],
+                  })
                 }
               />
             ) : (
