@@ -79,8 +79,10 @@ class SummarisationConfig:
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 8192
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "llama3.1:8b"
+    ollama_model: str = "qwen3:30b-a3b"
     ollama_timeout: int = 600  # Seconds per Ollama request.
+    chunk_threshold_words: int = 20000  # Words above which transcripts are chunked.
+    ollama_num_ctx: int = 32768  # Context window size for Ollama requests.
 
     def __repr__(self) -> str:
         key_display = "****" if self.anthropic_api_key else "<not set>"

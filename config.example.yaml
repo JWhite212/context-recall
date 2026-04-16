@@ -79,10 +79,13 @@ summarisation:
   backend: "ollama"
 
   # --- Ollama settings (used when backend: ollama) ---
-  # Install: https://ollama.com  then: ollama pull llama3.1:8b
+  # Install: https://ollama.com  then: ollama pull qwen3:30b-a3b
   ollama_base_url: "http://localhost:11434"
-  ollama_model: "llama3.1:8b"
+  ollama_model: "qwen3:30b-a3b"
   ollama_timeout: 600  # Seconds per Ollama request (default: 600)
+  # Context window size for Ollama. Must be large enough for full transcript.
+  # 32768 (32K tokens) handles transcripts up to ~24,000 words.
+  ollama_num_ctx: 32768
 
   # --- Claude settings (used when backend: claude) ---
   anthropic_api_key: "sk-ant-..."
@@ -90,6 +93,10 @@ summarisation:
 
   # Maximum tokens for the summary response (applies to both backends).
   max_tokens: 4096
+
+  # Words above which transcripts are split into chunks for summarisation.
+  # With large-context models (128K+), 20000 avoids unnecessary chunking.
+  chunk_threshold_words: 20000
 
 # --- Speaker Diarisation ---
 diarisation:

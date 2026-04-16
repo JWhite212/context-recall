@@ -39,9 +39,6 @@ Claude's 200k context window and most Ollama models' windows.
 
 _ALLOWED_OLLAMA_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
-_CHUNK_THRESHOLD_WORDS = 8000
-"""Word count above which transcripts are split into chunks."""
-
 # Built with parenthesised string concatenation so individual physical lines
 # stay under the project's line-length limit without altering the rendered
 # prompt content sent to the LLM.
@@ -345,7 +342,7 @@ class Summariser:
         """Summarise using the Anthropic Claude API."""
         text, word_count = self._prepare_transcript(transcript)
 
-        if word_count > 8000:
+        if word_count > self._config.chunk_threshold_words:
             return self._summarise_chunked_claude(
                 transcript,
                 text,
@@ -442,6 +439,7 @@ class Summariser:
             "stream": False,
             "options": {
                 "num_predict": self._config.max_tokens,
+                "num_ctx": self._config.ollama_num_ctx,
             },
         }
 
@@ -551,7 +549,7 @@ class Summariser:
         model = self._config.ollama_model
         base_url = self._validate_ollama_url(self._config.ollama_base_url)
 
-        if word_count > 8000:
+        if word_count > self._config.chunk_threshold_words:
             return self._summarise_chunked_ollama(
                 transcript,
                 text,
@@ -587,7 +585,14 @@ class Summariser:
         if backend == "claude":
             summary = self._summarise_claude(transcript)
         elif backend == "ollama":
-            summary = self._summarise_ollama(transcript)
+            try:
+                summary = self._summarise_ollama(transcript)
+            except TimeoutError:
+                if self._config.anthropic_api_key:
+                    logger.warning("Ollama timed out. Falling back to Claude API...")
+                    summary = self._summarise_claude(transcript)
+                else:
+                    raise
         else:
             raise ValueError(
                 f"Unknown summarisation backend: '{backend}'. Use 'claude' or 'ollama'."
