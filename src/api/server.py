@@ -23,10 +23,12 @@ from src.api.routes import meetings as meetings_routes
 from src.api.routes import models as models_routes
 from src.api.routes import recording as recording_routes
 from src.api.routes import resummarise as resummarise_routes
+from src.api.routes import search as search_routes
 from src.api.routes import status as status_routes
 from src.api.websocket import ConnectionManager
 from src.db.database import Database
 from src.db.repository import MeetingRepository
+from src.embeddings import Embedder, is_embeddings_available
 from src.utils.config import DEFAULT_CONFIG_PATH, load_config
 
 logger = logging.getLogger("meetingmind.api")
@@ -104,13 +106,21 @@ class ApiServer:
         status_routes.init(self._get_daemon_state, self._get_active_meeting)
         meetings_routes.init(self.repo)
         config_routes.init(DEFAULT_CONFIG_PATH)
-        recording_routes.init(
-            self._start_recording, self._stop_recording, self._is_recording
-        )
+        recording_routes.init(self._start_recording, self._stop_recording, self._is_recording)
 
         export_routes.init(self.repo)
         resummarise_routes.init(self.repo)
         models_routes.init(self.event_bus)
+
+        # Initialise embedder for semantic search (if available).
+        embedder = None
+        if is_embeddings_available():
+            try:
+                embedder = Embedder()
+            except Exception as e:
+                logger.warning("Failed to initialise embedder: %s", e)
+
+        search_routes.init(self.repo, embedder)
 
         # Register REST routers with auth dependency.
         auth_deps = [Depends(verify_token)]
@@ -122,6 +132,7 @@ class ApiServer:
         app.include_router(export_routes.router, dependencies=auth_deps)
         app.include_router(resummarise_routes.router, dependencies=auth_deps)
         app.include_router(models_routes.router, dependencies=auth_deps)
+        app.include_router(search_routes.router, dependencies=auth_deps)
 
         # WebSocket endpoint with token auth via query parameter.
         @app.websocket("/ws")
@@ -171,9 +182,7 @@ class ApiServer:
         self._app = self._create_app()
 
         # Schedule periodic retention cleanup (every 6 hours).
-        self._retention_task = asyncio.create_task(
-            self._periodic_retention_cleanup()
-        )
+        self._retention_task = asyncio.create_task(self._periodic_retention_cleanup())
 
         uvi_config = uvicorn.Config(
             app=self._app,

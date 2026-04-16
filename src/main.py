@@ -331,6 +331,44 @@ class MeetingMind:
             word_count=transcript.word_count,
         )
 
+        # Step 3b: Embed transcript segments for semantic search (background).
+        try:
+            from src.embeddings import Embedder, is_embeddings_available
+
+            if is_embeddings_available():
+                logger.info("Embedding transcript segments for search...")
+                self._emit("pipeline.stage", meeting_id=meeting_id, stage="embedding")
+                embedder = Embedder()
+                texts = [seg.text.strip() for seg in transcript.segments if seg.text.strip()]
+                if texts:
+                    vectors = embedder.embed(texts)
+                    emb_records = []
+                    text_idx = 0
+                    for i, seg in enumerate(transcript.segments):
+                        if seg.text.strip():
+                            emb_records.append(
+                                {
+                                    "segment_index": i,
+                                    "embedding": vectors[text_idx],
+                                    "text": seg.text.strip(),
+                                    "speaker": seg.speaker,
+                                    "start_time": seg.start,
+                                }
+                            )
+                            text_idx += 1
+
+                    if meeting_id and self._api_server and self._api_server.repo:
+                        loop = self._api_server.loop
+                        if loop and not loop.is_closed():
+                            future = asyncio.run_coroutine_threadsafe(
+                                self._api_server.repo.store_embeddings(meeting_id, emb_records),
+                                loop,
+                            )
+                            future.result(timeout=30)
+                            logger.info("Stored %d segment embeddings", len(emb_records))
+        except Exception as e:
+            logger.warning("Embedding failed (search will still work without it): %s", e)
+
         # Step 4: Write outputs.
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="writing")
 
