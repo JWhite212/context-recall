@@ -200,3 +200,90 @@ async def test_search_meetings_empty_query(repo: MeetingRepository):
     # Should not raise — either returns results or empty list.
     results = await repo.search_meetings("")
     assert isinstance(results, list)
+
+
+# ------------------------------------------------------------------
+# Embedding storage / retrieval tests
+# ------------------------------------------------------------------
+
+
+def _make_embeddings(texts: list[str]) -> list[dict]:
+    """Helper: build embedding dicts with synthetic vectors."""
+    return [
+        {
+            "segment_index": i,
+            "embedding": [float(i) * 0.1, float(i) * 0.2, float(i) * 0.3],
+            "text": text,
+            "speaker": "Me" if i % 2 == 0 else "Remote",
+            "start_time": 1000.0 + i * 5.0,
+        }
+        for i, text in enumerate(texts)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_store_and_retrieve_embeddings(repo: MeetingRepository):
+    """Store embeddings then retrieve them and verify data matches."""
+    meeting_id = await repo.create_meeting(started_at=time.time())
+    embeddings = _make_embeddings(["Hello everyone.", "Let's begin."])
+    await repo.store_embeddings(meeting_id, embeddings)
+
+    result = await repo.get_meeting_embeddings(meeting_id)
+    assert len(result) == 2
+    assert result[0]["text"] == "Hello everyone."
+    assert result[0]["segment_index"] == 0
+    assert result[0]["speaker"] == "Me"
+    assert result[0]["start_time"] == 1000.0
+    assert result[0]["embedding"] == pytest.approx(embeddings[0]["embedding"])
+    assert result[1]["text"] == "Let's begin."
+    assert result[1]["embedding"] == pytest.approx(embeddings[1]["embedding"])
+
+
+@pytest.mark.asyncio
+async def test_store_embeddings_replaces_existing(repo: MeetingRepository):
+    """Storing embeddings twice for the same meeting replaces the first batch."""
+    meeting_id = await repo.create_meeting(started_at=time.time())
+
+    first_batch = _make_embeddings(["First segment."])
+    await repo.store_embeddings(meeting_id, first_batch)
+
+    second_batch = _make_embeddings(["Replaced segment.", "New second segment."])
+    await repo.store_embeddings(meeting_id, second_batch)
+
+    result = await repo.get_meeting_embeddings(meeting_id)
+    assert len(result) == 2
+    assert result[0]["text"] == "Replaced segment."
+    assert result[1]["text"] == "New second segment."
+
+
+@pytest.mark.asyncio
+async def test_get_meeting_embeddings_filters_by_meeting(repo: MeetingRepository):
+    """get_meeting_embeddings only returns embeddings for the requested meeting."""
+    mid_a = await repo.create_meeting(started_at=time.time())
+    mid_b = await repo.create_meeting(started_at=time.time())
+
+    await repo.store_embeddings(mid_a, _make_embeddings(["Meeting A segment."]))
+    await repo.store_embeddings(mid_b, _make_embeddings(["Meeting B segment."]))
+
+    result_a = await repo.get_meeting_embeddings(mid_a)
+    result_b = await repo.get_meeting_embeddings(mid_b)
+
+    assert len(result_a) == 1
+    assert result_a[0]["text"] == "Meeting A segment."
+    assert len(result_b) == 1
+    assert result_b[0]["text"] == "Meeting B segment."
+
+
+@pytest.mark.asyncio
+async def test_get_all_embeddings(repo: MeetingRepository):
+    """get_all_embeddings returns embeddings from all meetings."""
+    mid_a = await repo.create_meeting(started_at=time.time())
+    mid_b = await repo.create_meeting(started_at=time.time())
+
+    await repo.store_embeddings(mid_a, _make_embeddings(["Segment A."]))
+    await repo.store_embeddings(mid_b, _make_embeddings(["Segment B1.", "Segment B2."]))
+
+    result = await repo.get_all_embeddings()
+    assert len(result) == 3
+    texts = {r["text"] for r in result}
+    assert texts == {"Segment A.", "Segment B1.", "Segment B2."}
