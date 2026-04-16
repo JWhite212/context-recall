@@ -245,13 +245,8 @@ class Summariser:
             message = client.messages.create(
                 model=self._config.model,
                 max_tokens=self._config.max_tokens,
-                system=SUMMARISATION_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": self._build_user_message(transcript, text, word_count),
-                    }
-                ],
+                system=system,
+                messages=[{"role": "user", "content": user}],
             )
         except anthropic.RateLimitError:
             logger.error(
