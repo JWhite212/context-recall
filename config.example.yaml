@@ -56,26 +56,21 @@ audio:
   # Required for speaker diarisation. If false, temp files are deleted.
   keep_source_files: false
 
-# --- Transcription ---
+# --- Transcription (MLX Whisper — Apple Silicon GPU acceleration) ---
 transcription:
-  # faster-whisper model size. Options: tiny.en, base.en, small.en,
-  # medium.en, large-v3. Larger models are more accurate but slower.
-  # Recommendation: small.en for M1/M2, medium.en for M2 Pro/Max+.
-  model_size: "small.en"
-
-  # Compute backend. "auto" selects the best available.
-  # Options: auto, cpu, cuda (not applicable on Mac, but future-proof).
-  compute_type: "auto"
+  # MLX Whisper model. Specify a HuggingFace repo from mlx-community.
+  # The model is downloaded and cached automatically on first use.
+  # Options include:
+  #   mlx-community/whisper-tiny.en       (~75 MB, fastest)
+  #   mlx-community/whisper-small.en      (~470 MB)
+  #   mlx-community/whisper-large-v3-turbo (~1.6 GB, best quality)
+  model_size: "mlx-community/whisper-large-v3-turbo"
 
   # Language. Use "en" for English-only models, or "auto" to detect.
   language: "en"
 
-  # Number of CPU threads for inference. 0 = auto-detect.
-  cpu_threads: 0
-
-  # Silero VAD threshold (0.0–1.0). Lower values keep more audio,
-  # higher values filter more aggressively. Default Whisper is 0.5;
-  # 0.35 is recommended to avoid discarding quiet remote audio.
+  # VAD threshold (kept for backward compatibility).
+  # MLX Whisper handles voice activity detection internally.
   vad_threshold: 0.35
 
 # --- Summarisation ---

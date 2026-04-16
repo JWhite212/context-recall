@@ -118,75 +118,33 @@ class TestTranscript:
 # ------------------------------------------------------------------
 
 
-def _make_mock_model():
-    """Build a mock WhisperModel whose transcribe() returns canned data."""
-    mock_model = MagicMock()
-
-    seg1 = MagicMock()
-    seg1.start = 0.0
-    seg1.end = 3.0
-    seg1.text = "First segment."
-
-    seg2 = MagicMock()
-    seg2.start = 3.0
-    seg2.end = 7.0
-    seg2.text = "Second segment."
-
-    info = MagicMock()
-    info.language = "en"
-    info.language_probability = 0.97
-    info.duration = 7.0
-
-    mock_model.transcribe.return_value = ([seg1, seg2], info)
-    return mock_model
+def _make_mlx_result():
+    """Build a canned mlx_whisper.transcribe() return dict."""
+    return {
+        "text": "First segment. Second segment.",
+        "segments": [
+            {"id": 0, "start": 0.0, "end": 3.0, "text": "First segment."},
+            {"id": 1, "start": 3.0, "end": 7.0, "text": "Second segment."},
+        ],
+        "language": "en",
+    }
 
 
 class TestTranscriber:
-    """Verify Transcriber model loading and transcription behaviour."""
+    """Verify Transcriber transcription behaviour with MLX Whisper."""
 
     def test_transcribe_file_not_found(self):
-        config = TranscriptionConfig(model_size="tiny.en")
+        config = TranscriptionConfig()
         transcriber = Transcriber(config)
         with pytest.raises(FileNotFoundError):
             transcriber.transcribe(Path("/nonexistent/audio.wav"))
 
-    @patch("src.transcriber.WhisperModel")
-    def test_load_model_auto_becomes_int8(self, MockWhisperModel):
-        config = TranscriptionConfig(model_size="tiny.en", compute_type="auto")
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_on_segment_callback_error_resilience(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig()
         transcriber = Transcriber(config)
 
-        MockWhisperModel.return_value = _make_mock_model()
-        transcriber._load_model()
-
-        MockWhisperModel.assert_called_once()
-        call_kwargs = MockWhisperModel.call_args
-        assert call_kwargs.kwargs.get("compute_type") == "int8" or \
-            call_kwargs[1].get("compute_type") == "int8"
-
-    @patch("src.transcriber.WhisperModel")
-    def test_load_model_lazy(self, MockWhisperModel):
-        config = TranscriptionConfig(model_size="tiny.en")
-        transcriber = Transcriber(config)
-
-        # Model should not be loaded at construction time.
-        assert transcriber._model is None
-        MockWhisperModel.assert_not_called()
-
-        # After calling _load_model, the model should be set.
-        MockWhisperModel.return_value = MagicMock()
-        transcriber._load_model()
-        assert transcriber._model is not None
-        MockWhisperModel.assert_called_once()
-
-    @patch("src.transcriber.WhisperModel")
-    def test_on_segment_callback_error_resilience(self, MockWhisperModel, tmp_path):
-        config = TranscriptionConfig(model_size="tiny.en")
-        transcriber = Transcriber(config)
-
-        mock_model = _make_mock_model()
-        MockWhisperModel.return_value = mock_model
-        # Also make the Transcriber use our mock when _load_model is called.
-        transcriber._model = mock_model
+        mock_transcribe.return_value = _make_mlx_result()
 
         # Create a dummy audio file so the existence check passes.
         audio_file = tmp_path / "test.wav"
@@ -200,14 +158,12 @@ class TestTranscriber:
         assert len(result.segments) == 2
         assert bad_callback.call_count == 2
 
-    @patch("src.transcriber.WhisperModel")
-    def test_transcribe_returns_transcript(self, MockWhisperModel, tmp_path):
-        config = TranscriptionConfig(model_size="tiny.en")
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_transcribe_returns_transcript(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig()
         transcriber = Transcriber(config)
 
-        mock_model = _make_mock_model()
-        MockWhisperModel.return_value = mock_model
-        transcriber._model = mock_model
+        mock_transcribe.return_value = _make_mlx_result()
 
         audio_file = tmp_path / "test.wav"
         audio_file.write_bytes(b"\x00" * 100)
@@ -216,10 +172,44 @@ class TestTranscriber:
 
         assert isinstance(result, Transcript)
         assert result.language == "en"
-        assert result.language_probability == 0.97
+        assert result.language_probability == 0.0
         assert result.duration_seconds == 7.0
         assert len(result.segments) == 2
         assert result.segments[0].text == "First segment."
         assert result.segments[1].text == "Second segment."
         assert result.segments[0].start == 0.0
         assert result.segments[1].end == 7.0
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_transcribe_empty_segments(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig()
+        transcriber = Transcriber(config)
+
+        mock_transcribe.return_value = {"segments": [], "language": "en", "text": ""}
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+
+        result = transcriber.transcribe(audio_file)
+        assert len(result.segments) == 0
+        assert result.duration_seconds == 0.0
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_transcribe_passes_model_and_language(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig(
+            model_size="mlx-community/whisper-small.en",
+            language="auto",
+        )
+        transcriber = Transcriber(config)
+
+        mock_transcribe.return_value = _make_mlx_result()
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+
+        transcriber.transcribe(audio_file)
+
+        mock_transcribe.assert_called_once()
+        call_kwargs = mock_transcribe.call_args
+        assert call_kwargs.kwargs["path_or_hf_repo"] == "mlx-community/whisper-small.en"
+        assert call_kwargs.kwargs["language"] is None  # "auto" maps to None

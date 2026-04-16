@@ -1,10 +1,10 @@
 """
-Speech-to-text transcription using faster-whisper.
+Speech-to-text transcription using MLX Whisper.
 
 Accepts a WAV file path and returns a structured transcript with
-timestamps. faster-whisper is a CTranslate2-backed reimplementation
-of OpenAI Whisper that runs significantly faster on CPU, making it
-practical for real-time-ish transcription on Apple Silicon.
+timestamps. MLX Whisper runs on Apple Silicon GPU via the MLX
+framework, providing ~10x faster transcription compared to
+CPU-based engines.
 
 Model download happens automatically on first use. Models are cached
 in ~/.cache/huggingface/hub/ by default.
@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from faster_whisper import WhisperModel
+import mlx_whisper
 
 from src.utils.config import TranscriptionConfig
 
@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 class TranscriptSegment:
     """A single timed segment of the transcript."""
 
-    start: float           # Start time in seconds.
-    end: float             # End time in seconds.
-    text: str              # Transcribed text for this segment.
-    speaker: str = ""      # Speaker label (future: diarisation).
+    start: float  # Start time in seconds.
+    end: float  # End time in seconds.
+    text: str  # Transcribed text for this segment.
+    speaker: str = ""  # Speaker label (future: diarisation).
 
     @property
     def timestamp(self) -> str:
@@ -60,9 +60,7 @@ class Transcript:
         lines = []
         for seg in self.segments:
             if seg.speaker:
-                lines.append(
-                    f"{seg.timestamp} [{seg.speaker}] {seg.text.strip()}"
-                )
+                lines.append(f"{seg.timestamp} [{seg.speaker}] {seg.text.strip()}")
             else:
                 lines.append(f"{seg.timestamp} {seg.text.strip()}")
         return "\n".join(lines)
@@ -83,44 +81,14 @@ class Transcript:
 
 class Transcriber:
     """
-    Wraps faster-whisper to provide file-level transcription.
+    Wraps MLX Whisper to provide file-level transcription.
 
-    The model is loaded lazily on first call to transcribe(), so
-    constructing a Transcriber instance is cheap.
+    MLX Whisper runs on Apple Silicon GPU automatically.
+    The model is downloaded and cached on first use.
     """
 
     def __init__(self, config: TranscriptionConfig):
         self._config = config
-        self._model: WhisperModel | None = None
-
-    def _load_model(self) -> WhisperModel:
-        """Load the Whisper model on first use."""
-        if self._model is not None:
-            return self._model
-
-        logger.info(
-            "Loading faster-whisper model '%s' (compute_type=%s)...",
-            self._config.model_size,
-            self._config.compute_type,
-        )
-
-        # Determine compute type for Apple Silicon.
-        compute_type = self._config.compute_type
-        if compute_type == "auto":
-            # int8 is the fastest option on CPU and works well on Apple Silicon.
-            compute_type = "int8"
-
-        cpu_threads = self._config.cpu_threads or 0  # 0 = auto-detect.
-
-        self._model = WhisperModel(
-            self._config.model_size,
-            device="cpu",          # faster-whisper doesn't support MPS yet.
-            compute_type=compute_type,
-            cpu_threads=cpu_threads,
-        )
-
-        logger.info("Model loaded successfully.")
-        return self._model
 
     def transcribe(
         self,
@@ -134,62 +102,55 @@ class Transcriber:
         is produced, enabling real-time streaming to the UI.
 
         The audio file should be 16kHz mono PCM (the format produced
-        by AudioCapture). faster-whisper handles resampling internally
+        by AudioCapture). MLX Whisper handles resampling internally
         if the format differs, but 16kHz is optimal.
         """
         if not audio_path.exists():
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
-        model = self._load_model()
-
         logger.info("Transcribing %s...", audio_path)
         start_time = _time.monotonic()
 
-        segments_iter, info = model.transcribe(
+        language = None if self._config.language == "auto" else self._config.language
+
+        result = mlx_whisper.transcribe(
             str(audio_path),
-            language=self._config.language if self._config.language != "auto" else None,
-            beam_size=5,
-            vad_filter=True,           # Filter out silence for speed.
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-                threshold=self._config.vad_threshold,
-            ),
+            path_or_hf_repo=self._config.model_size,
+            language=language,
         )
 
-        # Materialise the generator into a list of TranscriptSegments.
         segments = []
-        for seg in segments_iter:
+        for seg_dict in result.get("segments", []):
             ts = TranscriptSegment(
-                start=seg.start,
-                end=seg.end,
-                text=seg.text,
+                start=seg_dict["start"],
+                end=seg_dict["end"],
+                text=seg_dict["text"],
             )
             segments.append(ts)
             if on_segment:
                 try:
                     on_segment(ts)
                 except Exception:
-                    logger.warning(
-                        "on_segment callback failed for segment at %.1fs",
-                        ts.start,
-                        exc_info=True,
-                    )
+                    logger.debug("on_segment callback failed", exc_info=True)
+
+        # Calculate duration from last segment end time.
+        duration = segments[-1].end if segments else 0.0
 
         elapsed = _time.monotonic() - start_time
         transcript = Transcript(
             segments=segments,
-            language=info.language,
-            language_probability=info.language_probability,
-            duration_seconds=info.duration,
+            language=result.get("language", ""),
+            language_probability=0.0,  # MLX Whisper doesn't provide this.
+            duration_seconds=duration,
         )
 
+        rtf = elapsed / duration if duration > 0 else 0
         logger.info(
-            "Transcription complete: %d words, %d segments, "
-            "%.1fs elapsed (%.1fx realtime).",
+            "Transcription complete: %d words, %d segments, %.1fs elapsed (%.1fx realtime).",
             transcript.word_count,
             len(segments),
             elapsed,
-            info.duration / elapsed if elapsed > 0 else 0,
+            rtf,
         )
 
         return transcript

@@ -3,8 +3,8 @@ sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.24.0
 
-# Local speech-to-text
-faster-whisper>=1.0.0
+# Local speech-to-text (MLX Whisper — Apple Silicon GPU acceleration)
+mlx-whisper>=0.4.0
 
 # LLM summarisation
 anthropic>=0.40.0

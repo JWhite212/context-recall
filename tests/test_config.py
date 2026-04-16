@@ -18,11 +18,15 @@ from src.utils.config import (
 
 def test_load_valid_config(tmp_path: Path):
     config_file = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump({
-        "detection": {"poll_interval_seconds": 5},
-        "audio": {"mic_enabled": False},
-        "transcription": {"model_size": "medium.en"},
-    }))
+    config_file.write_text(
+        yaml.dump(
+            {
+                "detection": {"poll_interval_seconds": 5},
+                "audio": {"mic_enabled": False},
+                "transcription": {"model_size": "medium.en"},
+            }
+        )
+    )
     config = load_config(config_file)
     assert config.detection.poll_interval_seconds == 5
     assert config.audio.mic_enabled is False
@@ -34,16 +38,19 @@ def test_load_missing_file_returns_defaults():
     assert isinstance(config, AppConfig)
     assert config.detection.poll_interval_seconds == 3
     assert config.audio.mic_enabled is True
-    assert config.transcription.model_size == "small.en"
+    assert config.transcription.model_size == "mlx-community/whisper-large-v3-turbo"
 
 
 def test_unknown_keys_ignored():
     """_build_dataclass should silently skip keys not in the dataclass."""
-    result = _build_dataclass(DetectionConfig, {
-        "poll_interval_seconds": 10,
-        "some_future_key": "value",
-        "another_unknown": 42,
-    })
+    result = _build_dataclass(
+        DetectionConfig,
+        {
+            "poll_interval_seconds": 10,
+            "some_future_key": "value",
+            "another_unknown": 42,
+        },
+    )
     assert result.poll_interval_seconds == 10
     assert not hasattr(result, "some_future_key")
 
