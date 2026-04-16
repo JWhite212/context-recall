@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState, useCallback, type MutableRefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  type MutableRefObject,
+} from "react";
 import WaveSurfer from "wavesurfer.js";
+import { getAuthToken } from "../../lib/api";
 
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 const SKIP_SECONDS = 10;
@@ -35,7 +42,8 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const isDark = document.documentElement.classList.contains("dark") ||
+    const isDark =
+      document.documentElement.classList.contains("dark") ||
       !document.documentElement.classList.contains("light");
 
     const ws = WaveSurfer.create({
@@ -49,6 +57,9 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
       barGap: 1,
       barRadius: 2,
       normalize: true,
+      fetchParams: {
+        headers: { Authorization: `Bearer ${getAuthToken() ?? ""}` },
+      },
       url: src,
     });
 
@@ -87,13 +98,18 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
   const skip = useCallback((delta: number) => {
     const ws = wsRef.current;
     if (!ws) return;
-    const target = Math.max(0, Math.min(ws.getDuration(), ws.getCurrentTime() + delta));
+    const target = Math.max(
+      0,
+      Math.min(ws.getDuration(), ws.getCurrentTime() + delta),
+    );
     ws.seekTo(target / ws.getDuration());
   }, []);
 
   const cycleRate = useCallback(() => {
     setRate((prev) => {
-      const idx = PLAYBACK_RATES.indexOf(prev as (typeof PLAYBACK_RATES)[number]);
+      const idx = PLAYBACK_RATES.indexOf(
+        prev as (typeof PLAYBACK_RATES)[number],
+      );
       const next = PLAYBACK_RATES[(idx + 1) % PLAYBACK_RATES.length];
       wsRef.current?.setPlaybackRate(next);
       return next;
@@ -101,7 +117,10 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
   }, []);
 
   return (
-    <div className="rounded-xl bg-surface-raised border border-border p-4 flex flex-col gap-3" aria-label="Audio player">
+    <div
+      className="rounded-xl bg-surface-raised border border-border p-4 flex flex-col gap-3"
+      aria-label="Audio player"
+    >
       {/* Waveform */}
       <div ref={containerRef} className={loading ? "opacity-30" : ""} />
 
@@ -114,7 +133,17 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
             className="p-1.5 rounded-md text-text-secondary hover:text-text-primary hover:bg-sidebar-hover transition-colors"
             aria-label={`Skip back ${SKIP_SECONDS} seconds`}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <polygon points="11 19 2 12 11 5 11 19" />
               <polygon points="22 19 13 12 22 5 22 19" />
             </svg>
@@ -128,12 +157,24 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
             className="p-2 rounded-full bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
             {playing ? (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
                 <rect x="6" y="4" width="4" height="16" />
                 <rect x="14" y="4" width="4" height="16" />
               </svg>
             ) : (
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
                 <polygon points="5 3 19 12 5 21 5 3" />
               </svg>
             )}
@@ -145,7 +186,17 @@ export function AudioPlayer({ src, seekRef }: AudioPlayerProps) {
             className="p-1.5 rounded-md text-text-secondary hover:text-text-primary hover:bg-sidebar-hover transition-colors"
             aria-label={`Skip forward ${SKIP_SECONDS} seconds`}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
               <polygon points="13 19 22 12 13 5 13 19" />
               <polygon points="2 19 11 12 2 5 2 19" />
             </svg>

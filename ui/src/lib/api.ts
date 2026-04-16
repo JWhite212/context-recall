@@ -62,7 +62,10 @@ export async function getMeetings(
   query?: string,
   status?: string,
 ): Promise<MeetingsResponse> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
   if (query) params.set("q", query);
   if (status) params.set("status", status);
   return request<MeetingsResponse>(`/api/meetings?${params}`);
@@ -73,14 +76,18 @@ export async function getMeeting(id: string): Promise<Meeting> {
 }
 
 export async function deleteMeeting(id: string): Promise<void> {
-  await request(`/api/meetings/${encodeURIComponent(id)}`, { method: "DELETE" });
+  await request(`/api/meetings/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export async function getConfig(): Promise<AppConfig> {
   return request<AppConfig>("/api/config");
 }
 
-export async function updateConfig(config: Partial<AppConfig>): Promise<AppConfig> {
+export async function updateConfig(
+  config: Partial<AppConfig>,
+): Promise<AppConfig> {
   return request<AppConfig>("/api/config", {
     method: "PUT",
     body: JSON.stringify(config),
@@ -88,7 +95,9 @@ export async function updateConfig(config: Partial<AppConfig>): Promise<AppConfi
 }
 
 export async function startRecording(): Promise<RecordingStartResponse> {
-  return request<RecordingStartResponse>("/api/record/start", { method: "POST" });
+  return request<RecordingStartResponse>("/api/record/start", {
+    method: "POST",
+  });
 }
 
 export async function stopRecording(): Promise<RecordingStopResponse> {
@@ -104,13 +113,17 @@ export async function getModels(): Promise<ModelsResponse> {
 }
 
 export async function downloadModel(name: string): Promise<{ status: string }> {
-  return request("/api/models/" + encodeURIComponent(name) + "/download", { method: "POST" });
+  return request("/api/models/" + encodeURIComponent(name) + "/download", {
+    method: "POST",
+  });
 }
 
 export async function resummariseMeeting(
   id: string,
 ): Promise<{ meeting_id: string; title: string; tags: string[] }> {
-  return request(`/api/meetings/${encodeURIComponent(id)}/resummarise`, { method: "POST" });
+  return request(`/api/meetings/${encodeURIComponent(id)}/resummarise`, {
+    method: "POST",
+  });
 }
 
 export async function exportMeeting(
@@ -127,4 +140,28 @@ export async function exportMeeting(
   );
   if (!res.ok) throw new Error(`Export failed: ${res.status}`);
   return res.text();
+}
+
+export async function mergeMeetings(
+  meetingIds: string[],
+): Promise<{ meeting_id: string; title: string }> {
+  return request("/api/meetings/merge", {
+    method: "POST",
+    body: JSON.stringify({ meeting_ids: meetingIds }),
+  });
+}
+
+export async function setMeetingLabel(
+  id: string,
+  label: string,
+): Promise<void> {
+  await request(`/api/meetings/${encodeURIComponent(id)}/label`, {
+    method: "PATCH",
+    body: JSON.stringify({ label }),
+  });
+}
+
+export async function getMeetingLabels(): Promise<string[]> {
+  const data = await request<{ labels: string[] }>("/api/meetings/labels");
+  return data.labels;
 }

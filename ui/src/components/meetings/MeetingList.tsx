@@ -1,12 +1,13 @@
 import { useState, useRef, useDeferredValue } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { getMeetings } from "../../lib/api";
+import { getMeetings, mergeMeetings } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
 import { SkeletonMeetingRow } from "../common/Skeleton";
+import { useToast } from "../common/Toast";
 import type { Meeting, MeetingStatus } from "../../lib/types";
 
 const STATUS_FILTERS: { label: string; value: MeetingStatus | "all" }[] = [
@@ -21,12 +22,18 @@ const ROW_HEIGHT = 72;
 
 export function MeetingList() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { daemonRunning } = useDaemonStatus();
+  const toast = useToast();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
-  const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">(
+    "all",
+  );
   const [page, setPage] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["meetings", statusFilter, page, deferredSearch],
@@ -41,6 +48,30 @@ export function MeetingList() {
     staleTime: 10_000,
     refetchInterval: 10_000,
   });
+
+  const merge = useMutation({
+    mutationFn: (ids: string[]) => mergeMeetings(ids),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      setSelectMode(false);
+      setSelected(new Set());
+      toast.success(`Merged into "${data.title}".`);
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to merge meetings.",
+      );
+    },
+  });
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const meetings = data?.meetings ?? [];
   const total = data?.total ?? 0;
@@ -69,7 +100,39 @@ export function MeetingList() {
               }}
               className="flex-1 px-3 py-1.5 text-sm rounded-lg bg-surface-raised border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
             />
+            <button
+              onClick={() => {
+                setSelectMode((v) => !v);
+                setSelected(new Set());
+              }}
+              aria-pressed={selectMode}
+              className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                selectMode
+                  ? "bg-accent text-white border-accent"
+                  : "bg-surface-raised border-border text-text-secondary hover:bg-sidebar-hover"
+              }`}
+            >
+              {selectMode ? "Cancel" : "Select"}
+            </button>
           </div>
+
+          {/* Merge bar */}
+          {selectMode && (
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-text-muted">
+                {selected.size} selected
+              </span>
+              {selected.size >= 2 && (
+                <button
+                  onClick={() => merge.mutate(Array.from(selected))}
+                  disabled={merge.isPending}
+                  className="px-3 py-1 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                >
+                  {merge.isPending ? "Merging..." : "Merge Selected"}
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="flex gap-1.5">
             {STATUS_FILTERS.map((f) => (
@@ -102,7 +165,10 @@ export function MeetingList() {
               </div>
             </div>
           ) : isError ? (
-            <ErrorState message="Failed to load meetings." onRetry={() => refetch()} />
+            <ErrorState
+              message="Failed to load meetings."
+              onRetry={() => refetch()}
+            />
           ) : meetings.length === 0 ? (
             <EmptyState
               title={search ? "No results" : "No meetings yet"}
@@ -113,7 +179,14 @@ export function MeetingList() {
               }
             />
           ) : (
-            <VirtualMeetingList meetings={meetings} onSelect={(id) => navigate(`/meetings/${id}`)} listRef={listRef} />
+            <VirtualMeetingList
+              meetings={meetings}
+              onSelect={(id) => navigate(`/meetings/${id}`)}
+              listRef={listRef}
+              selectMode={selectMode}
+              selected={selected}
+              onToggleSelect={toggleSelect}
+            />
           )}
 
           {/* Pagination */}
@@ -155,10 +228,16 @@ function VirtualMeetingList({
   meetings,
   onSelect,
   listRef,
+  selectMode,
+  selected,
+  onToggleSelect,
 }: {
   meetings: Meeting[];
   onSelect: (id: string) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
+  selectMode: boolean;
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
 }) {
   const virtualizer = useVirtualizer({
     count: meetings.length,
@@ -173,7 +252,13 @@ function VirtualMeetingList({
       <div className="flex flex-col gap-1" role="list">
         {meetings.map((m) => (
           <div key={m.id} role="listitem">
-            <MeetingRow meeting={m} onSelect={onSelect} />
+            <MeetingRow
+              meeting={m}
+              onSelect={onSelect}
+              selectMode={selectMode}
+              isSelected={selected.has(m.id)}
+              onToggleSelect={onToggleSelect}
+            />
           </div>
         ))}
       </div>
@@ -181,10 +266,7 @@ function VirtualMeetingList({
   }
 
   return (
-    <div
-      ref={listRef}
-      className="max-h-[60vh] overflow-y-auto"
-    >
+    <div ref={listRef} className="max-h-[60vh] overflow-y-auto">
       <div
         className="relative"
         role="list"
@@ -202,7 +284,13 @@ function VirtualMeetingList({
                 height: virtual.size,
               }}
             >
-              <MeetingRow meeting={m} onSelect={onSelect} />
+              <MeetingRow
+                meeting={m}
+                onSelect={onSelect}
+                selectMode={selectMode}
+                isSelected={selected.has(m.id)}
+                onToggleSelect={onToggleSelect}
+              />
             </div>
           );
         })}
@@ -214,15 +302,37 @@ function VirtualMeetingList({
 function MeetingRow({
   meeting: m,
   onSelect,
+  selectMode,
+  isSelected,
+  onToggleSelect,
 }: {
   meeting: Meeting;
   onSelect: (id: string) => void;
+  selectMode: boolean;
+  isSelected: boolean;
+  onToggleSelect: (id: string) => void;
 }) {
   return (
     <button
-      onClick={() => onSelect(m.id)}
-      className="flex items-center justify-between py-3 px-4 rounded-xl bg-surface-raised border border-border hover:border-accent/40 transition-colors text-left w-full mb-1"
+      onClick={() => (selectMode ? onToggleSelect(m.id) : onSelect(m.id))}
+      className={`flex items-center justify-between py-3 px-4 rounded-xl bg-surface-raised border transition-colors text-left w-full mb-1 ${
+        isSelected
+          ? "border-accent/60 bg-accent/5"
+          : "border-border hover:border-accent/40"
+      }`}
     >
+      {selectMode && (
+        <div className="shrink-0 mr-3 flex items-center">
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelect(m.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="h-4 w-4 rounded border-border text-accent focus:ring-accent"
+          />
+        </div>
+      )}
+
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-text-primary truncate">
           {m.title}
@@ -233,6 +343,10 @@ function MeetingRow({
               month: "short",
               day: "numeric",
               year: "numeric",
+            })}{" "}
+            {new Date(m.started_at * 1000).toLocaleTimeString(undefined, {
+              hour: "2-digit",
+              minute: "2-digit",
             })}
           </span>
           {m.duration_seconds != null && (
@@ -249,6 +363,11 @@ function MeetingRow({
       </div>
 
       <div className="flex items-center gap-2 shrink-0 ml-4">
+        {m.label && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">
+            {m.label}
+          </span>
+        )}
         {m.tags.length > 0 && (
           <div className="flex gap-1">
             {m.tags.slice(0, 2).map((tag) => (

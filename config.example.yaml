@@ -15,6 +15,10 @@ detection:
   # Prevents false positives from transient audio device usage.
   required_consecutive_detections: 3
 
+  # Seconds to wait after a meeting ends before detecting a new one.
+  # Prevents split meetings when audio drops momentarily.
+  min_gap_before_new_meeting: 60
+
   # Process names to monitor. Supports Teams (new) and classic.
   process_names:
     - "Microsoft Teams"

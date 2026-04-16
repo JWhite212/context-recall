@@ -21,7 +21,7 @@ logger = logging.getLogger("meetingmind.db")
 DEFAULT_DB_DIR = Path(os.path.expanduser("~/.local/share/meetingmind"))
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "meetings.db"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS meetings (
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     tags TEXT,
     language TEXT,
     word_count INTEGER,
+    label TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL
 );
@@ -105,6 +106,13 @@ class Database:
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
+        elif current_version < 2:
+            await self.conn.execute(
+                "ALTER TABLE meetings ADD COLUMN label TEXT NOT NULL DEFAULT ''"
+            )
+            await self.conn.execute("PRAGMA user_version = 2")
+            await self.conn.commit()
+            logger.info("Database migrated to version %d", 2)
         else:
             logger.debug("Database schema up to date (version %d)", current_version)
 
@@ -127,5 +135,10 @@ class Database:
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
+        elif current_version < 2:
+            conn.execute("ALTER TABLE meetings ADD COLUMN label TEXT NOT NULL DEFAULT ''")
+            conn.execute("PRAGMA user_version = 2")
+            conn.commit()
+            logger.info("Database migrated to version %d", 2)
 
         conn.close()

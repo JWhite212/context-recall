@@ -33,11 +33,11 @@
               <string>-m</string>
               <string>src.main</string>
         -->
-        <string>/Applications/MeetingMind.app/Contents/Resources/meetingmind-daemon</string>
+        <string>/Applications/MeetingMind.app/Contents/Resources/resources/meetingmind-daemon/meetingmind-daemon</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Applications/MeetingMind.app/Contents/Resources</string>
+    <string>/Applications/MeetingMind.app/Contents/Resources/resources/meetingmind-daemon</string>
 
     <!-- Start automatically on login. -->
     <key>RunAtLoad</key>

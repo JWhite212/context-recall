@@ -2,7 +2,12 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useBlocker } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { getConfig, updateConfig, getModels, downloadModel } from "../../lib/api";
+import {
+  getConfig,
+  updateConfig,
+  getModels,
+  downloadModel,
+} from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
 import { useTheme } from "../../hooks/useTheme";
@@ -53,11 +58,13 @@ function Field({
   help?: string;
   children: React.ReactNode;
 }) {
-  const fieldId = label.toLowerCase().replace(/\s+/g, '-');
+  const fieldId = label.toLowerCase().replace(/\s+/g, "-");
   return (
     <div className="flex items-start justify-between gap-4 py-3">
       <div className="min-w-0 pt-1">
-        <label htmlFor={fieldId} className="text-sm text-text-primary">{label}</label>
+        <label htmlFor={fieldId} className="text-sm text-text-primary">
+          {label}
+        </label>
         {help && <p className="text-xs text-text-muted mt-0.5">{help}</p>}
       </div>
       <div className="shrink-0">{children}</div>
@@ -113,7 +120,9 @@ function ModelSection({
     >
       {models.map((model) => {
         const liveProgress = modelProgress[model.name];
-        const isDownloading = model.status === "downloading" || (liveProgress && liveProgress.percent < 100 && !liveProgress.error);
+        const isDownloading =
+          model.status === "downloading" ||
+          (liveProgress && liveProgress.percent < 100 && !liveProgress.error);
         const percent = liveProgress?.percent ?? model.percent;
 
         return (
@@ -121,7 +130,9 @@ function ModelSection({
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm text-text-primary">{model.name}</div>
-                <div className="text-xs text-text-muted">{model.size_mb} MB</div>
+                <div className="text-xs text-text-muted">
+                  {model.size_mb} MB
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 {model.status === "downloaded" && !isDownloading ? (
@@ -134,7 +145,10 @@ function ModelSection({
                   </span>
                 ) : model.status === "error" || liveProgress?.error ? (
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-status-error" title={liveProgress?.error ?? model.error ?? ""}>
+                    <span
+                      className="text-xs text-status-error"
+                      title={liveProgress?.error ?? model.error ?? ""}
+                    >
                       Failed
                     </span>
                     <button
@@ -243,9 +257,7 @@ function UpdateChecker() {
           </button>
         </div>
       )}
-      {error && (
-        <p className="text-xs text-status-error mt-1">{error}</p>
-      )}
+      {error && <p className="text-xs text-status-error mt-1">{error}</p>}
     </div>
   );
 }
@@ -329,11 +341,10 @@ export function Settings() {
   // Block navigation when there are unsaved changes.
   const blocker = useBlocker(isDirty);
 
-  function set<S extends keyof AppConfig, K extends string & keyof AppConfig[S]>(
-    section: S,
-    key: K,
-    value: AppConfig[S][K],
-  ) {
+  function set<
+    S extends keyof AppConfig,
+    K extends string & keyof AppConfig[S],
+  >(section: S, key: K, value: AppConfig[S][K]) {
     setForm((prev) => {
       if (!prev) return prev;
       return {
@@ -360,7 +371,11 @@ export function Settings() {
     setShowSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
 
   return (
-    <div className="flex flex-col gap-4 p-6 max-w-3xl" role="form" aria-label="Application settings">
+    <div
+      className="flex flex-col gap-4 p-6 max-w-3xl"
+      role="form"
+      aria-label="Application settings"
+    >
       {/* Navigation blocker dialog */}
       {blocker.state === "blocked" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -448,7 +463,8 @@ export function Settings() {
       {saveMutation.isError && (
         <div className="rounded-lg bg-status-error/10 border border-status-error/30 px-4 py-3">
           <p className="text-sm text-status-error">
-            Failed to save: {saveMutation.error instanceof Error
+            Failed to save:{" "}
+            {saveMutation.error instanceof Error
               ? saveMutation.error.message
               : "An unexpected error occurred"}
           </p>
@@ -457,7 +473,10 @@ export function Settings() {
 
       {/* Appearance — always visible, not dependent on daemon */}
       <Section title="Appearance" description="Theme and display preferences">
-        <Field label="Theme" help="Choose light, dark, or follow system preference">
+        <Field
+          label="Theme"
+          help="Choose light, dark, or follow system preference"
+        >
           <select
             value={theme}
             onChange={(e) => applyTheme(e.target.value as Theme)}
@@ -489,11 +508,28 @@ export function Settings() {
       ) : configLoading || !form ? (
         <Section title="Configuration">
           <div className="flex items-center gap-2.5 py-6 justify-center">
-            <svg className="animate-spin h-4 w-4 text-text-muted" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            <svg
+              className="animate-spin h-4 w-4 text-text-muted"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="3"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
             </svg>
-            <span className="text-sm text-text-muted">Loading configuration...</span>
+            <span className="text-sm text-text-muted">
+              Loading configuration...
+            </span>
           </div>
         </Section>
       ) : (
@@ -514,7 +550,11 @@ export function Settings() {
                   max={60}
                   value={form.detection.poll_interval_seconds}
                   onChange={(e) =>
-                    set("detection", "poll_interval_seconds", Number(e.target.value))
+                    set(
+                      "detection",
+                      "poll_interval_seconds",
+                      Number(e.target.value),
+                    )
                   }
                   className={NUM}
                 />
@@ -684,7 +724,7 @@ export function Settings() {
           >
             <Field
               label="Model"
-              help="Larger models are more accurate but slower"
+              help="MLX Whisper models run on Apple Silicon GPU"
             >
               <select
                 value={form.transcription.model_size}
@@ -693,27 +733,19 @@ export function Settings() {
                 }
                 className={SELECT}
               >
-                <option value="tiny.en">tiny.en</option>
-                <option value="base.en">base.en</option>
-                <option value="small.en">small.en</option>
-                <option value="medium.en">medium.en</option>
-                <option value="large-v3">large-v3</option>
+                <option value="mlx-community/whisper-large-v3-turbo">
+                  large-v3-turbo (MLX, recommended)
+                </option>
+                <option value="mlx-community/whisper-large-v3">
+                  large-v3 (MLX)
+                </option>
+                <option value="mlx-community/whisper-medium.en-mlx">
+                  medium.en (MLX)
+                </option>
+                <option value="mlx-community/whisper-small.en-mlx">
+                  small.en (MLX)
+                </option>
               </select>
-            </Field>
-            <Field label="Compute type">
-              <Tooltip content="Processing precision. 'auto' selects the best option for your hardware.">
-                <select
-                  id="compute-type"
-                  value={form.transcription.compute_type}
-                  onChange={(e) =>
-                    set("transcription", "compute_type", e.target.value)
-                  }
-                  className={SELECT}
-                >
-                  <option value="auto">auto</option>
-                  <option value="cpu">cpu</option>
-                </select>
-              </Tooltip>
             </Field>
             <Field label="Language">
               <select
@@ -726,18 +758,6 @@ export function Settings() {
                 <option value="en">English</option>
                 <option value="auto">Auto-detect</option>
               </select>
-            </Field>
-            <Field label="CPU threads" help="0 for auto-detect">
-              <input
-                type="number"
-                min={0}
-                max={32}
-                value={form.transcription.cpu_threads}
-                onChange={(e) =>
-                  set("transcription", "cpu_threads", Number(e.target.value))
-                }
-                className={NUM}
-              />
             </Field>
             <Field
               label="VAD threshold"
@@ -752,7 +772,11 @@ export function Settings() {
                   id="vad-threshold"
                   value={form.transcription.vad_threshold}
                   onChange={(e) =>
-                    set("transcription", "vad_threshold", Number(e.target.value))
+                    set(
+                      "transcription",
+                      "vad_threshold",
+                      Number(e.target.value),
+                    )
                   }
                   className={NUM}
                 />
@@ -778,7 +802,11 @@ export function Settings() {
               <select
                 value={form.summarisation.backend}
                 onChange={(e) =>
-                  set("summarisation", "backend", e.target.value as "ollama" | "claude")
+                  set(
+                    "summarisation",
+                    "backend",
+                    e.target.value as "ollama" | "claude",
+                  )
                 }
                 className={SELECT}
               >
@@ -830,7 +858,11 @@ export function Settings() {
                       type="button"
                       onClick={() => toggleSecret("anthropic")}
                       aria-pressed={!!showSecrets["anthropic"]}
-                      aria-label={showSecrets["anthropic"] ? "Hide API key" : "Show API key"}
+                      aria-label={
+                        showSecrets["anthropic"]
+                          ? "Hide API key"
+                          : "Show API key"
+                      }
                       className="text-xs text-text-muted hover:text-text-secondary"
                     >
                       {showSecrets["anthropic"] ? "Hide" : "Show"}
@@ -882,10 +914,7 @@ export function Settings() {
             </Field>
             {form.diarisation.enabled && (
               <>
-                <Field
-                  label="Your name"
-                  help="Label for the local speaker"
-                >
+                <Field label="Your name" help="Label for the local speaker">
                   <input
                     type="text"
                     value={form.diarisation.speaker_name}
@@ -1004,26 +1033,23 @@ export function Settings() {
                     <input
                       type={showSecrets["notion"] ? "text" : "password"}
                       value={form.notion.api_key}
-                      onChange={(e) =>
-                        set("notion", "api_key", e.target.value)
-                      }
+                      onChange={(e) => set("notion", "api_key", e.target.value)}
                       className={TEXT}
                     />
                     <button
                       type="button"
                       onClick={() => toggleSecret("notion")}
                       aria-pressed={!!showSecrets["notion"]}
-                      aria-label={showSecrets["notion"] ? "Hide API key" : "Show API key"}
+                      aria-label={
+                        showSecrets["notion"] ? "Hide API key" : "Show API key"
+                      }
                       className="text-xs text-text-muted hover:text-text-secondary"
                     >
                       {showSecrets["notion"] ? "Hide" : "Show"}
                     </button>
                   </div>
                 </Field>
-                <Field
-                  label="Database ID"
-                  help="From the Notion database URL"
-                >
+                <Field label="Database ID" help="From the Notion database URL">
                   <input
                     type="text"
                     value={form.notion.database_id}
@@ -1085,7 +1111,11 @@ export function Settings() {
                   max={3650}
                   value={form.retention.audio_retention_days}
                   onChange={(e) =>
-                    set("retention", "audio_retention_days", Number(e.target.value))
+                    set(
+                      "retention",
+                      "audio_retention_days",
+                      Number(e.target.value),
+                    )
                   }
                   className={NUM}
                 />
@@ -1103,7 +1133,11 @@ export function Settings() {
                   max={3650}
                   value={form.retention.record_retention_days}
                   onChange={(e) =>
-                    set("retention", "record_retention_days", Number(e.target.value))
+                    set(
+                      "retention",
+                      "record_retention_days",
+                      Number(e.target.value),
+                    )
                   }
                   className={NUM}
                 />
@@ -1140,10 +1174,7 @@ export function Settings() {
 
       {/* Read-only info */}
       <Section title="Daemon">
-        <InfoRow
-          label="Status"
-          value={daemonRunning ? "Running" : "Offline"}
-        />
+        <InfoRow label="Status" value={daemonRunning ? "Running" : "Offline"} />
         <InfoRow label="State" value={state} />
         <InfoRow
           label="WebSocket"

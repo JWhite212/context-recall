@@ -36,7 +36,8 @@ class DetectionConfig:
     poll_interval_seconds: int = 3
     min_meeting_duration_seconds: int = 30
     required_consecutive_detections: int = 3  # Debounce: consecutive positive polls needed.
-    required_consecutive_end_detections: int = 2  # Debounce for meeting end.
+    required_consecutive_end_detections: int = 4  # Debounce for meeting end.
+    min_gap_before_new_meeting: int = 60  # Cooldown seconds after meeting ends.
     process_names: list[str] = field(
         default_factory=lambda: ["Microsoft Teams", "MSTeams", "Teams"]
     )

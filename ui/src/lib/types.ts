@@ -1,6 +1,11 @@
 /** TypeScript types matching the Python backend models. */
 
-export type DaemonState = "idle" | "detecting" | "recording" | "processing" | "unknown";
+export type DaemonState =
+  | "idle"
+  | "detecting"
+  | "recording"
+  | "processing"
+  | "unknown";
 
 export type MeetingStatus =
   | "recording"
@@ -24,6 +29,7 @@ export interface Meeting {
   tags: string[];
   language: string | null;
   word_count: number | null;
+  label: string;
   created_at: number;
   updated_at: number;
 }
@@ -191,10 +197,29 @@ export type WSEvent =
   | { type: "meeting.started"; started_at: number }
   | { type: "meeting.ended"; duration: number }
   | { type: "pipeline.stage"; meeting_id: string | null; stage: string }
-  | { type: "pipeline.progress"; meeting_id: string | null; stage: string; percent: number }
+  | {
+      type: "pipeline.progress";
+      meeting_id: string | null;
+      stage: string;
+      percent: number;
+    }
   | { type: "pipeline.complete"; meeting_id: string | null; title?: string }
-  | { type: "pipeline.error"; meeting_id: string | null; stage: string; error: string }
-  | { type: "transcript.segment"; meeting_id: string | null; segment: TranscriptSegment }
+  | {
+      type: "pipeline.error";
+      meeting_id: string | null;
+      stage: string;
+      error: string;
+    }
+  | {
+      type: "transcript.segment";
+      meeting_id: string | null;
+      segment: TranscriptSegment;
+    }
   | { type: "audio.level"; system_rms: number; mic_rms: number }
-  | { type: "model.download.progress"; model: string; percent: number; error?: string }
+  | {
+      type: "model.download.progress";
+      model: string;
+      percent: number;
+      error?: string;
+    }
   | { type: "daemon.status"; state: DaemonState };

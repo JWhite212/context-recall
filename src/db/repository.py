@@ -17,16 +17,27 @@ from src.db.database import Database
 logger = logging.getLogger("meetingmind.db")
 
 # Columns that update_meeting() is allowed to write.
-_MUTABLE_COLUMNS = frozenset({
-    "title", "ended_at", "duration_seconds", "status",
-    "audio_path", "transcript_json", "summary_markdown",
-    "tags", "language", "word_count",
-})
+_MUTABLE_COLUMNS = frozenset(
+    {
+        "title",
+        "ended_at",
+        "duration_seconds",
+        "status",
+        "audio_path",
+        "transcript_json",
+        "summary_markdown",
+        "tags",
+        "language",
+        "word_count",
+        "label",
+    }
+)
 
 
 @dataclass
 class MeetingRecord:
     """Flat representation of a meeting row for API serialisation."""
+
     id: str
     title: str
     started_at: float
@@ -41,6 +52,7 @@ class MeetingRecord:
     word_count: int | None
     created_at: float
     updated_at: float
+    label: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +68,7 @@ class MeetingRecord:
             "tags": self.tags,
             "language": self.language,
             "word_count": self.word_count,
+            "label": self.label,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -79,6 +92,7 @@ class MeetingRecord:
             word_count=row["word_count"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            label=row["label"],
         )
 
 
@@ -132,9 +146,7 @@ class MeetingRepository:
 
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None:
         """Fetch a single meeting by ID."""
-        cursor = await self._db.conn.execute(
-            "SELECT * FROM meetings WHERE id = ?", (meeting_id,)
-        )
+        cursor = await self._db.conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,))
         row = await cursor.fetchone()
         return MeetingRecord.from_row(row) if row else None
 
@@ -189,9 +201,7 @@ class MeetingRepository:
 
     async def delete_meeting(self, meeting_id: str) -> bool:
         """Delete a meeting. Returns True if a row was deleted."""
-        cursor = await self._db.conn.execute(
-            "DELETE FROM meetings WHERE id = ?", (meeting_id,)
-        )
+        cursor = await self._db.conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
         await self._db.conn.commit()
         return cursor.rowcount > 0
 
@@ -205,6 +215,14 @@ class MeetingRepository:
             cursor = await self._db.conn.execute("SELECT COUNT(*) FROM meetings")
         row = await cursor.fetchone()
         return row[0]
+
+    async def get_distinct_labels(self) -> list[str]:
+        """Return all unique non-empty labels, sorted alphabetically."""
+        cursor = await self._db.conn.execute(
+            "SELECT DISTINCT label FROM meetings WHERE label != '' ORDER BY label"
+        )
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
 
     async def cleanup_old_meetings(
         self, audio_retention_days: int, record_retention_days: int
@@ -257,9 +275,7 @@ class MeetingRepository:
                         os.remove(path)
                     except OSError:
                         pass
-            await self._db.conn.execute(
-                "DELETE FROM meetings WHERE started_at < ?", (cutoff,)
-            )
+            await self._db.conn.execute("DELETE FROM meetings WHERE started_at < ?", (cutoff,))
             await self._db.conn.commit()
             records_deleted = len(rows)
             if records_deleted:

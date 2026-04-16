@@ -33,9 +33,9 @@ logger = logging.getLogger(__name__)
 class MeetingState(Enum):
     """Represents the current state of the meeting detector."""
 
-    IDLE = auto()        # No meeting detected.
-    ACTIVE = auto()      # Meeting in progress.
-    ENDING = auto()      # Meeting just ended; transitioning to IDLE.
+    IDLE = auto()  # No meeting detected.
+    ACTIVE = auto()  # Meeting in progress.
+    ENDING = auto()  # Meeting just ended; transitioning to IDLE.
 
 
 @dataclass
@@ -43,8 +43,8 @@ class MeetingEvent:
     """Emitted when a meeting starts or stops."""
 
     state: MeetingState
-    started_at: float = 0.0    # Unix timestamp when the meeting began.
-    ended_at: float = 0.0      # Unix timestamp when the meeting ended.
+    started_at: float = 0.0  # Unix timestamp when the meeting began.
+    ended_at: float = 0.0  # Unix timestamp when the meeting ended.
     duration_seconds: float = 0.0
 
 
@@ -71,6 +71,7 @@ class TeamsDetector:
         self._stop_event = threading.Event()
         self._consecutive_detections: int = 0
         self._consecutive_end_detections: int = 0
+        self._cooldown_until: float = 0.0
 
         # Callbacks — set these from the orchestrator.
         self.on_meeting_start: Callable[[MeetingEvent], None] = lambda event: None
@@ -115,6 +116,9 @@ class TeamsDetector:
 
         if self._state == MeetingState.IDLE:
             if meeting_active:
+                if time.time() < self._cooldown_until:
+                    # Still in cooldown after previous meeting — ignore signal.
+                    return
                 self._consecutive_detections += 1
                 required = self._config.required_consecutive_detections
                 if self._consecutive_detections >= required:
@@ -154,10 +158,7 @@ class TeamsDetector:
                             f"threshold) — discarding."
                         )
                     else:
-                        logger.info(
-                            f"Meeting ended after {duration:.0f}s "
-                            f"— processing."
-                        )
+                        logger.info(f"Meeting ended after {duration:.0f}s — processing.")
                         self.on_meeting_end(
                             MeetingEvent(
                                 state=MeetingState.ENDING,
@@ -168,6 +169,7 @@ class TeamsDetector:
                         )
 
                     self._state = MeetingState.IDLE
+                    self._cooldown_until = time.time() + self._config.min_gap_before_new_meeting
                     self._meeting_started_at = 0.0
                 else:
                     logger.debug(

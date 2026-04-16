@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
+from src.utils.config import DetectionConfig
 
 # ------------------------------------------------------------------
 # State machine tests
@@ -20,9 +21,7 @@ class TestDetectorStateMachine:
         detector = TeamsDetector(detection_config, platform=fake_platform)
         assert detector.state == MeetingState.IDLE
 
-    def test_single_detection_does_not_start_meeting(
-        self, detection_config, fake_platform
-    ):
+    def test_single_detection_does_not_start_meeting(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         cb = MagicMock()
         detector.on_meeting_start = cb
@@ -34,9 +33,7 @@ class TestDetectorStateMachine:
         cb.assert_not_called()
         assert detector.state == MeetingState.IDLE
 
-    def test_consecutive_detections_start_meeting(
-        self, detection_config, fake_platform
-    ):
+    def test_consecutive_detections_start_meeting(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         cb = MagicMock()
         detector.on_meeting_start = cb
@@ -49,9 +46,7 @@ class TestDetectorStateMachine:
         cb.assert_called_once()
         assert detector.state == MeetingState.ACTIVE
 
-    def test_interrupted_detection_resets_counter(
-        self, detection_config, fake_platform
-    ):
+    def test_interrupted_detection_resets_counter(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         cb = MagicMock()
         detector.on_meeting_start = cb
@@ -76,9 +71,7 @@ class TestDetectorStateMachine:
         cb.assert_called_once()
         assert detector.state == MeetingState.ACTIVE
 
-    def test_meeting_end_requires_consecutive_end_polls(
-        self, detection_config, fake_platform
-    ):
+    def test_meeting_end_requires_consecutive_end_polls(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         end_cb = MagicMock()
         detector.on_meeting_end = end_cb
@@ -101,7 +94,9 @@ class TestDetectorStateMachine:
     @patch("src.detector.time")
     def test_meeting_end_fires_callback(self, mock_time, detection_config, fake_platform):
         # Simulate a meeting that lasts long enough.
-        mock_time.time.side_effect = [100.0, 200.0]  # started_at, ended_at
+        # time.time() calls: cooldown_check, cooldown_check, started_at,
+        # ended_at, cooldown_set
+        mock_time.time.side_effect = [0.0, 0.0, 100.0, 200.0, 200.0]
 
         detector = TeamsDetector(detection_config, platform=fake_platform)
         end_cb = MagicMock()
@@ -126,7 +121,9 @@ class TestDetectorStateMachine:
     @patch("src.detector.time")
     def test_short_meeting_discarded(self, mock_time, detection_config, fake_platform):
         # started_at=100, ended_at=105 → duration 5s, below min 10s.
-        mock_time.time.side_effect = [100.0, 105.0]
+        # time.time() calls: cooldown_check, cooldown_check, started_at,
+        # ended_at, cooldown_set
+        mock_time.time.side_effect = [0.0, 0.0, 100.0, 105.0, 105.0]
 
         detector = TeamsDetector(detection_config, platform=fake_platform)
         end_cb = MagicMock()
@@ -184,7 +181,9 @@ class TestDetectorStateMachine:
     def test_callback_receives_correct_event_fields(
         self, mock_time, detection_config, fake_platform
     ):
-        mock_time.time.side_effect = [1000.0, 1060.0]
+        # time.time() calls: cooldown_check, cooldown_check, started_at,
+        # ended_at, cooldown_set
+        mock_time.time.side_effect = [0.0, 0.0, 1000.0, 1060.0, 1060.0]
 
         detector = TeamsDetector(detection_config, platform=fake_platform)
         start_cb = MagicMock()
@@ -215,10 +214,10 @@ class TestDetectorStateMachine:
         assert end_event.duration_seconds == pytest.approx(60.0)
 
     @patch("src.detector.time")
-    def test_state_returns_to_idle_after_end(
-        self, mock_time, detection_config, fake_platform
-    ):
-        mock_time.time.side_effect = [100.0, 200.0]
+    def test_state_returns_to_idle_after_end(self, mock_time, detection_config, fake_platform):
+        # time.time() calls: cooldown_check, cooldown_check, started_at,
+        # ended_at, cooldown_set
+        mock_time.time.side_effect = [0.0, 0.0, 100.0, 200.0, 200.0]
 
         detector = TeamsDetector(detection_config, platform=fake_platform)
 
@@ -248,26 +247,20 @@ class TestDetectorDetectionLogic:
         fake_platform.app_running = False
         assert detector._is_meeting_active() is False
 
-    def test_app_running_and_audio_active_returns_true(
-        self, detection_config, fake_platform
-    ):
+    def test_app_running_and_audio_active_returns_true(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         fake_platform.app_running = True
         fake_platform.audio_active = True
         assert detector._is_meeting_active() is True
 
-    def test_app_running_no_audio_falls_back_to_window(
-        self, detection_config, fake_platform
-    ):
+    def test_app_running_no_audio_falls_back_to_window(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         fake_platform.app_running = True
         fake_platform.audio_active = False
         fake_platform.call_window_active = True
         assert detector._is_meeting_active() is True
 
-    def test_app_running_no_audio_no_window_returns_false(
-        self, detection_config, fake_platform
-    ):
+    def test_app_running_no_audio_no_window_returns_false(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         fake_platform.app_running = True
         fake_platform.audio_active = False
@@ -295,6 +288,7 @@ class TestDetectorRunLoop:
         t.start()
         # Give the loop a moment to start, then signal stop.
         import time
+
         time.sleep(0.05)
         detector.stop()
         t.join(timeout=5)
@@ -316,9 +310,7 @@ class TestDetectorRunLoop:
         # Should have survived the OSError and called _tick at least twice.
         assert call_count >= 2
 
-    def test_run_handles_subprocess_error_gracefully(
-        self, detection_config, fake_platform
-    ):
+    def test_run_handles_subprocess_error_gracefully(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         call_count = 0
 
@@ -333,9 +325,7 @@ class TestDetectorRunLoop:
         detector.run()
         assert call_count >= 2
 
-    def test_run_breaks_on_unexpected_exception(
-        self, detection_config, fake_platform
-    ):
+    def test_run_breaks_on_unexpected_exception(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
 
         def tick_raises():
@@ -346,9 +336,7 @@ class TestDetectorRunLoop:
         detector.run()
         assert detector.state == MeetingState.IDLE
 
-    def test_start_callback_exception_stops_loop(
-        self, detection_config, fake_platform
-    ):
+    def test_start_callback_exception_stops_loop(self, detection_config, fake_platform):
         detector = TeamsDetector(detection_config, platform=fake_platform)
         start_cb = MagicMock(side_effect=RuntimeError("callback failed"))
         detector.on_meeting_start = start_cb
@@ -367,10 +355,10 @@ class TestDetectorRunLoop:
         start_cb.assert_called_once()
 
     @patch("src.detector.time")
-    def test_end_callback_exception_stops_loop(
-        self, mock_time, detection_config, fake_platform
-    ):
-        mock_time.time.side_effect = [100.0, 200.0]
+    def test_end_callback_exception_stops_loop(self, mock_time, detection_config, fake_platform):
+        # time.time() calls: cooldown_check, cooldown_check, started_at,
+        # ended_at (callback raises before cooldown_set)
+        mock_time.time.side_effect = [0.0, 0.0, 100.0, 200.0]
 
         detector = TeamsDetector(detection_config, platform=fake_platform)
         end_cb = MagicMock(side_effect=RuntimeError("end callback failed"))
@@ -405,11 +393,22 @@ class TestDetectorRapidOscillation:
     """Verify state machine counters reset across repeated transitions."""
 
     @patch("src.detector.time")
-    def test_rapid_oscillation_no_state_leak(
-        self, mock_time, detection_config, fake_platform
-    ):
+    def test_rapid_oscillation_no_state_leak(self, mock_time, detection_config, fake_platform):
         # Provide timestamps for two full start/end cycles.
-        mock_time.time.side_effect = [100.0, 200.0, 300.0, 400.0]
+        # Each cycle: cooldown_check, cooldown_check, started_at,
+        # ended_at, cooldown_set
+        mock_time.time.side_effect = [
+            0.0,
+            0.0,
+            100.0,
+            200.0,
+            200.0,  # Cycle 1
+            201.0,
+            201.0,
+            300.0,
+            400.0,
+            400.0,  # Cycle 2
+        ]
 
         detector = TeamsDetector(detection_config, platform=fake_platform)
         start_cb = MagicMock()
@@ -452,3 +451,99 @@ class TestDetectorRapidOscillation:
         detector._tick()
         assert detector.state == MeetingState.IDLE
         assert end_cb.call_count == 2
+
+
+# ------------------------------------------------------------------
+# Cooldown tests
+# ------------------------------------------------------------------
+
+
+class TestDetectorCooldown:
+    """Verify cooldown prevents split meetings after a meeting ends."""
+
+    @patch("src.detector.time")
+    def test_meeting_signals_during_cooldown_are_ignored(self, mock_time, fake_platform):
+        """After a meeting ends, new meeting signals within the cooldown
+        period should be ignored to prevent split meetings."""
+        config = DetectionConfig(
+            poll_interval_seconds=0,
+            min_meeting_duration_seconds=10,
+            required_consecutive_detections=2,
+            required_consecutive_end_detections=2,
+            min_gap_before_new_meeting=60,
+        )
+        detector = TeamsDetector(config, platform=fake_platform)
+        start_cb = MagicMock()
+        end_cb = MagicMock()
+        detector.on_meeting_start = start_cb
+        detector.on_meeting_end = end_cb
+
+        # time.time() calls in _tick():
+        # tick1 (active, IDLE): cooldown check (0 < 0 → pass), consec=1
+        # tick2 (active, IDLE): cooldown check, consec=2 → started_at
+        # tick3 (not active, ACTIVE): ended_at, consec_end=1
+        # tick4 (not active, ACTIVE): ended_at, duration check → end,
+        #        then cooldown_until = time() + 60
+        # tick5 (active, IDLE): cooldown check → still in cooldown
+        # tick6 (active, IDLE): cooldown check → still in cooldown
+        mock_time.time.side_effect = [
+            0.0,
+            0.0,
+            100.0,  # tick1 cooldown, tick2 cooldown+started_at
+            200.0,  # tick3 ended_at (consec_end=1)
+            200.0,
+            200.0,  # tick4 ended_at (consec_end=2), cooldown_until
+            210.0,  # tick5 cooldown check (210 < 260)
+            215.0,  # tick6 cooldown check (215 < 260)
+        ]
+
+        # --- Start and end a meeting ---
+        fake_platform.app_running = True
+        fake_platform.audio_active = True
+        detector._tick()
+        detector._tick()
+        assert detector.state == MeetingState.ACTIVE
+        assert start_cb.call_count == 1
+
+        fake_platform.app_running = False
+        fake_platform.audio_active = False
+        detector._tick()
+        detector._tick()
+        assert detector.state == MeetingState.IDLE
+        assert end_cb.call_count == 1
+
+        # --- Attempt to start a new meeting during cooldown ---
+        fake_platform.app_running = True
+        fake_platform.audio_active = True
+        detector._tick()  # 210 < 260 -> ignored
+        detector._tick()  # 215 < 260 -> ignored
+        assert detector.state == MeetingState.IDLE
+        assert start_cb.call_count == 1  # No new meeting started.
+
+    def test_new_meeting_detected_after_cooldown_expires(self, fake_platform):
+        """After the cooldown period expires, new meetings should be
+        detected normally."""
+        config = DetectionConfig(
+            poll_interval_seconds=0,
+            min_meeting_duration_seconds=0,
+            required_consecutive_detections=2,
+            required_consecutive_end_detections=2,
+            min_gap_before_new_meeting=60,
+        )
+        detector = TeamsDetector(config, platform=fake_platform)
+        start_cb = MagicMock()
+        detector.on_meeting_start = start_cb
+
+        # Simulate a cooldown that has already expired.
+        import time as real_time
+
+        detector._cooldown_until = real_time.time() - 10
+
+        # New meeting signals should be detected normally.
+        fake_platform.app_running = True
+        fake_platform.audio_active = True
+        detector._tick()  # consecutive=1
+        assert detector.state == MeetingState.IDLE
+        detector._tick()  # consecutive=2 -> ACTIVE
+        assert detector.state == MeetingState.ACTIVE
+        assert start_cb.call_count == 1

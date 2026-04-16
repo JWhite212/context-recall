@@ -3,7 +3,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useRef, useEffect } from "react";
 import Markdown from "react-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import { getMeeting, deleteMeeting, exportMeeting, resummariseMeeting } from "../../lib/api";
+import {
+  getMeeting,
+  deleteMeeting,
+  exportMeeting,
+  resummariseMeeting,
+  setMeetingLabel,
+  getMeetingLabels,
+} from "../../lib/api";
 import { API_BASE } from "../../lib/constants";
 import type { TranscriptSegment } from "../../lib/types";
 import { AudioPlayer, type AudioSeekHandle } from "./AudioPlayer";
@@ -28,7 +35,10 @@ function HighlightText({ text, query }: { text: string; query: string }) {
     <>
       {parts.map((part, i) =>
         part.toLowerCase() === lowerQuery ? (
-          <mark key={i} className="bg-accent/30 text-text-primary rounded-sm px-0.5">
+          <mark
+            key={i}
+            className="bg-accent/30 text-text-primary rounded-sm px-0.5"
+          >
             {part}
           </mark>
         ) : (
@@ -53,7 +63,9 @@ function TranscriptView({
     const data = JSON.parse(json);
     segments = data.segments ?? [];
   } catch {
-    return <p className="text-sm text-text-muted">Unable to parse transcript.</p>;
+    return (
+      <p className="text-sm text-text-muted">Unable to parse transcript.</p>
+    );
   }
 
   if (segments.length === 0) {
@@ -100,9 +112,7 @@ function TranscriptView({
             {seg.speaker && (
               <span
                 className={`text-[11px] font-medium w-14 shrink-0 pt-0.5 ${
-                  seg.speaker === "Me"
-                    ? "text-accent"
-                    : "text-status-idle"
+                  seg.speaker === "Me" ? "text-accent" : "text-status-idle"
                 }`}
               >
                 {seg.speaker}
@@ -123,11 +133,123 @@ function TranscriptView({
   );
 }
 
+function LabelEditor({
+  meetingId,
+  initialLabel,
+}: {
+  meetingId: string;
+  initialLabel: string;
+}) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [value, setValue] = useState(initialLabel);
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const { data: labels = [] } = useQuery({
+    queryKey: ["meeting-labels"],
+    queryFn: getMeetingLabels,
+    staleTime: 30_000,
+  });
+
+  const saveLabel = useMutation({
+    mutationFn: (label: string) => setMeetingLabel(meetingId, label),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["meeting", meetingId] });
+      queryClient.invalidateQueries({ queryKey: ["meetings"] });
+      queryClient.invalidateQueries({ queryKey: ["meeting-labels"] });
+    },
+    onError: () => {
+      toast.error("Failed to save label.");
+    },
+  });
+
+  const commit = () => {
+    const trimmed = value.trim();
+    if (trimmed !== initialLabel) {
+      saveLabel.mutate(trimmed);
+    }
+    setOpen(false);
+  };
+
+  const filtered = labels.filter(
+    (l) => l.toLowerCase().includes(value.toLowerCase()) && l !== value,
+  );
+
+  // Close dropdown on click outside.
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(e.target as Node)
+      ) {
+        commit();
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  });
+
+  return (
+    <div className="relative inline-block" ref={wrapperRef}>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          // Delay to allow dropdown click to fire first.
+          setTimeout(() => commit(), 150);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+            (e.target as HTMLInputElement).blur();
+          }
+          if (e.key === "Escape") {
+            setValue(initialLabel);
+            setOpen(false);
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        placeholder="Add label..."
+        aria-label="Meeting label"
+        className="px-2 py-1 text-xs rounded-md bg-surface-raised border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-purple-400 w-40"
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute left-0 mt-1 w-40 rounded-lg bg-surface-raised border border-border shadow-lg z-10 py-1 max-h-32 overflow-y-auto">
+          {filtered.map((label) => (
+            <button
+              key={label}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setValue(label);
+                saveLabel.mutate(label);
+                setOpen(false);
+              }}
+              className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MeetingDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"summary" | "transcript">("summary");
+  const [activeTab, setActiveTab] = useState<"summary" | "transcript">(
+    "summary",
+  );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -140,7 +262,10 @@ export function MeetingDetail() {
       if (e.key === "Escape") setExportOpen(false);
     };
     const handleClick = (e: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+      if (
+        exportMenuRef.current &&
+        !exportMenuRef.current.contains(e.target as Node)
+      ) {
         setExportOpen(false);
       }
     };
@@ -152,7 +277,12 @@ export function MeetingDetail() {
     };
   }, [exportOpen]);
 
-  const { data: meeting, isLoading, isError, refetch } = useQuery({
+  const {
+    data: meeting,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ["meeting", id],
     queryFn: () => getMeeting(id!),
     enabled: !!id,
@@ -188,7 +318,10 @@ export function MeetingDetail() {
   if (isError) {
     return (
       <div className="p-6 max-w-3xl">
-        <ErrorState message="Failed to load meeting." onRetry={() => refetch()} />
+        <ErrorState
+          message="Failed to load meeting."
+          onRetry={() => refetch()}
+        />
       </div>
     );
   }
@@ -223,7 +356,17 @@ export function MeetingDetail() {
         onClick={() => navigate("/meetings")}
         className="text-sm text-text-secondary hover:text-text-primary w-fit flex items-center gap-1"
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
           <polyline points="15 18 9 12 15 6" />
         </svg>
         Back
@@ -231,7 +374,9 @@ export function MeetingDetail() {
 
       {/* Header */}
       <div>
-        <h1 className="text-lg font-semibold text-text-primary">{meeting.title}</h1>
+        <h1 className="text-lg font-semibold text-text-primary">
+          {meeting.title}
+        </h1>
         <div className="flex items-center gap-3 mt-1 flex-wrap">
           <span className="text-xs text-text-muted">
             {new Date(meeting.started_at * 1000).toLocaleDateString(undefined, {
@@ -249,9 +394,7 @@ export function MeetingDetail() {
             </span>
           )}
           {meeting.language && (
-            <span className="text-xs text-text-muted">
-              {meeting.language}
-            </span>
+            <span className="text-xs text-text-muted">{meeting.language}</span>
           )}
           {meeting.word_count != null && (
             <span className="text-xs text-text-muted">
@@ -284,112 +427,144 @@ export function MeetingDetail() {
             ))}
           </div>
         )}
+
+        {/* Label */}
+        <div className="mt-2">
+          <LabelEditor meetingId={meeting.id} initialLabel={meeting.label} />
+        </div>
       </div>
 
       {/* Actions row */}
       <div className="flex items-center gap-2">
-
-      {/* Re-summarise */}
-      {hasTranscript && (
-        <button
-          onClick={() => resummarise.mutate()}
-          disabled={resummarise.isPending}
-          className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-          </svg>
-          {resummarise.isPending ? "Summarising..." : "Re-summarise"}
-        </button>
-      )}
-      {resummarise.isError && (
-        <span className="text-xs text-status-error">
-          {resummarise.error instanceof Error
-            ? resummarise.error.message
-            : "An unexpected error occurred"}
-        </span>
-      )}
-
-      {/* Export */}
-      <div className="relative inline-block" ref={exportMenuRef}>
-        <button
-          onClick={() => setExportOpen(!exportOpen)}
-          aria-haspopup="true"
-          aria-expanded={exportOpen}
-          className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-          Export
-        </button>
-        {exportOpen && (
-          <div role="menu" className="absolute left-0 mt-1 w-40 rounded-lg bg-surface-raised border border-border shadow-lg z-10 py-1">
-            <button
-              onClick={async () => {
-                setExportOpen(false);
-                try {
-                  const md = await exportMeeting(id!, "markdown");
-                  const blob = new Blob([md], { type: "text/markdown" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${meeting.title || "meeting"}.md`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  toast.success("Exported as Markdown.");
-                } catch {
-                  toast.error("Failed to export Markdown.");
-                }
-              }}
-              role="menuitem"
-              className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
+        {/* Re-summarise */}
+        {hasTranscript && (
+          <button
+            onClick={() => resummarise.mutate()}
+            disabled={resummarise.isPending}
+            className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
             >
-              Markdown (.md)
-            </button>
-            <button
-              onClick={async () => {
-                setExportOpen(false);
-                try {
-                  const json = await exportMeeting(id!, "json");
-                  const blob = new Blob([json], { type: "application/json" });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = `${meeting.title || "meeting"}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  toast.success("Exported as JSON.");
-                } catch {
-                  toast.error("Failed to export JSON.");
-                }
-              }}
-              role="menuitem"
-              className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
-            >
-              JSON (.json)
-            </button>
-            <button
-              onClick={async () => {
-                setExportOpen(false);
-                const md = meeting.summary_markdown || "";
-                await navigator.clipboard.writeText(md);
-                toast.success("Summary copied to clipboard.");
-              }}
-              role="menuitem"
-              className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
-            >
-              Copy summary
-            </button>
-          </div>
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+            {resummarise.isPending ? "Summarising..." : "Re-summarise"}
+          </button>
         )}
-      </div>
+        {resummarise.isError && (
+          <span className="text-xs text-status-error">
+            {resummarise.error instanceof Error
+              ? resummarise.error.message
+              : "An unexpected error occurred"}
+          </span>
+        )}
 
+        {/* Export */}
+        <div className="relative inline-block" ref={exportMenuRef}>
+          <button
+            onClick={() => setExportOpen(!exportOpen)}
+            aria-haspopup="true"
+            aria-expanded={exportOpen}
+            className="px-3 py-1.5 text-xs rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors flex items-center gap-1.5"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Export
+          </button>
+          {exportOpen && (
+            <div
+              role="menu"
+              className="absolute left-0 mt-1 w-40 rounded-lg bg-surface-raised border border-border shadow-lg z-10 py-1"
+            >
+              <button
+                onClick={async () => {
+                  setExportOpen(false);
+                  try {
+                    const md = await exportMeeting(id!, "markdown");
+                    const blob = new Blob([md], { type: "text/markdown" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `${meeting.title || "meeting"}.md`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success("Exported as Markdown.");
+                  } catch {
+                    toast.error("Failed to export Markdown.");
+                  }
+                }}
+                role="menuitem"
+                className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
+              >
+                Markdown (.md)
+              </button>
+              <button
+                onClick={async () => {
+                  setExportOpen(false);
+                  try {
+                    const json = await exportMeeting(id!, "json");
+                    const blob = new Blob([json], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `${meeting.title || "meeting"}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success("Exported as JSON.");
+                  } catch {
+                    toast.error("Failed to export JSON.");
+                  }
+                }}
+                role="menuitem"
+                className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
+              >
+                JSON (.json)
+              </button>
+              <button
+                onClick={async () => {
+                  setExportOpen(false);
+                  const md = meeting.summary_markdown || "";
+                  await navigator.clipboard.writeText(md);
+                  toast.success("Summary copied to clipboard.");
+                }}
+                role="menuitem"
+                className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
+              >
+                Copy summary
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Audio player */}
       {hasAudio && (
-        <AudioPlayer src={`${API_BASE}/api/meetings/${meeting.id}/audio`} seekRef={audioSeekRef} />
+        <AudioPlayer
+          src={`${API_BASE}/api/meetings/${meeting.id}/audio`}
+          seekRef={audioSeekRef}
+        />
       )}
 
       {/* Tabs */}
@@ -427,18 +602,26 @@ export function MeetingDetail() {
               <div className="prose prose-sm prose-invert max-w-none text-text-primary [&_h1]:text-text-primary [&_h2]:text-text-primary [&_h3]:text-text-primary [&_li]:text-text-primary [&_p]:text-text-secondary [&_strong]:text-text-primary">
                 <Markdown
                   rehypePlugins={[
-                    [rehypeSanitize, {
-                      ...defaultSchema,
-                      attributes: {
-                        ...defaultSchema.attributes,
-                        a: [...(defaultSchema.attributes?.a || []), "className"],
+                    [
+                      rehypeSanitize,
+                      {
+                        ...defaultSchema,
+                        attributes: {
+                          ...defaultSchema.attributes,
+                          a: [
+                            ...(defaultSchema.attributes?.a || []),
+                            "className",
+                          ],
+                        },
                       },
-                    }],
+                    ],
                   ]}
                   components={{
                     a: ({ href, children, ...props }) => {
                       const safeHref =
-                        href && /^(https?:|mailto:|#)/i.test(href) ? href : undefined;
+                        href && /^(https?:|mailto:|#)/i.test(href)
+                          ? href
+                          : undefined;
                       return (
                         <a href={safeHref} rel="noopener noreferrer" {...props}>
                           {children}
@@ -446,12 +629,16 @@ export function MeetingDetail() {
                       );
                     },
                   }}
-                >{meeting.summary_markdown!}</Markdown>
+                >
+                  {meeting.summary_markdown!}
+                </Markdown>
               </div>
             ) : activeTab === "transcript" && hasTranscript ? (
               <TranscriptView
                 json={meeting.transcript_json!}
-                onSeek={hasAudio ? (s) => audioSeekRef.current?.seekTo(s) : undefined}
+                onSeek={
+                  hasAudio ? (s) => audioSeekRef.current?.seekTo(s) : undefined
+                }
               />
             ) : (
               <p className="text-sm text-text-muted">No content available.</p>
@@ -464,7 +651,9 @@ export function MeetingDetail() {
       <div className="pt-4 border-t border-border">
         {confirmDelete ? (
           <div className="flex items-center gap-3">
-            <span className="text-sm text-status-error">Delete this meeting permanently?</span>
+            <span className="text-sm text-status-error">
+              Delete this meeting permanently?
+            </span>
             <button
               onClick={() => deleteM.mutate()}
               disabled={deleteM.isPending}

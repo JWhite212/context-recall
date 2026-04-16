@@ -55,6 +55,7 @@ def detection_config() -> DetectionConfig:
         min_meeting_duration_seconds=10,
         required_consecutive_detections=2,
         required_consecutive_end_detections=2,
+        min_gap_before_new_meeting=0,
     )
 
 
@@ -102,9 +103,7 @@ def sample_transcript() -> Transcript:
         segments=[
             TranscriptSegment(start=0.0, end=5.0, text="Hello everyone."),
             TranscriptSegment(start=5.0, end=12.0, text="Let's discuss the roadmap."),
-            TranscriptSegment(
-                start=12.0, end=20.0, text="We need to ship by Friday."
-            ),
+            TranscriptSegment(start=12.0, end=20.0, text="We need to ship by Friday."),
         ],
         language="en",
         language_probability=0.98,
