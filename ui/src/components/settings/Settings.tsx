@@ -7,6 +7,9 @@ import {
   updateConfig,
   getModels,
   downloadModel,
+  getTemplates,
+  saveTemplate,
+  deleteTemplate,
 } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
@@ -14,7 +17,7 @@ import { useTheme } from "../../hooks/useTheme";
 import { useToast } from "../common/Toast";
 import { Tooltip } from "../common/Tooltip";
 import type { Theme } from "../../hooks/useTheme";
-import type { AppConfig, WhisperModel } from "../../lib/types";
+import type { AppConfig, WhisperModel, SummaryTemplate } from "../../lib/types";
 
 /* ------------------------------------------------------------------ */
 /*  Reusable form primitives                                          */
@@ -259,6 +262,343 @@ function UpdateChecker() {
       )}
       {error && <p className="text-xs text-status-error mt-1">{error}</p>}
     </div>
+  );
+}
+
+const BUILT_IN_TEMPLATES = [
+  "standard",
+  "standup",
+  "retro",
+  "1on1",
+  "client-call",
+];
+
+function TemplatesSection() {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [creating, setCreating] = useState(false);
+  const [expandedTemplate, setExpandedTemplate] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    name: string;
+    description: string;
+    system_prompt: string;
+    sections: string;
+  }>({ name: "", description: "", system_prompt: "", sections: "" });
+
+  const { data: templates = [], isLoading } = useQuery({
+    queryKey: ["templates"],
+    queryFn: getTemplates,
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: (template: SummaryTemplate) => saveTemplate(template),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["templates"] });
+      setCreating(false);
+      setExpandedTemplate(null);
+      setEditForm({
+        name: "",
+        description: "",
+        system_prompt: "",
+        sections: "",
+      });
+      toast.success("Template saved.");
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to save template.",
+      );
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (name: string) => deleteTemplate(name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["templates"] });
+      toast.success("Template deleted.");
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to delete template.",
+      );
+    },
+  });
+
+  function handleSubmitNew() {
+    const name = editForm.name.trim();
+    if (!name) return;
+    saveMutation.mutate({
+      name,
+      description: editForm.description.trim(),
+      system_prompt: editForm.system_prompt.trim(),
+      sections: editForm.sections
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    });
+  }
+
+  function handleSubmitEdit(original: SummaryTemplate) {
+    saveMutation.mutate({
+      name: original.name,
+      description: editForm.description.trim(),
+      system_prompt: editForm.system_prompt.trim(),
+      sections: editForm.sections
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
+    });
+  }
+
+  function openEdit(template: SummaryTemplate) {
+    if (expandedTemplate === template.name) {
+      setExpandedTemplate(null);
+      return;
+    }
+    setExpandedTemplate(template.name);
+    setCreating(false);
+    setEditForm({
+      name: template.name,
+      description: template.description,
+      system_prompt: template.system_prompt,
+      sections: template.sections.join(", "),
+    });
+  }
+
+  const FORM_INPUT =
+    "w-full bg-surface border border-border rounded-lg px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent";
+
+  return (
+    <Section
+      title="Summary Templates"
+      description="Manage templates for meeting summarisation"
+    >
+      <div className="py-3">
+        {isLoading ? (
+          <p className="text-sm text-text-muted">Loading templates...</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-3">
+            {templates.map((template) => {
+              const isBuiltIn = BUILT_IN_TEMPLATES.includes(template.name);
+              const isExpanded = expandedTemplate === template.name;
+
+              return (
+                <div
+                  key={template.name}
+                  className="rounded-lg bg-surface border border-border p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-text-primary">
+                          {template.name}
+                        </span>
+                        {isBuiltIn && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent">
+                            Built-in
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        {template.description || "No description"}
+                      </p>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        {template.sections.length} section
+                        {template.sections.length !== 1 ? "s" : ""}
+                      </p>
+                    </div>
+                    {!isBuiltIn && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => openEdit(template)}
+                          className="text-xs px-2 py-1 rounded-lg bg-surface-raised border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+                        >
+                          {isExpanded ? "Collapse" : "Edit"}
+                        </button>
+                        <button
+                          onClick={() => deleteMutation.mutate(template.name)}
+                          disabled={deleteMutation.isPending}
+                          className="text-xs px-2 py-1 rounded-lg text-status-error hover:bg-status-error/10 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Inline edit form for custom templates */}
+                  {isExpanded && !isBuiltIn && (
+                    <div className="mt-3 pt-3 border-t border-border flex flex-col gap-3">
+                      <div>
+                        <label className="text-xs text-text-muted">
+                          Description
+                        </label>
+                        <input
+                          type="text"
+                          value={editForm.description}
+                          onChange={(e) =>
+                            setEditForm((f) => ({
+                              ...f,
+                              description: e.target.value,
+                            }))
+                          }
+                          className={FORM_INPUT}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-text-muted">
+                          System prompt
+                        </label>
+                        <textarea
+                          value={editForm.system_prompt}
+                          onChange={(e) =>
+                            setEditForm((f) => ({
+                              ...f,
+                              system_prompt: e.target.value,
+                            }))
+                          }
+                          rows={4}
+                          className={`${FORM_INPUT} resize-y`}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-text-muted">
+                          Sections (comma-separated)
+                        </label>
+                        <input
+                          type="text"
+                          value={editForm.sections}
+                          onChange={(e) =>
+                            setEditForm((f) => ({
+                              ...f,
+                              sections: e.target.value,
+                            }))
+                          }
+                          className={FORM_INPUT}
+                        />
+                      </div>
+                      <div className="flex gap-2 justify-end">
+                        <button
+                          onClick={() => setExpandedTemplate(null)}
+                          className="px-3 py-1 text-xs rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleSubmitEdit(template)}
+                          disabled={saveMutation.isPending}
+                          className="px-3 py-1 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+                        >
+                          {saveMutation.isPending ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Create template form */}
+        {creating ? (
+          <div className="mt-3 rounded-lg bg-surface border border-border p-4 flex flex-col gap-3">
+            <h3 className="text-sm font-medium text-text-primary">
+              Create Template
+            </h3>
+            <div>
+              <label className="text-xs text-text-muted">Name</label>
+              <input
+                type="text"
+                value={editForm.name}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, name: e.target.value }))
+                }
+                placeholder="my-template"
+                className={FORM_INPUT}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">Description</label>
+              <input
+                type="text"
+                value={editForm.description}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, description: e.target.value }))
+                }
+                placeholder="What this template is for"
+                className={FORM_INPUT}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">System prompt</label>
+              <textarea
+                value={editForm.system_prompt}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, system_prompt: e.target.value }))
+                }
+                rows={4}
+                placeholder="Instructions for the summariser..."
+                className={`${FORM_INPUT} resize-y`}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-text-muted">
+                Sections (comma-separated)
+              </label>
+              <input
+                type="text"
+                value={editForm.sections}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, sections: e.target.value }))
+                }
+                placeholder="Summary, Action Items, Decisions"
+                className={FORM_INPUT}
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setCreating(false);
+                  setEditForm({
+                    name: "",
+                    description: "",
+                    system_prompt: "",
+                    sections: "",
+                  });
+                }}
+                className="px-3 py-1 text-xs rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSubmitNew}
+                disabled={!editForm.name.trim() || saveMutation.isPending}
+                className="px-3 py-1 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+              >
+                {saveMutation.isPending ? "Saving..." : "Create"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            onClick={() => {
+              setCreating(true);
+              setExpandedTemplate(null);
+              setEditForm({
+                name: "",
+                description: "",
+                system_prompt: "",
+                sections: "",
+              });
+            }}
+            className="mt-3 px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+          >
+            Create Template
+          </button>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -1171,6 +1511,9 @@ export function Settings() {
           </Section>
         </>
       )}
+
+      {/* Summary Templates — always visible when daemon is running */}
+      {daemonRunning && <TemplatesSection />}
 
       {/* Read-only info */}
       <Section title="Daemon">

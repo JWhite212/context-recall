@@ -1,5 +1,12 @@
 /** TypeScript types matching the Python backend models. */
 
+export interface SummaryTemplate {
+  name: string;
+  description: string;
+  system_prompt: string;
+  sections: string[];
+}
+
 export type DaemonState =
   | "idle"
   | "detecting"
