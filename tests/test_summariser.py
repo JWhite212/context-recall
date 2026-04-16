@@ -440,3 +440,114 @@ class TestChunkedClaude:
 
         assert result.title == "Small Claude"
         mock_client.messages.create.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TestOllamaFallback
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaFallback:
+    """Test automatic fallback from Ollama to Claude on timeout."""
+
+    def test_ollama_timeout_falls_back_to_claude(self):
+        """When Ollama times out and Claude key is set, fall back to Claude."""
+        config = SummarisationConfig(
+            backend="ollama",
+            anthropic_api_key="sk-test-key",
+            ollama_model="test-model",
+        )
+        summariser = Summariser(config)
+        transcript = Transcript(
+            segments=[
+                TranscriptSegment(start=0, end=5, text="Hello world test content"),
+            ],
+        )
+
+        with patch.object(
+            summariser,
+            "_summarise_ollama",
+            side_effect=TimeoutError("timeout"),
+        ):
+            with patch.object(summariser, "_summarise_claude") as mock_claude:
+                mock_claude.return_value = MeetingSummary(
+                    raw_markdown="# Fallback\n\n## Tags\ntest",
+                    title="Fallback",
+                    tags=["test"],
+                )
+                result = summariser.summarise(transcript)
+                mock_claude.assert_called_once_with(transcript)
+                assert result.title == "Fallback"
+
+    def test_ollama_timeout_without_claude_raises(self):
+        """When Ollama times out and no Claude key, re-raise TimeoutError."""
+        config = SummarisationConfig(
+            backend="ollama",
+            anthropic_api_key="",
+            ollama_model="test-model",
+        )
+        summariser = Summariser(config)
+        transcript = Transcript(
+            segments=[
+                TranscriptSegment(start=0, end=5, text="Hello world"),
+            ],
+        )
+
+        with patch.object(
+            summariser,
+            "_summarise_ollama",
+            side_effect=TimeoutError("timeout"),
+        ):
+            with pytest.raises(TimeoutError):
+                summariser.summarise(transcript)
+
+    def test_ollama_success_no_fallback(self):
+        """When Ollama succeeds, Claude is never called."""
+        config = SummarisationConfig(
+            backend="ollama",
+            anthropic_api_key="sk-test-key",
+            ollama_model="test-model",
+        )
+        summariser = Summariser(config)
+        transcript = Transcript(
+            segments=[
+                TranscriptSegment(start=0, end=5, text="Hello world"),
+            ],
+        )
+
+        with patch.object(summariser, "_summarise_ollama") as mock_ollama:
+            mock_ollama.return_value = MeetingSummary(
+                raw_markdown="# Success\n\n## Tags\nok",
+                title="Success",
+                tags=["ok"],
+            )
+            with patch.object(summariser, "_summarise_claude") as mock_claude:
+                result = summariser.summarise(transcript)
+                mock_ollama.assert_called_once()
+                mock_claude.assert_not_called()
+                assert result.title == "Success"
+# TestOllamaNumCtx
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaNumCtx:
+    @patch("src.summariser.httpx.post")
+    def test_num_ctx_in_payload(self, mock_post):
+        """Verify num_ctx is included in the Ollama API payload."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"message": {"content": "# Title\n\n## Tags\nx"}}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        config = SummarisationConfig(ollama_num_ctx=65536)
+        summariser = Summariser(config)
+        summariser.summarise(_make_transcript(100))
+
+        _, kwargs = mock_post.call_args
+        payload = kwargs["json"]
+        assert payload["options"]["num_ctx"] == 65536
+
+    def test_default_num_ctx(self):
+        """Verify default num_ctx is 32768."""
+        config = SummarisationConfig()
+        assert config.ollama_num_ctx == 32768
