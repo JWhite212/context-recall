@@ -70,6 +70,13 @@ export interface TranscriptSegment {
   speaker: string;
 }
 
+export interface SpeakerMapping {
+  speaker_id: string;
+  display_name: string;
+  source: string;
+  created_at: number;
+}
+
 /** Application config sections matching config.yaml. */
 
 export interface DetectionConfig {
