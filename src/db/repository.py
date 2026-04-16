@@ -7,6 +7,7 @@ Provides async CRUD operations over the SQLite database.
 import json
 import logging
 import os
+import struct
 import time
 import uuid
 from dataclasses import dataclass
@@ -318,3 +319,93 @@ class MeetingRepository:
                 logger.debug("FTS update skipped (FTS5 not available)")
             else:
                 logger.warning("FTS update failed for meeting %s: %s", meeting_id, e)
+
+    # ------------------------------------------------------------------
+    # Embedding storage / retrieval for semantic search
+    # ------------------------------------------------------------------
+
+    async def store_embeddings(
+        self,
+        meeting_id: str,
+        embeddings: list[dict],
+    ) -> None:
+        """Store segment embeddings for a meeting. Replaces existing embeddings.
+
+        Each dict in *embeddings* must contain: segment_index, embedding,
+        text, speaker (optional), and start_time.
+        """
+        # Delete existing embeddings for this meeting first.
+        await self._db.conn.execute(
+            "DELETE FROM segment_embeddings WHERE meeting_id = ?", (meeting_id,)
+        )
+        for emb in embeddings:
+            embedding_blob = struct.pack(f"{len(emb['embedding'])}f", *emb["embedding"])
+            await self._db.conn.execute(
+                """INSERT INTO segment_embeddings
+                   (meeting_id, segment_index, embedding, text, speaker, start_time)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    meeting_id,
+                    emb["segment_index"],
+                    embedding_blob,
+                    emb["text"],
+                    emb.get("speaker", ""),
+                    emb["start_time"],
+                ),
+            )
+        await self._db.conn.commit()
+
+    async def get_all_embeddings(self) -> list[dict]:
+        """Retrieve all embeddings for search.
+
+        Returns dicts with id, meeting_id, segment_index, embedding, text,
+        speaker, and start_time.
+        """
+        cursor = await self._db.conn.execute(
+            "SELECT id, meeting_id, segment_index, embedding, text, speaker, start_time "
+            "FROM segment_embeddings"
+        )
+        rows = await cursor.fetchall()
+        results = []
+        for row in rows:
+            blob = row["embedding"]
+            num_floats = len(blob) // 4
+            embedding = list(struct.unpack(f"{num_floats}f", blob))
+            results.append(
+                {
+                    "id": row["id"],
+                    "meeting_id": row["meeting_id"],
+                    "segment_index": row["segment_index"],
+                    "embedding": embedding,
+                    "text": row["text"],
+                    "speaker": row["speaker"],
+                    "start_time": row["start_time"],
+                }
+            )
+        return results
+
+    async def get_meeting_embeddings(self, meeting_id: str) -> list[dict]:
+        """Retrieve embeddings for a specific meeting."""
+        cursor = await self._db.conn.execute(
+            "SELECT id, meeting_id, segment_index, embedding, text, speaker, start_time "
+            "FROM segment_embeddings WHERE meeting_id = ?",
+            (meeting_id,),
+        )
+        rows = await cursor.fetchall()
+        results = []
+        for row in rows:
+            blob = row["embedding"]
+            num_floats = len(blob) // 4
+            embedding = list(struct.unpack(f"{num_floats}f", blob))
+            results.append(
+                {
+                    "id": row["id"],
+                    "meeting_id": row["meeting_id"],
+                    "segment_index": row["segment_index"],
+                    "embedding": embedding,
+                    "text": row["text"],
+                    "speaker": row["speaker"],
+                    "start_time": row["start_time"],
+                }
+            )
+        return results
