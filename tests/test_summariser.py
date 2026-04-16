@@ -400,3 +400,31 @@ class TestChunkedClaude:
 
         assert result.title == "Small Claude"
         mock_client.messages.create.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TestOllamaNumCtx
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaNumCtx:
+    @patch("src.summariser.httpx.post")
+    def test_num_ctx_in_payload(self, mock_post):
+        """Verify num_ctx is included in the Ollama API payload."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"message": {"content": "# Title\n\n## Tags\nx"}}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        config = SummarisationConfig(ollama_num_ctx=65536)
+        summariser = Summariser(config)
+        summariser.summarise(_make_transcript(100))
+
+        _, kwargs = mock_post.call_args
+        payload = kwargs["json"]
+        assert payload["options"]["num_ctx"] == 65536
+
+    def test_default_num_ctx(self):
+        """Verify default num_ctx is 32768."""
+        config = SummarisationConfig()
+        assert config.ollama_num_ctx == 32768

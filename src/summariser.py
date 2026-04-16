@@ -442,6 +442,7 @@ class Summariser:
             "stream": False,
             "options": {
                 "num_predict": self._config.max_tokens,
+                "num_ctx": self._config.ollama_num_ctx,
             },
         }
 
