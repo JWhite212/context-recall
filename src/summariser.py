@@ -587,7 +587,14 @@ class Summariser:
         if backend == "claude":
             summary = self._summarise_claude(transcript)
         elif backend == "ollama":
-            summary = self._summarise_ollama(transcript)
+            try:
+                summary = self._summarise_ollama(transcript)
+            except TimeoutError:
+                if self._config.anthropic_api_key:
+                    logger.warning("Ollama timed out. Falling back to Claude API...")
+                    summary = self._summarise_claude(transcript)
+                else:
+                    raise
         else:
             raise ValueError(
                 f"Unknown summarisation backend: '{backend}'. Use 'claude' or 'ollama'."
