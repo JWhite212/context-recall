@@ -65,11 +65,11 @@ class AudioConfig:
 
 @dataclass
 class TranscriptionConfig:
-    model_size: str = "small.en"
-    compute_type: str = "auto"
+    model_size: str = "mlx-community/whisper-large-v3-turbo"
     language: str = "en"
-    cpu_threads: int = 0
-    vad_threshold: float = 0.35  # Silero VAD threshold (default 0.5; lower = less aggressive).
+    vad_threshold: float = (
+        0.35  # Kept for backward compatibility; MLX Whisper handles VAD internally.
+    )
 
 
 @dataclass
