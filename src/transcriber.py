@@ -90,6 +90,32 @@ class Transcriber:
     def __init__(self, config: TranscriptionConfig):
         self._config = config
 
+    @staticmethod
+    def _is_repetition_hallucination(text: str, max_consecutive: int = 5) -> bool:
+        """Detect repeated-word hallucinations (e.g. 'Dios Dios Dios ...')."""
+        words = text.lower().split()
+        if len(words) < max_consecutive:
+            return False
+        count = 1
+        for i in range(1, len(words)):
+            if words[i] == words[i - 1]:
+                count += 1
+                if count >= max_consecutive:
+                    return True
+            else:
+                count = 1
+        return False
+
+    @staticmethod
+    def _text_compression_ratio(text: str) -> float:
+        """Ratio of total length to unique-character count (high = repetitive)."""
+        if not text:
+            return 0.0
+        unique = len(set(text.lower()))
+        if unique == 0:
+            return 0.0
+        return len(text) / unique
+
     def transcribe(
         self,
         audio_path: Path,
@@ -117,19 +143,59 @@ class Transcriber:
             str(audio_path),
             path_or_hf_repo=self._config.model_size,
             language=language,
+            condition_on_previous_text=self._config.condition_on_previous_text,
+            compression_ratio_threshold=self._config.compression_ratio_threshold,
+            logprob_threshold=self._config.logprob_threshold,
+            no_speech_threshold=self._config.no_speech_threshold,
+            hallucination_silence_threshold=self._config.hallucination_silence_threshold,
+            temperature=tuple(self._config.temperature),
+            initial_prompt=self._config.initial_prompt or None,
+            verbose=False,
         )
 
-        segments = []
+        segments: list[TranscriptSegment] = []
+        last_end = -1.0
         for seg_dict in result.get("segments", []):
             text = seg_dict["text"].strip()
             if not text:
                 continue
-            ts = TranscriptSegment(
-                start=seg_dict["start"],
-                end=seg_dict["end"],
-                text=text,
-            )
+
+            start = seg_dict["start"]
+            end = seg_dict["end"]
+
+            # Timestamp monotonicity: skip segments that jump backwards.
+            if start < last_end - 0.1:
+                logger.warning(
+                    "Skipping backward segment [%.1f-%.1f]: %s",
+                    start,
+                    end,
+                    text[:80],
+                )
+                continue
+
+            # Repetition hallucination filter.
+            if self._is_repetition_hallucination(text):
+                logger.warning(
+                    "Skipping repetition hallucination [%.1f-%.1f]: %s",
+                    start,
+                    end,
+                    text[:80],
+                )
+                continue
+
+            # High compression ratio filter (very repetitive character patterns).
+            if self._text_compression_ratio(text) > 15.0 and len(text) > 20:
+                logger.warning(
+                    "Skipping high-compression segment [%.1f-%.1f]: %s",
+                    start,
+                    end,
+                    text[:80],
+                )
+                continue
+
+            ts = TranscriptSegment(start=start, end=end, text=text)
             segments.append(ts)
+            last_end = end
             if on_segment:
                 try:
                     on_segment(ts)

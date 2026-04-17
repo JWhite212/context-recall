@@ -213,3 +213,127 @@ class TestTranscriber:
         call_kwargs = mock_transcribe.call_args
         assert call_kwargs.kwargs["path_or_hf_repo"] == "mlx-community/whisper-small.en"
         assert call_kwargs.kwargs["language"] is None  # "auto" maps to None
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_transcribe_passes_all_params(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig(
+            compression_ratio_threshold=3.0,
+            logprob_threshold=-0.5,
+            no_speech_threshold=0.7,
+            temperature=(0.0, 0.4, 0.8),
+            initial_prompt="MeetingMind standup",
+        )
+        transcriber = Transcriber(config)
+        mock_transcribe.return_value = _make_mlx_result()
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+        transcriber.transcribe(audio_file)
+
+        kw = mock_transcribe.call_args.kwargs
+        assert kw["condition_on_previous_text"] is False
+        assert kw["compression_ratio_threshold"] == 3.0
+        assert kw["logprob_threshold"] == -0.5
+        assert kw["no_speech_threshold"] == 0.7
+        assert kw["hallucination_silence_threshold"] is None
+        assert kw["temperature"] == (0.0, 0.4, 0.8)
+        assert kw["initial_prompt"] == "MeetingMind standup"
+        assert kw["verbose"] is False
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_empty_initial_prompt_maps_to_none(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig(initial_prompt="")
+        transcriber = Transcriber(config)
+        mock_transcribe.return_value = _make_mlx_result()
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+        transcriber.transcribe(audio_file)
+
+        assert mock_transcribe.call_args.kwargs["initial_prompt"] is None
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_backward_timestamp_segments_filtered(self, mock_transcribe, tmp_path):
+        """Segments that jump backwards in time should be dropped."""
+        config = TranscriptionConfig()
+        transcriber = Transcriber(config)
+        mock_transcribe.return_value = {
+            "segments": [
+                {"id": 0, "start": 0.0, "end": 3.0, "text": "First."},
+                {"id": 1, "start": 1.0, "end": 2.0, "text": "Backward."},
+                {"id": 2, "start": 3.0, "end": 6.0, "text": "Third."},
+            ],
+            "language": "en",
+        }
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+        result = transcriber.transcribe(audio_file)
+
+        assert len(result.segments) == 2
+        assert result.segments[0].text == "First."
+        assert result.segments[1].text == "Third."
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_repetition_hallucination_segments_filtered(self, mock_transcribe, tmp_path):
+        """Segments with repeated-word hallucinations should be dropped."""
+        config = TranscriptionConfig()
+        transcriber = Transcriber(config)
+        mock_transcribe.return_value = {
+            "segments": [
+                {"id": 0, "start": 0.0, "end": 3.0, "text": "Normal speech here."},
+                {
+                    "id": 1,
+                    "start": 3.0,
+                    "end": 6.0,
+                    "text": "Dios Dios Dios Dios Dios Dios",
+                },
+                {"id": 2, "start": 6.0, "end": 9.0, "text": "Back to normal."},
+            ],
+            "language": "en",
+        }
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+        result = transcriber.transcribe(audio_file)
+
+        assert len(result.segments) == 2
+        assert result.segments[0].text == "Normal speech here."
+        assert result.segments[1].text == "Back to normal."
+
+
+# ------------------------------------------------------------------
+# Hallucination filter unit tests
+# ------------------------------------------------------------------
+
+
+class TestRepetitionHallucination:
+    """Verify _is_repetition_hallucination static method."""
+
+    def test_detects_repeated_words(self):
+        assert Transcriber._is_repetition_hallucination("Dios Dios Dios Dios Dios Dios")
+
+    def test_normal_text_passes(self):
+        assert not Transcriber._is_repetition_hallucination("Hello how are you doing today")
+
+    def test_short_repetition_allowed(self):
+        # 3 consecutive repeats is below the default threshold of 5.
+        assert not Transcriber._is_repetition_hallucination("yes yes yes done")
+
+    def test_empty_string(self):
+        assert not Transcriber._is_repetition_hallucination("")
+
+
+class TestTextCompressionRatio:
+    """Verify _text_compression_ratio static method."""
+
+    def test_normal_text_low_ratio(self):
+        ratio = Transcriber._text_compression_ratio("Hello, how are you doing today?")
+        assert ratio < 15.0
+
+    def test_repetitive_text_high_ratio(self):
+        ratio = Transcriber._text_compression_ratio("ha " * 100)
+        assert ratio > 15.0
+
+    def test_empty_string_returns_zero(self):
+        assert Transcriber._text_compression_ratio("") == 0.0

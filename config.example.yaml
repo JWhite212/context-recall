@@ -73,6 +73,35 @@ transcription:
   # Language. Use "en" for English-only models, or "auto" to detect.
   language: "en"
 
+  # Prevent repetition loops by NOT feeding previous window output as prompt
+  # for the next window. When True, garbled output in one window poisons all
+  # subsequent windows causing "Dios Dios Dios..." style hallucinations.
+  # condition_on_previous_text: false
+
+  # Maximum compression ratio for a segment. Segments above this threshold
+  # are considered garbled/hallucinated and discarded by MLX Whisper.
+  # compression_ratio_threshold: 2.4
+
+  # Minimum average log-probability for accepted tokens. Segments with lower
+  # average log-prob are treated as low-confidence and may be discarded.
+  # logprob_threshold: -1.0
+
+  # Threshold for classifying a segment as silence/no-speech.
+  # Segments with no-speech probability above this value are skipped.
+  # no_speech_threshold: 0.6
+
+  # Skip segments that are detected as silence-based hallucinations.
+  # Set to a float (seconds) to enable, or leave as null to disable.
+  # hallucination_silence_threshold: null
+
+  # Temperature fallback schedule for decoding. Whisper retries with higher
+  # temperatures when compression_ratio or logprob thresholds are not met.
+  # temperature: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+
+  # Optional initial prompt to guide vocabulary (e.g. domain-specific terms).
+  # Helps with proper nouns, acronyms, or jargon the model may not know.
+  # initial_prompt: ""
+
   # VAD threshold (kept for backward compatibility).
   # MLX Whisper handles voice activity detection internally.
   vad_threshold: 0.35
