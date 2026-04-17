@@ -30,6 +30,7 @@ logger = logging.getLogger("meetingmind.api.reprocess")
 router = APIRouter()
 
 _repo = None
+_in_flight: set[str] = set()
 
 
 def init(repo) -> None:
@@ -90,6 +91,9 @@ async def reprocess_meeting(meeting_id: str):
     if not _repo:
         raise HTTPException(status_code=503, detail="Repository not available")
 
+    if meeting_id in _in_flight:
+        raise HTTPException(status_code=409, detail="Reprocessing already in progress")
+
     meeting = await _repo.get_meeting(meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
@@ -108,6 +112,7 @@ async def reprocess_meeting(meeting_id: str):
     # Mark as transcribing.
     await _repo.update_meeting(meeting_id, status="transcribing")
 
+    _in_flight.add(meeting_id)
     try:
         result = await asyncio.to_thread(
             _run_pipeline,
@@ -122,6 +127,8 @@ async def reprocess_meeting(meeting_id: str):
             status_code=500,
             detail="Reprocessing failed. Check daemon logs for details.",
         )
+    finally:
+        _in_flight.discard(meeting_id)
 
     transcript = result["transcript"]
     summary = result["summary"]

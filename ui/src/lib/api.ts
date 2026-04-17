@@ -47,7 +47,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!res.ok) {
-    throw new Error(`API ${res.status}: ${res.statusText}`);
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = body.detail || body.error || body.message || detail;
+    } catch {}
+    throw new Error(`API ${res.status}: ${detail}`);
   }
 
   return res.json() as Promise<T>;
@@ -208,7 +213,7 @@ export async function getTemplate(name: string): Promise<SummaryTemplate> {
 }
 
 export async function saveTemplate(
-  template: Omit<SummaryTemplate, never>,
+  template: SummaryTemplate,
 ): Promise<SummaryTemplate> {
   return request<SummaryTemplate>("/api/templates", {
     method: "POST",

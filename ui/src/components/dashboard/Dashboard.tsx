@@ -248,9 +248,9 @@ function PendingCallout() {
   const processAll = useMutation({
     mutationFn: async () => {
       const resp = await getMeetings(100, 0, undefined, "pending");
-      for (const m of resp.meetings) {
-        await reprocessMeeting(m.id);
-      }
+      await Promise.allSettled(
+        resp.meetings.map((m) => reprocessMeeting(m.id)),
+      );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["meetings"] });

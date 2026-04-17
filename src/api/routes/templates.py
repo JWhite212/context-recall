@@ -10,7 +10,7 @@ DELETE /api/templates/{name}     - delete a custom template
 import logging
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.templates import SummaryTemplate, TemplateManager
 
@@ -20,10 +20,10 @@ router = APIRouter()
 
 
 class TemplateRequest(BaseModel):
-    name: str
-    description: str
-    system_prompt: str
-    sections: list[str] = []
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(max_length=500)
+    system_prompt: str = Field(max_length=50000)
+    sections: list[str] = Field(default=[], max_length=50)
 
 
 class TemplateResponse(BaseModel):

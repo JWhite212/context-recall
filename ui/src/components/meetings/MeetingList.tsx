@@ -435,7 +435,8 @@ function MeetingRow({
         {m.tags.length > 0 && (
           <div className="flex gap-1">
             {m.tags.slice(0, 2).map((tag) => (
-              <span
+              <button
+                type="button"
                 key={tag}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -444,7 +445,7 @@ function MeetingRow({
                 className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent cursor-pointer hover:bg-accent/20 transition-colors"
               >
                 {tag}
-              </span>
+              </button>
             ))}
           </div>
         )}

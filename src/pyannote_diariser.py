@@ -14,6 +14,8 @@ can be loaded even without torch/pyannote installed. The heavy
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from pathlib import Path
 
 from src.diariser import DiarisationConfig
@@ -33,13 +35,17 @@ class PyAnnoteDiariser:
     def __init__(self, config: DiarisationConfig) -> None:
         self._config = config
         self._pipeline = None  # Lazy-loaded
+        self._lock = threading.Lock()
 
     def _load_pipeline(self) -> None:
         """Lazy-load the pyannote pipeline."""
         from pyannote.audio import Pipeline
 
+        if not os.environ.get("HF_TOKEN"):
+            logger.warning("HF_TOKEN not set — pyannote model download may fail for gated models")
         self._pipeline = Pipeline.from_pretrained(
             self._config.pyannote_model,
+            use_auth_token=os.environ.get("HF_TOKEN"),
         )
         logger.info("Loaded pyannote pipeline: %s", self._config.pyannote_model)
 
@@ -52,7 +58,9 @@ class PyAnnoteDiariser:
         by temporal overlap.
         """
         if self._pipeline is None:
-            self._load_pipeline()
+            with self._lock:
+                if self._pipeline is None:
+                    self._load_pipeline()
 
         # Run pyannote diarisation.
         params: dict = {}

@@ -16,7 +16,6 @@ Supports two backends:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -24,19 +23,9 @@ import numpy as np
 import soundfile as sf
 
 from src.transcriber import Transcript
+from src.utils.config import DiarisationConfig
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class DiarisationConfig:
-    enabled: bool = False
-    backend: str = "energy"  # "energy" or "pyannote"
-    speaker_name: str = "Me"  # Label for the local user.
-    remote_label: str = "Remote"  # Label for remote participants.
-    energy_ratio_threshold: float = 1.5  # How much louder one source must be.
-    pyannote_model: str = "pyannote/speaker-diarization-3.1"
-    num_speakers: int = 0  # 0 = auto-detect.
 
 
 @runtime_checkable
@@ -60,8 +49,9 @@ class EnergyDiariser:
     def diarise(
         self,
         transcript: Transcript,
-        system_audio_path: Path,
-        mic_audio_path: Path,
+        audio_path: Path,
+        *,
+        mic_audio_path: Path | None = None,
     ) -> Transcript:
         """
         Label each segment in *transcript* with a speaker identifier.
@@ -74,8 +64,12 @@ class EnergyDiariser:
             Mutates *transcript* in place. The same object is returned
             for method-chaining convenience.
         """
+        if mic_audio_path is None:
+            raise FileNotFoundError(
+                "EnergyDiariser requires mic_audio_path for dual-source comparison"
+            )
         for path, label in [
-            (system_audio_path, "system audio"),
+            (audio_path, "system audio"),
             (mic_audio_path, "mic audio"),
         ]:
             if not path.exists():
@@ -86,7 +80,7 @@ class EnergyDiariser:
         remote = self._config.remote_label
 
         with (
-            sf.SoundFile(str(system_audio_path)) as system_sf,
+            sf.SoundFile(str(audio_path)) as system_sf,
             sf.SoundFile(str(mic_audio_path)) as mic_sf,
         ):
             if system_sf.samplerate != mic_sf.samplerate:
@@ -146,7 +140,7 @@ class EnergyDiariser:
 Diariser = EnergyDiariser
 
 
-def create_diariser(config: DiarisationConfig) -> DiariserBackend | EnergyDiariser:
+def create_diariser(config: DiarisationConfig) -> DiariserBackend:
     """Factory: return the correct diariser backend for *config.backend*."""
     backend = config.backend
     if backend == "energy":

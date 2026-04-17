@@ -15,6 +15,13 @@ function formatTime(seconds: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+const EXAMPLE_QUERIES = [
+  "action items",
+  "decisions made",
+  "next steps",
+  "blockers",
+];
+
 export function Search() {
   const navigate = useNavigate();
   const toast = useToast();
@@ -29,13 +36,6 @@ export function Search() {
     queryFn: getMeetingLabels,
     staleTime: 30_000,
   });
-
-  const EXAMPLE_QUERIES = [
-    "action items",
-    "decisions made",
-    "next steps",
-    "blockers",
-  ];
 
   const reindex = useMutation({
     mutationFn: reindexMeetings,
@@ -60,8 +60,8 @@ export function Search() {
       return;
     }
 
-    setIsSearching(true);
     const timer = setTimeout(() => {
+      setIsSearching(true);
       searchTranscripts(trimmed)
         .then((res) => {
           setResults(res.results);

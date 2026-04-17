@@ -67,7 +67,7 @@ class TestDiariser:
         )
 
         with pytest.raises(FileNotFoundError, match="system audio"):
-            diariser.diarise(transcript, system_path, mic_path)
+            diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
 
     def test_missing_mic_audio_raises(self, tmp_path):
         system_path = tmp_path / "system.wav"
@@ -82,7 +82,7 @@ class TestDiariser:
         )
 
         with pytest.raises(FileNotFoundError, match="mic audio"):
-            diariser.diarise(transcript, system_path, mic_path)
+            diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
 
     def test_sample_rate_mismatch_raises(self, tmp_path):
         system_path = tmp_path / "system.wav"
@@ -98,7 +98,7 @@ class TestDiariser:
         )
 
         with pytest.raises(ValueError, match="Sample rate mismatch"):
-            diariser.diarise(transcript, system_path, mic_path)
+            diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
 
     def test_mic_louder_labels_me(self, tmp_path):
         system_path = tmp_path / "system.wav"
@@ -113,7 +113,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result.segments[0].speaker == "Me"
 
     def test_system_louder_labels_remote(self, tmp_path):
@@ -129,7 +129,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result.segments[0].speaker == "Remote"
 
     def test_similar_energy_labels_both(self, tmp_path):
@@ -146,7 +146,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result.segments[0].speaker == "Me + Remote"
 
     def test_out_of_bounds_segment_skipped(self, tmp_path):
@@ -164,7 +164,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result.segments[0].speaker == ""
 
     def test_empty_transcript_no_op(self, tmp_path):
@@ -176,7 +176,7 @@ class TestDiariser:
         diariser = _make_diariser()
         transcript = _make_transcript([])
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result.segments == []
 
     def test_rms_empty_array_returns_zero(self):
@@ -197,7 +197,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result.segments[0].speaker == "Me + Remote"
 
     def test_custom_speaker_labels(self, tmp_path):
@@ -214,7 +214,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result.segments[0].speaker == "Alice"
 
     def test_diarise_returns_same_transcript_object(self, tmp_path):
@@ -231,7 +231,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         assert result is transcript
 
     def test_segment_at_exact_file_boundary(self, tmp_path):
@@ -251,7 +251,7 @@ class TestDiariser:
             ]
         )
 
-        result = diariser.diarise(transcript, system_path, mic_path)
+        result = diariser.diarise(transcript, system_path, mic_audio_path=mic_path)
         # Should complete without error and assign a speaker label.
         assert result.segments[0].speaker != ""
 

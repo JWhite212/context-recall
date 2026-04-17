@@ -31,8 +31,12 @@ _MUTABLE_COLUMNS = frozenset(
         "language",
         "word_count",
         "label",
+        "updated_at",
     }
 )
+
+# Module-level cache for get_all_embeddings (invalidated by store_embeddings).
+_embedding_cache: list[dict] | None = None
 
 
 @dataclass
@@ -101,6 +105,8 @@ class MeetingRepository:
     """Async data access for meetings."""
 
     def __init__(self, db: Database) -> None:
+        global _embedding_cache
+        _embedding_cache = None
         self._db = db
 
     async def create_meeting(
@@ -141,8 +147,9 @@ class MeetingRepository:
             fields["tags"] = json.dumps(fields["tags"])
 
         fields["updated_at"] = time.time()
-        set_clause = ", ".join(f"{k} = ?" for k in fields)
-        values = list(fields.values()) + [meeting_id]
+        pairs = list(fields.items())
+        set_clause = ", ".join(f"{k} = ?" for k, _ in pairs)
+        values = [v for _, v in pairs] + [meeting_id]
 
         await self._db.conn.execute(
             f"UPDATE meetings SET {set_clause} WHERE id = ?",
@@ -162,6 +169,7 @@ class MeetingRepository:
         "duration:desc": "duration_seconds DESC NULLS LAST, started_at DESC",
         "word_count:desc": "word_count DESC NULLS LAST, started_at DESC",
     }
+    _SAFE_ORDERS = frozenset(_SORT_MAP.values()) | {"started_at DESC"}
 
     async def list_meetings(
         self,
@@ -182,6 +190,7 @@ class MeetingRepository:
             params.append(tag)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         order = self._SORT_MAP.get(sort or "", "started_at DESC")
+        assert order in self._SAFE_ORDERS, f"Unsafe sort order: {order}"
         params.extend([limit, offset])
         cursor = await self._db.conn.execute(
             f"SELECT * FROM meetings {where} ORDER BY {order} LIMIT ? OFFSET ?",
@@ -210,11 +219,12 @@ class MeetingRepository:
             return [MeetingRecord.from_row(r) for r in rows]
         except Exception:
             # FTS not available — fall back to LIKE search.
-            like = f"%{query}%"
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like = f"%{escaped}%"
             cursor = await self._db.conn.execute(
                 """
                 SELECT * FROM meetings
-                WHERE title LIKE ? OR summary_markdown LIKE ?
+                WHERE title LIKE ? ESCAPE '\\' OR summary_markdown LIKE ? ESCAPE '\\'
                 ORDER BY started_at DESC LIMIT ?
                 """,
                 (like, like, limit),
@@ -395,6 +405,8 @@ class MeetingRepository:
         Each dict in *embeddings* must contain: segment_index, embedding,
         text, speaker (optional), and start_time.
         """
+        global _embedding_cache
+        _embedding_cache = None
         # Delete existing embeddings for this meeting first.
         await self._db.conn.execute(
             "DELETE FROM segment_embeddings WHERE meeting_id = ?", (meeting_id,)
@@ -422,9 +434,12 @@ class MeetingRepository:
         Returns dicts with id, meeting_id, segment_index, embedding, text,
         speaker, and start_time.
         """
+        global _embedding_cache
+        if _embedding_cache is not None:
+            return _embedding_cache
         cursor = await self._db.conn.execute(
             "SELECT id, meeting_id, segment_index, embedding, text, speaker, start_time "
-            "FROM segment_embeddings"
+            "FROM segment_embeddings LIMIT 100000"
         )
         rows = await cursor.fetchall()
         results = []
@@ -443,6 +458,7 @@ class MeetingRepository:
                     "start_time": row["start_time"],
                 }
             )
+        _embedding_cache = results
         return results
 
     # ------------------------------------------------------------------
@@ -471,13 +487,18 @@ class MeetingRepository:
         # Update transcript_json to replace speaker labels.
         meeting = await self.get_meeting(meeting_id)
         if meeting and meeting.transcript_json:
-            data = json.loads(meeting.transcript_json)
+            try:
+                data = json.loads(meeting.transcript_json)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Invalid transcript_json for meeting %s; skipping speaker rename",
+                    meeting_id,
+                )
+                return
             for seg in data.get("segments", []):
                 if seg.get("speaker") == speaker_id:
                     seg["speaker"] = display_name
             await self.update_meeting(meeting_id, transcript_json=json.dumps(data))
-
-        await self._db.conn.commit()
 
     async def get_speaker_names(self, meeting_id: str) -> list[dict]:
         """Get all speaker name mappings for a meeting."""
@@ -500,10 +521,14 @@ class MeetingRepository:
     async def get_global_speaker_names(self) -> list[dict]:
         """Get all unique speaker mappings across all meetings (most recent wins)."""
         cursor = await self._db.conn.execute(
-            """SELECT speaker_id, display_name, source, MAX(created_at) as created_at
-               FROM speaker_mappings
-               GROUP BY speaker_id
-               ORDER BY display_name""",
+            """SELECT sm.speaker_id, sm.display_name, sm.source, sm.created_at
+               FROM speaker_mappings sm
+               INNER JOIN (
+                   SELECT speaker_id, MAX(created_at) as max_created
+                   FROM speaker_mappings GROUP BY speaker_id
+               ) latest ON sm.speaker_id = latest.speaker_id
+                   AND sm.created_at = latest.max_created
+               ORDER BY sm.display_name""",
         )
         rows = await cursor.fetchall()
         return [

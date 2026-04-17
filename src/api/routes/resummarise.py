@@ -22,6 +22,7 @@ logger = logging.getLogger("meetingmind.api.resummarise")
 router = APIRouter()
 
 _repo = None
+_in_flight: set[str] = set()
 
 
 def init(repo) -> None:
@@ -68,6 +69,9 @@ async def resummarise_meeting(meeting_id: str, template_name: str | None = None)
     if not _repo:
         raise HTTPException(status_code=503, detail="Repository not available")
 
+    if meeting_id in _in_flight:
+        raise HTTPException(status_code=409, detail="Re-summarisation already in progress")
+
     meeting = await _repo.get_meeting(meeting_id)
 
     if not meeting:
@@ -89,6 +93,7 @@ async def resummarise_meeting(meeting_id: str, template_name: str | None = None)
 
     logger.info("Re-summarising meeting %s (%d segments)", meeting_id, len(transcript.segments))
 
+    _in_flight.add(meeting_id)
     try:
         summariser = Summariser(config)
         summary = await asyncio.to_thread(summariser.summarise, transcript, template)
@@ -97,6 +102,8 @@ async def resummarise_meeting(meeting_id: str, template_name: str | None = None)
         raise HTTPException(
             status_code=500, detail="Summarisation failed. Check server logs for details."
         )
+    finally:
+        _in_flight.discard(meeting_id)
 
     await _repo.update_meeting(
         meeting_id,

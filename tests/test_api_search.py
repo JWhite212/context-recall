@@ -33,9 +33,11 @@ def _auth_headers():
 def _reset_search():
     orig_repo = search_routes._repo
     orig_emb = search_routes._embedder
+    orig_last_reindex = search_routes._last_reindex
     yield
     search_routes._repo = orig_repo
     search_routes._embedder = orig_emb
+    search_routes._last_reindex = orig_last_reindex
 
 
 @pytest.fixture
@@ -55,13 +57,10 @@ async def client(db: Database):
 
 @pytest.mark.asyncio
 async def test_search_empty_query(client):
-    """POST /api/search with empty query returns empty results."""
+    """POST /api/search with empty query is rejected by validation."""
     c, _repo, _emb = client
     resp = c.post("/api/search", json={"query": ""}, headers=_auth_headers())
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["results"] == []
-    assert data["query"] == ""
+    assert resp.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -81,6 +81,9 @@ function SpeakerLabel({
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(speaker);
+  useEffect(() => {
+    setName(speaker);
+  }, [speaker]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -111,7 +114,9 @@ function SpeakerLabel({
         onChange={(e) => setName(e.target.value)}
         onBlur={handleSubmit}
         onKeyDown={(e) => {
-          if (e.key === "Enter") handleSubmit();
+          if (e.key === "Enter") {
+            e.currentTarget.blur();
+          }
           if (e.key === "Escape") {
             setName(speaker);
             setEditing(false);
@@ -195,7 +200,7 @@ function TranscriptView({
       <div className="flex flex-col gap-0.5">
         {filtered.map((seg, i) => (
           <div
-            key={i}
+            key={`${seg.start}-${seg.speaker || ""}`}
             onClick={() => onSeek?.(seg.start)}
             role="button"
             tabIndex={0}
@@ -230,7 +235,7 @@ function TranscriptView({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                navigator.clipboard.writeText(seg.text);
+                navigator.clipboard.writeText(seg.text).catch(() => {});
                 setCopiedIndex(i);
                 setTimeout(() => setCopiedIndex(null), 1500);
               }}
@@ -335,7 +340,7 @@ function LabelEditor({
     };
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
-  });
+  }, [open]);
 
   return (
     <div className="relative inline-block" ref={wrapperRef}>

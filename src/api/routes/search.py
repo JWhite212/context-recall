@@ -7,9 +7,10 @@ POST /api/search/reindex — re-index all existing meetings
 
 import json
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("meetingmind.api.search")
 
@@ -17,6 +18,7 @@ router = APIRouter()
 
 _repo = None
 _embedder = None
+_last_reindex: float = 0.0
 
 
 def init(repo, embedder) -> None:
@@ -26,8 +28,8 @@ def init(repo, embedder) -> None:
 
 
 class SearchRequest(BaseModel):
-    query: str
-    limit: int = 10
+    query: str = Field(min_length=1, max_length=1000)
+    limit: int = Field(ge=1, le=100, default=10)
 
 
 class SearchResult(BaseModel):
@@ -72,11 +74,20 @@ async def search_transcripts(body: SearchRequest):
 
     # Build result with metadata.
     emb_by_id = {emb["id"]: emb for emb in all_embeddings}
+
+    # Batch-fetch meetings to avoid N+1 queries.
+    ranked_embs = [emb_by_id[emb_id] for emb_id, _score in ranked]
+    meeting_ids = list({emb["meeting_id"] for emb in ranked_embs})
+    meetings_map: dict = {}
+    for mid in meeting_ids:
+        m = await _repo.get_meeting(mid)
+        if m:
+            meetings_map[mid] = m
+
     results = []
     for emb_id, score in ranked:
         emb = emb_by_id[emb_id]
-        # Look up meeting title.
-        meeting = await _repo.get_meeting(emb["meeting_id"])
+        meeting = meetings_map.get(emb["meeting_id"])
         results.append(
             SearchResult(
                 meeting_id=emb["meeting_id"],
@@ -95,8 +106,17 @@ async def search_transcripts(body: SearchRequest):
 @router.post("/api/search/reindex", response_model=ReindexResponse)
 async def reindex_all():
     """Re-index all existing meetings for semantic search."""
+    global _last_reindex
+
     if not _repo or not _embedder:
         raise HTTPException(status_code=503, detail="Search not available")
+
+    if time.time() - _last_reindex < 300:
+        raise HTTPException(
+            status_code=429,
+            detail="Reindex already ran recently. Try again in a few minutes.",
+        )
+    _last_reindex = time.time()
 
     meetings = await _repo.list_meetings(limit=10000)
     total_meetings = 0

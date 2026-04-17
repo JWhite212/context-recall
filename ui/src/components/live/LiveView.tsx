@@ -197,7 +197,14 @@ export function LiveView() {
 
         {(startMutation.isError || stopMutation.isError) && (
           <p className="text-xs text-status-error mt-1">
-            {((startMutation.error || stopMutation.error) as Error)?.message}
+            {(() => {
+              const err = startMutation.error || stopMutation.error;
+              return err instanceof Error
+                ? err.message
+                : err
+                  ? String(err)
+                  : null;
+            })()}
           </p>
         )}
       </div>
@@ -274,8 +281,11 @@ export function LiveView() {
             className="max-h-80 overflow-y-auto space-y-2"
             aria-live="polite"
           >
-            {liveSegments.map((seg, i) => (
-              <div key={i} className="flex gap-3 text-sm">
+            {liveSegments.map((seg) => (
+              <div
+                key={`${seg.start}-${seg.speaker || "unknown"}`}
+                className="flex gap-3 text-sm"
+              >
                 <span className="text-text-muted font-mono text-xs pt-0.5 shrink-0 w-12 text-right">
                   {formatTimestamp(seg.start)}
                 </span>

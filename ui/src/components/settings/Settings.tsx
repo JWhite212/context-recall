@@ -82,13 +82,10 @@ function Field({
   help?: string;
   children: React.ReactNode;
 }) {
-  const fieldId = label.toLowerCase().replace(/\s+/g, "-");
   return (
     <div className="flex items-start justify-between gap-4 py-3">
       <div className="min-w-0 pt-1">
-        <label htmlFor={fieldId} className="text-sm text-text-primary">
-          {label}
-        </label>
+        <label className="text-sm text-text-primary">{label}</label>
         {help && <p className="text-xs text-text-muted mt-0.5">{help}</p>}
       </div>
       <div className="shrink-0">{children}</div>
@@ -794,7 +791,7 @@ export function Settings() {
     }
 
     return () => observer.disconnect();
-  }, [form, daemonRunning, configLoading]);
+  }, [daemonRunning, configLoading]);
 
   // Auto-scroll the nav bar to keep the active pill visible
   useEffect(() => {

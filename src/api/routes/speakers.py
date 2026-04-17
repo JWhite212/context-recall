@@ -7,15 +7,18 @@ GET   /api/speakers                             — get all global speaker mappi
 """
 
 import logging
+import re
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger("meetingmind.api.speakers")
 
 router = APIRouter()
 
 _repo = None
+
+_SPEAKER_ID_RE = re.compile(r"^[a-zA-Z0-9_ -]+$")
 
 
 def init(repo) -> None:
@@ -24,7 +27,7 @@ def init(repo) -> None:
 
 
 class SpeakerNameRequest(BaseModel):
-    display_name: str
+    display_name: str = Field(min_length=1, max_length=200)
 
 
 class SpeakerMapping(BaseModel):
@@ -36,6 +39,9 @@ class SpeakerMapping(BaseModel):
 
 @router.patch("/api/meetings/{meeting_id}/speakers/{speaker_id}")
 async def set_speaker_name(meeting_id: str, speaker_id: str, body: SpeakerNameRequest):
+    if not _SPEAKER_ID_RE.match(speaker_id):
+        raise HTTPException(status_code=422, detail="Invalid speaker_id format")
+
     if not _repo:
         raise HTTPException(status_code=503, detail="Repository not available")
 

@@ -8,6 +8,8 @@ The model loads lazily on first use (~80MB download for all-MiniLM-L6-v2).
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 
@@ -27,6 +29,7 @@ class Embedder:
     def __init__(self, model_name: str = "all-MiniLM-L6-v2") -> None:
         self._model_name = model_name
         self._model = None  # Lazy-loaded
+        self._lock = threading.Lock()
 
     def _load_model(self) -> None:
         """Lazy-load the sentence-transformers model (~80MB download on first use)."""
@@ -43,7 +46,9 @@ class Embedder:
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed a list of texts into vectors. Returns list of float lists."""
         if self._model is None:
-            self._load_model()
+            with self._lock:
+                if self._model is None:
+                    self._load_model()
         embeddings = self._model.encode(texts, show_progress_bar=False)
         return embeddings.tolist()
 
@@ -58,7 +63,7 @@ class Embedder:
         b_arr = np.array(b)
         dot = np.dot(a_arr, b_arr)
         norm = float(np.linalg.norm(a_arr) * np.linalg.norm(b_arr))
-        if norm == 0:
+        if norm < 1e-10:
             return 0.0
         return float(dot / norm)
 

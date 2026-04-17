@@ -3,14 +3,18 @@ Meeting history CRUD endpoints.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from src.api.schemas import DeleteResponse, MeetingListResponse, MeetingStatsResponse
 from src.utils.config import load_config
+
+logger = logging.getLogger("meetingmind.api.meetings")
 
 router = APIRouter()
 
@@ -21,6 +25,14 @@ _repo = None
 def init(repo):
     global _repo
     _repo = repo
+
+
+class MergeMeetingsRequest(BaseModel):
+    meeting_ids: list[str] = Field(min_length=2, max_length=50)
+
+
+class SetLabelRequest(BaseModel):
+    label: str = Field(default="", max_length=200)
 
 
 @router.get("/api/meetings", response_model=MeetingListResponse, summary="List meetings")
@@ -54,12 +66,8 @@ async def list_meetings(
 
 
 @router.post("/api/meetings/merge", summary="Merge multiple meetings into one")
-async def merge_meetings(request: Request):
-    body = await request.json()
-    meeting_ids = body.get("meeting_ids", [])
-
-    if len(meeting_ids) < 2:
-        raise HTTPException(status_code=400, detail="At least 2 meeting IDs required")
+async def merge_meetings(body: MergeMeetingsRequest):
+    meeting_ids = body.meeting_ids
 
     # Fetch all meetings, ordered by started_at.
     meetings = []
@@ -146,12 +154,23 @@ async def delete_meeting(meeting_id: str):
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
 
-    # Delete audio file if it exists.
+    # Delete audio file if it exists and is within allowed directories.
     if meeting.audio_path and os.path.exists(meeting.audio_path):
+        resolved = Path(meeting.audio_path).resolve()
+        allowed_dirs = [
+            Path(os.path.expanduser("~/Library/Application Support/MeetingMind/audio")).resolve(),
+        ]
         try:
-            os.remove(meeting.audio_path)
-        except OSError:
-            pass
+            allowed_dirs.append(Path(load_config().audio.temp_audio_dir).expanduser().resolve())
+        except Exception:
+            allowed_dirs.append(Path("/tmp/meetingmind").resolve())
+        if any(resolved.is_relative_to(d) for d in allowed_dirs):
+            try:
+                os.remove(meeting.audio_path)
+            except OSError:
+                pass
+        else:
+            logger.warning("Skipping audio delete — path outside allowed directories: %s", resolved)
 
     await _repo.delete_meeting(meeting_id)
     return {"deleted": True}
@@ -185,11 +204,9 @@ async def get_meeting_audio(meeting_id: str):
 
 
 @router.patch("/api/meetings/{meeting_id}/label", summary="Set meeting label")
-async def set_meeting_label(meeting_id: str, request: Request):
-    body = await request.json()
-    label = body.get("label", "")
+async def set_meeting_label(meeting_id: str, body: SetLabelRequest):
     meeting = await _repo.get_meeting(meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
-    await _repo.update_meeting(meeting_id, label=label)
-    return {"meeting_id": meeting_id, "label": label}
+    await _repo.update_meeting(meeting_id, label=body.label)
+    return {"meeting_id": meeting_id, "label": body.label}

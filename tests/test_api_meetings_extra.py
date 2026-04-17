@@ -74,10 +74,13 @@ async def test_delete_meeting_removes_audio_file(client, tmp_path):
     mid = await repo.create_meeting(started_at=time.time())
     await repo.update_meeting(mid, audio_path=str(audio_file))
 
-    resp = c.delete(f"/api/meetings/{mid}", headers=_auth_headers())
-    assert resp.status_code == 200
-    assert resp.json()["deleted"] is True
-    assert not audio_file.exists()
+    # Patch config so tmp_path is in the allowed audio directories.
+    with patch("src.api.routes.meetings.load_config") as mock_config:
+        mock_config.return_value.audio.temp_audio_dir = str(tmp_path)
+        resp = c.delete(f"/api/meetings/{mid}", headers=_auth_headers())
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+        assert not audio_file.exists()
 
 
 @pytest.mark.asyncio

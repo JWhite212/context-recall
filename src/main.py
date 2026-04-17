@@ -320,18 +320,11 @@ class MeetingMind:
         if self._diariser:
             logger.info("Running speaker diarisation...")
             self._emit("pipeline.stage", meeting_id=meeting_id, stage="diarising")
+            mic_path = (
+                self._capture.mic_audio_path if self._config.audio.keep_source_files else None
+            )
             try:
-                if isinstance(self._diariser, EnergyDiariser):
-                    # Energy backend needs separate system/mic files.
-                    sys_path = self._capture.system_audio_path
-                    mic_path = self._capture.mic_audio_path
-                    if sys_path and mic_path:
-                        transcript = self._diariser.diarise(transcript, sys_path, mic_path)
-                    else:
-                        logger.warning("Source audio files not available for energy diarisation")
-                else:
-                    # Pyannote and other backends use the combined audio file.
-                    transcript = self._diariser.diarise(transcript, audio_path)
+                transcript = self._diariser.diarise(transcript, audio_path, mic_audio_path=mic_path)
             except Exception as e:
                 logger.error("Diarisation failed: %s", e, exc_info=True)
 
@@ -489,14 +482,19 @@ class MeetingMind:
         self._emit("meeting.started", started_at=self._meeting_started_at)
 
     def api_stop_recording(self) -> None:
-        """Stop a manual recording and trigger processing. Runs synchronously."""
+        """Stop a manual recording and trigger background processing."""
         started_at = self._meeting_started_at
         self._emit("meeting.ended", duration=time.time() - started_at)
         audio_path = self._capture.stop()
 
         if audio_path and audio_path.exists():
             duration = time.time() - started_at
-            self._process_audio(audio_path, started_at, duration)
+            self._processing_executor.submit(
+                self._process_audio,
+                audio_path,
+                started_at,
+                duration,
+            )
 
     def api_stop_recording_deferred(self) -> str:
         """Stop a manual recording but defer processing.
