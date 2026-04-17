@@ -14,8 +14,10 @@ different threads (e.g., the detector thread calls start/stop while
 the audio capture runs on its own thread).
 """
 
+import gc
 import logging
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -30,7 +32,9 @@ from src.utils.config import AudioConfig
 logger = logging.getLogger(__name__)
 
 TARGET_RMS_DBFS = -20.0  # Target RMS level for normalisation.
+TARGET_RMS_LINEAR = 10.0 ** (TARGET_RMS_DBFS / 20.0)  # Pre-computed linear target.
 LEVEL_EMIT_INTERVAL = 0.1  # Seconds between audio level callbacks (~10/sec).
+MERGE_CHUNK_SIZE = 16000 * 30  # 30 seconds at 16kHz mono (~1.9MB as float32).
 
 
 class AudioCaptureError(Exception):
@@ -59,6 +63,10 @@ class AudioCapture:
         self.on_audio_level: Callable[[float, float], None] | None = None
         self._last_level_time: float = 0.0
 
+        # Lifecycle events for non-blocking stop.
+        self._streams_stopped = threading.Event()
+        self._merge_complete = threading.Event()
+
         # Ensure the temp directory exists with owner-only permissions.
         os.makedirs(config.temp_audio_dir, exist_ok=True)
         os.chmod(config.temp_audio_dir, 0o700)
@@ -70,13 +78,8 @@ class AudioCapture:
         """
         devices = sd.query_devices()
         for idx, device in enumerate(devices):
-            if (
-                name.lower() in device["name"].lower()
-                and device["max_input_channels"] > 0
-            ):
-                logger.info(
-                    f"Found {kind} device: '{device['name']}' (index {idx})"
-                )
+            if name.lower() in device["name"].lower() and device["max_input_channels"] > 0:
+                logger.info(f"Found {kind} device: '{device['name']}' (index {idx})")
                 return idx
 
         available = [
@@ -85,8 +88,7 @@ class AudioCapture:
             if d["max_input_channels"] > 0
         ]
         raise AudioCaptureError(
-            f"Device '{name}' not found. Available input devices:\n"
-            + "\n".join(available)
+            f"Device '{name}' not found. Available input devices:\n" + "\n".join(available)
         )
 
     def _find_default_input_device(self) -> int | None:
@@ -95,10 +97,7 @@ class AudioCapture:
             idx = sd.default.device[0]
             if idx is not None and idx >= 0:
                 device = sd.query_devices(idx)
-                logger.info(
-                    f"Using default input device: '{device['name']}' "
-                    f"(index {idx})"
-                )
+                logger.info(f"Using default input device: '{device['name']}' (index {idx})")
                 return idx
         except Exception:
             pass
@@ -166,9 +165,7 @@ class AudioCapture:
                     mono = self._to_mono(indata)
                     system_file.write(mono)
                     if self.on_audio_level is not None:
-                        latest_system_rms[0] = float(
-                            np.sqrt(np.mean(mono ** 2))
-                        )
+                        latest_system_rms[0] = float(np.sqrt(np.mean(mono**2)))
 
             def mic_callback(indata, frames, time_info, status):
                 if status:
@@ -177,9 +174,7 @@ class AudioCapture:
                     mono = self._to_mono(indata)
                     mic_file.write(mono)
                     if self.on_audio_level is not None:
-                        latest_mic_rms[0] = float(
-                            np.sqrt(np.mean(mono ** 2))
-                        )
+                        latest_mic_rms[0] = float(np.sqrt(np.mean(mono**2)))
 
             # Determine mic channel count.
             mic_channels = 1
@@ -216,15 +211,10 @@ class AudioCapture:
             # Wait until recording is stopped, emitting levels ~10/sec.
             while self._recording:
                 now = time.monotonic()
-                if (
-                    self.on_audio_level
-                    and now - self._last_level_time >= LEVEL_EMIT_INTERVAL
-                ):
+                if self.on_audio_level and now - self._last_level_time >= LEVEL_EMIT_INTERVAL:
                     self._last_level_time = now
                     try:
-                        self.on_audio_level(
-                            latest_system_rms[0], latest_mic_rms[0]
-                        )
+                        self.on_audio_level(latest_system_rms[0], latest_mic_rms[0])
                     except Exception:
                         pass
                 time.sleep(0.05)
@@ -250,6 +240,7 @@ class AudioCapture:
                         fh.close()
                     except Exception:
                         pass
+            self._streams_stopped.set()
 
         logger.info(
             "System audio: %s (%d KB)",
@@ -265,27 +256,45 @@ class AudioCapture:
 
         # Merge sources into the final output file.
         self._merge_sources()
+        self._merge_complete.set()
+
+    def _streaming_rms(self, path: Path) -> float:
+        """
+        Compute RMS of a WAV file by streaming in chunks, avoiding
+        loading the entire file into memory.
+        """
+        sum_sq = 0.0
+        count = 0
+        with sf.SoundFile(str(path), mode="r") as f:
+            while True:
+                chunk = f.read(MERGE_CHUNK_SIZE, dtype="float32")
+                if len(chunk) == 0:
+                    break
+                sum_sq += float(np.sum(chunk**2))
+                count += len(chunk)
+        if count == 0:
+            return 0.0
+        return float(np.sqrt(sum_sq / count))
+
+    @staticmethod
+    def _rms_dbfs_from_rms(rms: float) -> float:
+        """Convert a linear RMS value to dBFS for logging."""
+        if rms < 1e-10:
+            return -100.0
+        return 20.0 * np.log10(rms)
 
     def _merge_sources(self) -> None:
         """
-        Load the separate source WAV files, normalise each to a target
-        RMS level, mix them, and write the final output.
+        Merge the separate source WAV files into a single normalised
+        output file using chunked streaming to keep memory usage low.
 
-        This ensures both sources contribute equally regardless of their
-        original volume levels — the quiet BlackHole system audio gets
-        boosted to match the louder microphone.
+        Dispatches to single- or dual-source merge based on whether
+        a mic recording is available.
         """
         if not self._system_path or not self._system_path.exists():
             logger.error("System audio file missing — cannot merge.")
             self._output_path = None
             return
-
-        system_audio, sr = sf.read(str(self._system_path), dtype="float32")
-        logger.info(
-            "System audio: %d samples, RMS=%.1f dBFS",
-            len(system_audio),
-            self._rms_dbfs(system_audio),
-        )
 
         has_mic = (
             self._mic_path is not None
@@ -294,60 +303,9 @@ class AudioCapture:
         )
 
         if has_mic:
-            mic_audio, _ = sf.read(str(self._mic_path), dtype="float32")
-            logger.info(
-                "Mic audio:    %d samples, RMS=%.1f dBFS",
-                len(mic_audio),
-                self._rms_dbfs(mic_audio),
-            )
-
-            # Pad shorter source with silence.
-            max_len = max(len(system_audio), len(mic_audio))
-            if len(system_audio) < max_len:
-                system_audio = np.pad(
-                    system_audio, (0, max_len - len(system_audio))
-                )
-            if len(mic_audio) < max_len:
-                mic_audio = np.pad(mic_audio, (0, max_len - len(mic_audio)))
-
-            # Normalise each source to target RMS, then apply user gain.
-            system_vol = max(0.0, min(2.0, self._config.system_volume))
-            mic_vol = max(0.0, min(2.0, self._config.mic_volume))
-
-            self._normalise_rms(system_audio)
-            system_audio *= system_vol
-            self._normalise_rms(mic_audio)
-            mic_audio *= mic_vol
-
-            # Mix in-place and clip in-place.
-            system_audio += mic_audio
-            del mic_audio  # Free memory immediately.
-            np.clip(system_audio, -1.0, 1.0, out=system_audio)
-
-            logger.info(
-                "Mixed audio: %d samples, RMS=%.1f dBFS",
-                len(system_audio),
-                self._rms_dbfs(system_audio),
-            )
-            mixed = system_audio
+            self._merge_dual_source()
         else:
-            # Single-source: just normalise system audio.
-            self._normalise_rms(system_audio)
-            mixed = system_audio
-
-        # Write final output.
-        sf.write(
-            str(self._output_path),
-            mixed,
-            self._config.sample_rate,
-            subtype="PCM_16",
-        )
-
-        logger.info(
-            "Final output: %s (%d KB)",
-            self._output_path,
-            self._output_path.stat().st_size / 1024,
-        )
+            self._merge_single_source()
 
         # Clean up source files (keep them if needed for diarisation).
         if not self._config.keep_source_files:
@@ -357,23 +315,115 @@ class AudioCapture:
                 self._mic_path.unlink()
             logger.debug("Deleted temporary source files.")
 
+    def _merge_single_source(self) -> None:
+        """Normalise a single system-audio source via chunked streaming."""
+        system_rms = self._streaming_rms(self._system_path)
+        logger.info(
+            "System audio: RMS=%.1f dBFS",
+            self._rms_dbfs_from_rms(system_rms),
+        )
+
+        if system_rms < 1e-10:
+            # Silent — just copy the file as-is.
+            shutil.copy2(str(self._system_path), str(self._output_path))
+            logger.info("System audio is silent — copied without processing.")
+            return
+
+        gain = TARGET_RMS_LINEAR / system_rms
+
+        with sf.SoundFile(str(self._system_path), mode="r") as src:
+            with sf.SoundFile(
+                str(self._output_path),
+                mode="w",
+                samplerate=self._config.sample_rate,
+                channels=1,
+                subtype="PCM_16",
+            ) as out:
+                while True:
+                    chunk = src.read(MERGE_CHUNK_SIZE, dtype="float32")
+                    if len(chunk) == 0:
+                        break
+                    chunk *= gain
+                    np.clip(chunk, -1.0, 1.0, out=chunk)
+                    out.write(chunk)
+
+        logger.info(
+            "Final output: %s (%d KB)",
+            self._output_path,
+            self._output_path.stat().st_size / 1024,
+        )
+
+    def _merge_dual_source(self) -> None:
+        """Mix system + mic audio via chunked streaming with RMS normalisation."""
+        system_rms = self._streaming_rms(self._system_path)
+        mic_rms = self._streaming_rms(self._mic_path)
+
+        logger.info(
+            "System audio: RMS=%.1f dBFS",
+            self._rms_dbfs_from_rms(system_rms),
+        )
+        logger.info(
+            "Mic audio:    RMS=%.1f dBFS",
+            self._rms_dbfs_from_rms(mic_rms),
+        )
+
+        system_vol = max(0.0, min(2.0, self._config.system_volume))
+        mic_vol = max(0.0, min(2.0, self._config.mic_volume))
+
+        system_gain = (TARGET_RMS_LINEAR / system_rms * system_vol) if system_rms >= 1e-10 else 0.0
+        mic_gain = (TARGET_RMS_LINEAR / mic_rms * mic_vol) if mic_rms >= 1e-10 else 0.0
+
+        with (
+            sf.SoundFile(str(self._system_path), mode="r") as sys_f,
+            sf.SoundFile(str(self._mic_path), mode="r") as mic_f,
+            sf.SoundFile(
+                str(self._output_path),
+                mode="w",
+                samplerate=self._config.sample_rate,
+                channels=1,
+                subtype="PCM_16",
+            ) as out,
+        ):
+            while True:
+                sys_chunk = sys_f.read(MERGE_CHUNK_SIZE, dtype="float32")
+                mic_chunk = mic_f.read(MERGE_CHUNK_SIZE, dtype="float32")
+
+                if len(sys_chunk) == 0 and len(mic_chunk) == 0:
+                    break
+
+                if len(sys_chunk) < len(mic_chunk):
+                    sys_chunk = np.pad(sys_chunk, (0, len(mic_chunk) - len(sys_chunk)))
+                elif len(mic_chunk) < len(sys_chunk):
+                    mic_chunk = np.pad(mic_chunk, (0, len(sys_chunk) - len(mic_chunk)))
+
+                mixed = sys_chunk * system_gain + mic_chunk * mic_gain
+                np.clip(mixed, -1.0, 1.0, out=mixed)
+                out.write(mixed)
+
+        gc.collect()
+
+        output_size_kb = self._output_path.stat().st_size / 1024
+        logger.info(
+            "Final output: %s (%d KB)",
+            self._output_path,
+            output_size_kb,
+        )
+
     @staticmethod
     def _rms_dbfs(audio: np.ndarray) -> float:
         """Calculate RMS level in dBFS."""
-        rms = np.sqrt(np.mean(audio ** 2))
+        rms = np.sqrt(np.mean(audio**2))
         if rms < 1e-10:
             return -100.0
         return 20.0 * np.log10(rms)
 
     @staticmethod
-    def _normalise_rms(
-        audio: np.ndarray, target_dbfs: float = TARGET_RMS_DBFS
-    ) -> np.ndarray:
+    def _normalise_rms(audio: np.ndarray, target_dbfs: float = TARGET_RMS_DBFS) -> np.ndarray:
         """
         Normalise audio in place to a target RMS level in dBFS.
         Returns the same array. No-op if the audio is silent.
         """
-        rms = np.sqrt(np.mean(audio ** 2))
+        rms = np.sqrt(np.mean(audio**2))
         if rms < 1e-10:
             return audio  # Silent — nothing to normalise.
 
@@ -410,19 +460,19 @@ class AudioCapture:
                         )
                     except AudioCaptureError:
                         logger.warning(
-                            "Mic device %r not found. "
-                            "Recording system audio only.",
+                            "Mic device %r not found. Recording system audio only.",
                             self._config.mic_device_name,
                         )
                 else:
                     self._mic_idx = self._find_default_input_device()
                     if self._mic_idx is None:
                         logger.warning(
-                            "No default input device found. "
-                            "Recording system audio only."
+                            "No default input device found. Recording system audio only."
                         )
 
             self._recording = True
+            self._streams_stopped.clear()
+            self._merge_complete.clear()
             self._thread = threading.Thread(
                 target=self._record_loop,
                 name="audio-capture",
@@ -430,10 +480,14 @@ class AudioCapture:
             )
             self._thread.start()
 
-    def stop(self) -> Path | None:
+    def stop(self, *, blocking: bool = True) -> Path | None:
         """
-        Stop recording, merge source files, and return the path to
-        the final mixed WAV file.
+        Stop recording and return the path to the final mixed WAV file.
+
+        Args:
+            blocking: If True (default), waits for the merge to complete
+                before returning. If False, returns immediately after
+                streams are closed — call ``wait_for_merge()`` later.
         """
         with self._lock:
             if not self._recording:
@@ -441,11 +495,24 @@ class AudioCapture:
                 return None
             self._recording = False
 
-        if self._thread:
-            self._thread.join(timeout=30)  # Merge can take a moment.
-            self._thread = None
+        # Wait for audio streams to close (fast — typically <100ms).
+        self._streams_stopped.wait(timeout=5)
+
+        if blocking:
+            if self._thread:
+                self._thread.join(timeout=60)
+                self._thread = None
 
         return self._output_path
+
+    def wait_for_merge(self, timeout: float = 60) -> bool:
+        """
+        Block until the post-recording merge completes.
+
+        Returns True if the merge finished within *timeout* seconds,
+        False if the timeout expired.
+        """
+        return self._merge_complete.wait(timeout=timeout)
 
     @property
     def is_recording(self) -> bool:

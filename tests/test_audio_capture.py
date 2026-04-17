@@ -1,5 +1,6 @@
 """Tests for the audio capture module."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -68,9 +69,7 @@ class TestAudioCaptureStartStop:
     @patch.object(AudioCapture, "_record_loop")
     @patch.object(AudioCapture, "_find_device", return_value=0)
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    def test_double_start_is_noop(
-        self, mock_default, mock_find, mock_record, capture
-    ):
+    def test_double_start_is_noop(self, mock_default, mock_find, mock_record, capture):
         capture.start()
         first_thread = capture._thread
 
@@ -153,7 +152,7 @@ class TestAudioCaptureMerge:
 
         # After normalisation, RMS should be at the target level.
         target_rms = 10.0 ** (target_dbfs / 20.0)
-        actual_rms = np.sqrt(np.mean(audio ** 2))
+        actual_rms = np.sqrt(np.mean(audio**2))
         np.testing.assert_almost_equal(actual_rms, target_rms, decimal=4)
 
     def test_rms_dbfs_silent_floor(self):
@@ -282,3 +281,126 @@ class TestAudioCaptureEdgeCases:
         """RMS below 1e-10 should be floored to -100.0 dBFS."""
         audio = np.array([1e-11, -1e-11], dtype=np.float64)
         assert AudioCapture._rms_dbfs(audio) == -100.0
+
+
+# ---------------------------------------------------------------------------
+# Streaming RMS tests
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingRms:
+    """Tests for _streaming_rms() accuracy."""
+
+    def test_streaming_rms_matches_monolithic(self, tmp_path):
+        """Streaming RMS should match a whole-file RMS calculation."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path), sample_rate=16000)
+        capture = AudioCapture(config)
+
+        signal = np.random.randn(160000).astype(np.float32) * 0.3
+        path = tmp_path / "test.wav"
+        sf.write(str(path), signal, 16000, subtype="PCM_16")
+
+        # Re-read from disk so both calculations use the PCM_16 quantised values.
+        audio, _ = sf.read(str(path), dtype="float32")
+        expected_rms = float(np.sqrt(np.mean(audio**2)))
+        actual_rms = capture._streaming_rms(path)
+
+        np.testing.assert_almost_equal(actual_rms, expected_rms, decimal=4)
+
+    def test_streaming_rms_silent_file(self, tmp_path):
+        """Streaming RMS of a silent file should be 0.0."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path), sample_rate=16000)
+        capture = AudioCapture(config)
+
+        signal = np.zeros(16000, dtype=np.float32)
+        path = tmp_path / "silent.wav"
+        sf.write(str(path), signal, 16000, subtype="PCM_16")
+
+        assert capture._streaming_rms(path) == 0.0
+
+    def test_streaming_rms_short_file(self, tmp_path):
+        """Streaming RMS works correctly on files shorter than one chunk."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path), sample_rate=16000)
+        capture = AudioCapture(config)
+
+        # 100 samples — well under the 480000-sample chunk size.
+        signal = np.full(100, 0.5, dtype=np.float32)
+        path = tmp_path / "short.wav"
+        sf.write(str(path), signal, 16000, subtype="PCM_16")
+
+        audio, _ = sf.read(str(path), dtype="float32")
+        expected_rms = float(np.sqrt(np.mean(audio**2)))
+        actual_rms = capture._streaming_rms(path)
+
+        np.testing.assert_almost_equal(actual_rms, expected_rms, decimal=4)
+
+
+# ---------------------------------------------------------------------------
+# Non-blocking stop tests
+# ---------------------------------------------------------------------------
+
+
+class TestNonBlockingStop:
+    """Tests for stop(blocking=False) and wait_for_merge()."""
+
+    @patch.object(AudioCapture, "_record_loop")
+    @patch.object(AudioCapture, "_find_device", return_value=0)
+    @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
+    def test_non_blocking_stop_returns_promptly(
+        self, mock_default, mock_find, mock_record, tmp_path
+    ):
+        """stop(blocking=False) should return without waiting for the merge."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path))
+        capture = AudioCapture(config)
+
+        # Simulate: _record_loop sets streams_stopped immediately (mocked).
+        capture._streams_stopped.set()
+
+        capture.start()
+        result = capture.stop(blocking=False)
+
+        # Should return without blocking; thread is still "alive" (mocked).
+        assert result is None or isinstance(result, Path)
+
+        # Clean up.
+        capture._recording = False
+        if capture._thread and capture._thread.is_alive():
+            capture._thread.join(timeout=2)
+
+    def test_wait_for_merge_returns_true_when_set(self, tmp_path):
+        """wait_for_merge() returns True when the merge event is already set."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path))
+        capture = AudioCapture(config)
+
+        capture._merge_complete.set()
+        assert capture.wait_for_merge(timeout=0.1) is True
+
+    def test_wait_for_merge_returns_false_on_timeout(self, tmp_path):
+        """wait_for_merge() returns False when the event is not set."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path))
+        capture = AudioCapture(config)
+
+        assert capture.wait_for_merge(timeout=0.05) is False
+
+    @patch.object(AudioCapture, "_find_device", return_value=0)
+    @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
+    def test_start_resets_events(self, mock_default, mock_find, tmp_path):
+        """start() should clear both lifecycle events."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path))
+        capture = AudioCapture(config)
+
+        # Pre-set the events.
+        capture._streams_stopped.set()
+        capture._merge_complete.set()
+
+        with patch.object(AudioCapture, "_record_loop"):
+            capture.start()
+
+        # Events should have been cleared.
+        assert not capture._streams_stopped.is_set()
+        assert not capture._merge_complete.is_set()
+
+        # Clean up.
+        capture._recording = False
+        if capture._thread and capture._thread.is_alive():
+            capture._thread.join(timeout=2)
