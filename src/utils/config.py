@@ -68,9 +68,20 @@ class AudioConfig:
 class TranscriptionConfig:
     model_size: str = "mlx-community/whisper-large-v3-turbo"
     language: str = "en"
+    condition_on_previous_text: bool = False
+    compression_ratio_threshold: float = 2.4
+    logprob_threshold: float = -1.0
+    no_speech_threshold: float = 0.6
+    hallucination_silence_threshold: float | None = None
+    temperature: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    initial_prompt: str = ""
     vad_threshold: float = (
         0.35  # Kept for backward compatibility; MLX Whisper handles VAD internally.
     )
+
+    def __post_init__(self) -> None:
+        if isinstance(self.temperature, list):
+            self.temperature = tuple(self.temperature)
 
 
 @dataclass
