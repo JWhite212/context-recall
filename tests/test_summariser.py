@@ -16,6 +16,34 @@ from src.utils.config import SummarisationConfig
 # ---------------------------------------------------------------------------
 
 
+def _make_ollama_stream_mock(content: str) -> MagicMock:
+    """Build a mock for ``httpx.stream`` that yields *content* as streaming JSON lines.
+
+    Each call to the returned mock produces a fresh context-manager
+    whose ``iter_lines()`` returns a new iterator, so the mock works
+    correctly when ``_ollama_chat`` is called multiple times (e.g.
+    during chunked summarisation).
+    """
+    import json
+
+    lines = [
+        json.dumps({"message": {"content": content}, "done": False}),
+        json.dumps({"message": {"content": ""}, "done": True}),
+    ]
+
+    def _build_ctx(*_args, **_kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.iter_lines.return_value = iter(lines)
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=resp)
+        ctx.__exit__ = MagicMock(return_value=False)
+        return ctx
+
+    mock_stream = MagicMock(side_effect=_build_ctx)
+    return mock_stream
+
+
 def _make_transcript(word_count: int) -> Transcript:
     """Build a Transcript containing roughly *word_count* words."""
     words_per_segment = 50
@@ -143,27 +171,22 @@ class TestSummariserOllama:
         with pytest.raises(ValueError, match="scheme must be http or https"):
             Summariser._validate_ollama_url("ftp://localhost:11434")
 
-    @patch("src.summariser.httpx.post")
-    def test_summarise_ollama_success(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "message": {
-                "content": "# Test Meeting\n\n## Summary\nGreat meeting.\n\n## Tags\ntest, demo",
-            }
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+    def test_summarise_ollama_success(self):
+        mock_stream = _make_ollama_stream_mock(
+            "# Test Meeting\n\n## Summary\nGreat meeting.\n\n## Tags\ntest, demo"
+        )
 
-        config = SummarisationConfig(backend="ollama")
-        summariser = Summariser(config)
-        transcript = _make_transcript(100)
+        with patch("src.summariser.httpx.stream", mock_stream):
+            config = SummarisationConfig(backend="ollama")
+            summariser = Summariser(config)
+            transcript = _make_transcript(100)
 
-        result = summariser.summarise(transcript)
+            result = summariser.summarise(transcript)
 
         assert result.title == "Test Meeting"
         assert "test" in result.tags
         assert "demo" in result.tags
-        mock_post.assert_called_once()
+        mock_stream.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -272,29 +295,27 @@ class TestSplitIntoChunks:
 
 
 class TestOllamaTimeout:
-    @patch("src.summariser.httpx.post")
-    def test_configurable_timeout_used(self, mock_post):
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"message": {"content": "# Title\n\n## Tags\nx"}}
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+    def test_configurable_timeout_used(self):
+        mock_stream = _make_ollama_stream_mock("# Title\n\n## Tags\nx")
 
-        config = SummarisationConfig(backend="ollama", ollama_timeout=900)
-        summariser = Summariser(config)
-        summariser.summarise(_make_transcript(100))
-
-        _, kwargs = mock_post.call_args
-        assert kwargs["timeout"] == 900.0
-
-    @patch("src.summariser.httpx.post")
-    def test_timeout_error_message_includes_configured_value(self, mock_post):
-        mock_post.side_effect = httpx.ReadTimeout("timed out")
-
-        config = SummarisationConfig(backend="ollama", ollama_timeout=1200)
-        summariser = Summariser(config)
-
-        with pytest.raises(TimeoutError, match="1200s"):
+        with patch("src.summariser.httpx.stream", mock_stream):
+            config = SummarisationConfig(backend="ollama", ollama_timeout=900)
+            summariser = Summariser(config)
             summariser.summarise(_make_transcript(100))
+
+        args, kwargs = mock_stream.call_args
+        assert kwargs["timeout"] == httpx.Timeout(900.0, connect=30.0)
+
+    def test_timeout_error_message_includes_configured_value(self):
+        mock_stream = MagicMock()
+        mock_stream.side_effect = httpx.ReadTimeout("timed out")
+
+        with patch("src.summariser.httpx.stream", mock_stream):
+            config = SummarisationConfig(backend="ollama", ollama_timeout=1200)
+            summariser = Summariser(config)
+
+            with pytest.raises(TimeoutError, match="1200s"):
+                summariser.summarise(_make_transcript(100))
 
 
 # ---------------------------------------------------------------------------
@@ -303,17 +324,9 @@ class TestOllamaTimeout:
 
 
 class TestChunkedOllama:
-    @patch("src.summariser.httpx.post")
-    def test_large_transcript_triggers_chunking(self, mock_post, caplog):
+    def test_large_transcript_triggers_chunking(self, caplog):
         """Transcripts exceeding chunk_threshold_words should be chunked."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "message": {
-                "content": "# Chunked Meeting\n\n## Tags\nchunk",
-            }
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+        mock_stream = _make_ollama_stream_mock("# Chunked Meeting\n\n## Tags\nchunk")
 
         config = SummarisationConfig(
             backend="ollama",
@@ -322,26 +335,19 @@ class TestChunkedOllama:
         summariser = Summariser(config)
         transcript = _make_transcript(9000)
 
-        with caplog.at_level(logging.INFO, logger="src.summariser"):
-            result = summariser.summarise(transcript)
+        with patch("src.summariser.httpx.stream", mock_stream):
+            with caplog.at_level(logging.INFO, logger="src.summariser"):
+                result = summariser.summarise(transcript)
 
         assert result.title == "Chunked Meeting"
         # Multiple calls: one per chunk + one consolidation.
-        assert mock_post.call_count >= 3
+        assert mock_stream.call_count >= 3
         assert any("splitting into" in msg for msg in caplog.messages)
         assert any("Consolidating" in msg for msg in caplog.messages)
 
-    @patch("src.summariser.httpx.post")
-    def test_small_transcript_no_chunking(self, mock_post):
+    def test_small_transcript_no_chunking(self):
         """Transcripts <= chunk_threshold_words should NOT be chunked."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "message": {
-                "content": "# Small Meeting\n\n## Tags\nsmall",
-            }
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+        mock_stream = _make_ollama_stream_mock("# Small Meeting\n\n## Tags\nsmall")
 
         config = SummarisationConfig(
             backend="ollama",
@@ -350,22 +356,15 @@ class TestChunkedOllama:
         summariser = Summariser(config)
         transcript = _make_transcript(5000)
 
-        result = summariser.summarise(transcript)
+        with patch("src.summariser.httpx.stream", mock_stream):
+            result = summariser.summarise(transcript)
 
         assert result.title == "Small Meeting"
-        mock_post.assert_called_once()
+        mock_stream.assert_called_once()
 
-    @patch("src.summariser.httpx.post")
-    def test_configurable_chunk_threshold(self, mock_post, caplog):
+    def test_configurable_chunk_threshold(self, caplog):
         """Custom chunk threshold is respected."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "message": {
-                "content": "# Threshold Meeting\n\n## Tags\nthreshold",
-            }
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+        mock_stream = _make_ollama_stream_mock("# Threshold Meeting\n\n## Tags\nthreshold")
 
         # 6000 words with a 5000-word threshold should trigger chunking.
         config = SummarisationConfig(
@@ -375,17 +374,19 @@ class TestChunkedOllama:
         summariser = Summariser(config)
         transcript = _make_transcript(6000)
 
-        with caplog.at_level(logging.INFO, logger="src.summariser"):
-            summariser.summarise(transcript)
-        assert mock_post.call_count >= 2
+        with patch("src.summariser.httpx.stream", mock_stream):
+            with caplog.at_level(logging.INFO, logger="src.summariser"):
+                summariser.summarise(transcript)
+        assert mock_stream.call_count >= 2
         assert any("splitting into" in msg for msg in caplog.messages)
 
         # 4000 words with a 5000-word threshold should NOT trigger chunking.
-        mock_post.reset_mock()
+        mock_stream.reset_mock()
         caplog.clear()
         transcript_small = _make_transcript(4000)
-        summariser.summarise(transcript_small)
-        mock_post.assert_called_once()
+        with patch("src.summariser.httpx.stream", mock_stream):
+            summariser.summarise(transcript_small)
+        mock_stream.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -533,19 +534,16 @@ class TestOllamaFallback:
 
 
 class TestOllamaNumCtx:
-    @patch("src.summariser.httpx.post")
-    def test_num_ctx_in_payload(self, mock_post):
+    def test_num_ctx_in_payload(self):
         """Verify num_ctx is included in the Ollama API payload."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"message": {"content": "# Title\n\n## Tags\nx"}}
-        mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+        mock_stream = _make_ollama_stream_mock("# Title\n\n## Tags\nx")
 
-        config = SummarisationConfig(ollama_num_ctx=65536)
-        summariser = Summariser(config)
-        summariser.summarise(_make_transcript(100))
+        with patch("src.summariser.httpx.stream", mock_stream):
+            config = SummarisationConfig(ollama_num_ctx=65536)
+            summariser = Summariser(config)
+            summariser.summarise(_make_transcript(100))
 
-        _, kwargs = mock_post.call_args
+        _, kwargs = mock_stream.call_args
         payload = kwargs["json"]
         assert payload["options"]["num_ctx"] == 65536
 

@@ -17,6 +17,7 @@ Backend is configurable: set summarisation.backend to "claude" for the
 Anthropic API, or "ollama" for a local Ollama model.
 """
 
+import json as _json
 import logging
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -354,7 +355,12 @@ class Summariser:
         system: str,
         user: str,
     ) -> str:
-        """Send a single chat request to Ollama and return the text."""
+        """Send a streaming chat request to Ollama and return the text.
+
+        Uses Ollama's streaming API so that tokens arrive incrementally,
+        keeping the HTTP connection alive and avoiding read-timeouts on
+        long generations.
+        """
         timeout = float(self._config.ollama_timeout)
         payload = {
             "model": model,
@@ -362,7 +368,7 @@ class Summariser:
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "stream": False,
+            "stream": True,
             "options": {
                 "num_predict": self._config.max_tokens,
                 "num_ctx": self._config.ollama_num_ctx,
@@ -370,12 +376,23 @@ class Summariser:
         }
 
         try:
-            response = httpx.post(
+            with httpx.stream(
+                "POST",
                 f"{base_url}/api/chat",
                 json=payload,
-                timeout=timeout,
-            )
-            response.raise_for_status()
+                timeout=httpx.Timeout(timeout, connect=30.0),
+            ) as response:
+                response.raise_for_status()
+                content_parts: list[str] = []
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    data = _json.loads(line)
+                    if "message" in data and "content" in data["message"]:
+                        content_parts.append(data["message"]["content"])
+                    if data.get("done", False):
+                        break
+                return "".join(content_parts)
         except httpx.ConnectError:
             raise ConnectionError(
                 f"Could not connect to Ollama at {base_url}. "
@@ -392,14 +409,6 @@ class Summariser:
             raise RuntimeError(
                 f"Ollama returned HTTP {exc.response.status_code}. "
                 f"Response: {exc.response.text[:500]}"
-            ) from None
-
-        try:
-            data = response.json()
-            return data["message"]["content"]
-        except (ValueError, KeyError) as exc:
-            raise RuntimeError(
-                f"Unexpected Ollama response format: {exc}. Raw response: {response.text[:500]}"
             ) from None
 
     def _summarise_chunked_ollama(
