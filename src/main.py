@@ -172,7 +172,10 @@ class MeetingMind:
             "meeting.ended",
             duration=event.duration_seconds,
         )
-        audio_path = self._capture.stop()
+        try:
+            audio_path = self._capture.stop(blocking=False)
+        except TypeError:
+            audio_path = self._capture.stop()
 
         if audio_path is None or not audio_path.exists():
             logger.error("No audio file produced. Skipping processing.")
@@ -286,6 +289,13 @@ class MeetingMind:
             audio_path, started_at, meeting_id=meeting_id, status="transcribing"
         )
 
+        # Wait for audio merge if stop was non-blocking.
+        if hasattr(self._capture, "wait_for_merge"):
+            if not self._capture.wait_for_merge(timeout=120):
+                logger.error("Audio merge timed out after 120s. Skipping processing.")
+                self._db_update(meeting_id, status="error")
+                return
+
         # Step 1: Transcribe.
         logger.info("Transcribing audio...")
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="transcribing")
@@ -339,13 +349,18 @@ class MeetingMind:
         # Step 3: Summarise.
         logger.info("Generating summary...")
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="summarising")
+        summary_start = time.monotonic()
         try:
             summary = self._summariser.summarise(transcript, template=template)
         except Exception as e:
-            logger.error("Summarisation failed: %s", e, exc_info=True)
+            elapsed = time.monotonic() - summary_start
+            logger.error("Summarisation failed after %.1fs: %s", elapsed, e, exc_info=True)
             self._emit("pipeline.error", meeting_id=meeting_id, stage="summarising", error=str(e))
             self._db_update(meeting_id, status="error")
             return
+
+        summary_elapsed = time.monotonic() - summary_start
+        logger.info("Summary generated in %.1fs", summary_elapsed)
 
         # Persist transcript and summary to DB.
         self._db_update(
@@ -394,8 +409,17 @@ class MeetingMind:
                                 self._api_server.repo.store_embeddings(meeting_id, emb_records),
                                 loop,
                             )
-                            future.result(timeout=30)
-                            logger.info("Stored %d segment embeddings", len(emb_records))
+
+                            emb_count = len(emb_records)
+
+                            def _on_embedding_done(fut):
+                                try:
+                                    fut.result()
+                                    logger.info("Stored %d segment embeddings", emb_count)
+                                except Exception as exc:
+                                    logger.warning("Embedding storage failed: %s", exc)
+
+                            future.add_done_callback(_on_embedding_done)
         except Exception as e:
             logger.warning("Embedding failed (search will still work without it): %s", e)
 
