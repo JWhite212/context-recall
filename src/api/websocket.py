@@ -52,7 +52,3 @@ class ConnectionManager:
 
         for ws in disconnected:
             self.disconnect(ws)
-
-    @property
-    def client_count(self) -> int:
-        return len(self._connections)

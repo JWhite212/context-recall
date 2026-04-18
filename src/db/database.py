@@ -10,7 +10,6 @@ Location: ~/.local/share/meetingmind/meetings.db
 
 import logging
 import os
-import sqlite3
 from pathlib import Path
 
 import aiosqlite
@@ -162,45 +161,3 @@ class Database:
             logger.info("Database migrated to version %d", SCHEMA_VERSION)
         else:
             logger.debug("Database schema up to date (version %d)", current_version)
-
-    def connect_sync(self) -> None:
-        """Synchronous fallback for initialisation outside async context."""
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path))
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-
-        cursor = conn.execute("PRAGMA user_version")
-        current_version = cursor.fetchone()[0]
-
-        if current_version < 1:
-            conn.executescript(SCHEMA_SQL)
-            try:
-                conn.executescript(FTS_SQL)
-            except Exception:
-                logger.warning("FTS5 not available; full-text search disabled.")
-            conn.executescript(EMBEDDINGS_SQL)
-            conn.executescript(SPEAKER_MAPPINGS_SQL)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            conn.commit()
-            logger.info("Database schema created (version %d)", SCHEMA_VERSION)
-        elif current_version < 2:
-            conn.execute("ALTER TABLE meetings ADD COLUMN label TEXT NOT NULL DEFAULT ''")
-            conn.executescript(EMBEDDINGS_SQL)
-            conn.executescript(SPEAKER_MAPPINGS_SQL)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            conn.commit()
-            logger.info("Database migrated to version %d", SCHEMA_VERSION)
-        elif current_version < 3:
-            conn.executescript(EMBEDDINGS_SQL)
-            conn.executescript(SPEAKER_MAPPINGS_SQL)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            conn.commit()
-            logger.info("Database migrated to version %d", SCHEMA_VERSION)
-        elif current_version < 4:
-            conn.executescript(SPEAKER_MAPPINGS_SQL)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            conn.commit()
-            logger.info("Database migrated to version %d", SCHEMA_VERSION)
-
-        conn.close()

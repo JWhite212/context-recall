@@ -34,6 +34,15 @@ if [ ! -f "$BINARY" ]; then
     exit 1
 fi
 
+# Fix MLX metallib location: PyInstaller puts libmlx.dylib in _internal/
+# but mlx.metallib in _internal/mlx/lib/. MLX resolves the metallib
+# relative to the dylib, so copy it next to libmlx.dylib.
+METALLIB="dist/meetingmind-daemon/_internal/mlx/lib/mlx.metallib"
+if [ -f "$METALLIB" ]; then
+    cp "$METALLIB" "dist/meetingmind-daemon/_internal/mlx.metallib"
+    echo "==> Copied mlx.metallib next to libmlx.dylib"
+fi
+
 # Report size.
 SIZE=$(du -sh "$BINARY" | cut -f1)
 TOTAL_SIZE=$(du -sh "dist/meetingmind-daemon/" | cut -f1)

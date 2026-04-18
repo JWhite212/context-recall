@@ -519,17 +519,6 @@ class AudioCapture:
         return self._recording
 
     @property
-    def output_path(self) -> Path | None:
-        return self._output_path
-
-    @property
-    def system_audio_path(self) -> Path | None:
-        """Path to the separate system audio file (if kept)."""
-        if self._system_path and self._system_path.exists():
-            return self._system_path
-        return None
-
-    @property
     def mic_audio_path(self) -> Path | None:
         """Path to the separate mic audio file (if kept)."""
         if self._mic_path and self._mic_path.exists():
