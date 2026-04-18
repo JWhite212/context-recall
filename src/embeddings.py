@@ -66,22 +66,3 @@ class Embedder:
         if norm < 1e-10:
             return 0.0
         return float(dot / norm)
-
-    def search(
-        self,
-        query: str,
-        embeddings: list[tuple[int, list[float]]],  # (id, vector) pairs
-        limit: int = 10,
-    ) -> list[tuple[int, float]]:
-        """
-        Search for the most similar embeddings to the query.
-
-        Returns list of (id, similarity_score) pairs, sorted by score descending.
-        """
-        query_vec = self.embed_single(query)
-        scores = []
-        for emb_id, vec in embeddings:
-            score = self.cosine_similarity(query_vec, vec)
-            scores.append((emb_id, score))
-        scores.sort(key=lambda x: x[1], reverse=True)
-        return scores[:limit]

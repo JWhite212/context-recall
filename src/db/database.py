@@ -20,7 +20,29 @@ logger = logging.getLogger("meetingmind.db")
 DEFAULT_DB_DIR = Path(os.path.expanduser("~/.local/share/meetingmind"))
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "meetings.db"
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
+
+_vec_available = False
+
+
+def _load_vec_extension(conn):
+    """Load sqlite-vec extension. Returns True if successful."""
+    global _vec_available
+    try:
+        import sqlite_vec
+
+        sqlite_vec.load(conn)
+        _vec_available = True
+        logger.info("sqlite-vec extension loaded successfully")
+        return True
+    except (ImportError, Exception) as e:
+        logger.warning(
+            "sqlite-vec not available; vector search will use brute-force fallback: %s",
+            e,
+        )
+        _vec_available = False
+        return False
+
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS meetings (
@@ -71,6 +93,12 @@ CREATE INDEX IF NOT EXISTS idx_segment_embeddings_meeting
     ON segment_embeddings(meeting_id);
 """
 
+VEC_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS segment_embeddings_vec USING vec0(
+    embedding float[384]
+);
+"""
+
 SPEAKER_MAPPINGS_SQL = """
 CREATE TABLE IF NOT EXISTS speaker_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +114,25 @@ CREATE TABLE IF NOT EXISTS speaker_mappings (
 CREATE INDEX IF NOT EXISTS idx_speaker_mappings_meeting
     ON speaker_mappings(meeting_id);
 """
+
+
+_ALLOWED_TABLES = frozenset({"meetings", "speaker_mappings", "segment_embeddings"})
+_ALLOWED_COL_TYPES = frozenset({"TEXT", "REAL", "INTEGER", "BLOB"})
+
+
+async def _safe_add_column(conn, table: str, column: str, col_type: str, default: str) -> None:
+    """Add a column if it doesn't already exist. Validates inputs to prevent SQL injection."""
+    if table not in _ALLOWED_TABLES:
+        raise ValueError(f"Invalid table name: {table!r}")
+    if not column.isidentifier():
+        raise ValueError(f"Invalid column name: {column!r}")
+    if col_type not in _ALLOWED_COL_TYPES:
+        raise ValueError(f"Invalid column type: {col_type!r}")
+    try:
+        await conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type} DEFAULT {default}")
+    except Exception as e:
+        if "duplicate column" not in str(e).lower():
+            raise
 
 
 class Database:
@@ -106,6 +153,10 @@ class Database:
         self._connection.row_factory = aiosqlite.Row
         await self._connection.execute("PRAGMA journal_mode=WAL")
         await self._connection.execute("PRAGMA foreign_keys=ON")
+        # Load sqlite-vec extension (must happen before migration to create vec0 tables).
+        # aiosqlite wraps a real sqlite3 connection — access it for extension loading.
+        raw_conn = self._connection._conn  # Access underlying sqlite3.Connection
+        _load_vec_extension(raw_conn)
         await self._migrate()
         logger.info("Database connected: %s", self._db_path)
 
@@ -135,7 +186,16 @@ class Database:
             except Exception:
                 logger.warning("FTS5 not available; full-text search disabled.")
             await self.conn.executescript(EMBEDDINGS_SQL)
+            if _vec_available:
+                try:
+                    await self.conn.executescript(VEC_SQL)
+                except Exception:
+                    logger.warning("Failed to create vec0 table on fresh install")
             await self.conn.executescript(SPEAKER_MAPPINGS_SQL)
+            # Calendar integration columns (v6).
+            await _safe_add_column(self.conn, "meetings", "calendar_event_title", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "attendees_json", "TEXT", "'[]'")
+            await _safe_add_column(self.conn, "meetings", "calendar_confidence", "REAL", "0.0")
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -145,19 +205,49 @@ class Database:
             )
             await self.conn.executescript(EMBEDDINGS_SQL)
             await self.conn.executescript(SPEAKER_MAPPINGS_SQL)
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
-            logger.info("Database migrated to version %d", SCHEMA_VERSION)
-        elif current_version < 3:
+            current_version = 4
+            logger.info("Database migrated to version 4")
+        if current_version == 2:
             await self.conn.executescript(EMBEDDINGS_SQL)
             await self.conn.executescript(SPEAKER_MAPPINGS_SQL)
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
-            logger.info("Database migrated to version %d", SCHEMA_VERSION)
-        elif current_version < 4:
+            current_version = 4
+            logger.info("Database migrated to version 4")
+        if current_version == 3:
             await self.conn.executescript(SPEAKER_MAPPINGS_SQL)
+            await self.conn.commit()
+            current_version = 4
+            logger.info("Database migrated to version 4")
+        if current_version == 4:
+            # sqlite-vec virtual table for vector search.
+            if _vec_available:
+                try:
+                    await self.conn.executescript(VEC_SQL)
+                    # Migrate existing embeddings into vec0 table.
+                    cursor = await self.conn.execute("SELECT id, embedding FROM segment_embeddings")
+                    rows = await cursor.fetchall()
+                    count = 0
+                    for row in rows:
+                        await self.conn.execute(
+                            "INSERT INTO segment_embeddings_vec(rowid, embedding) VALUES (?, ?)",
+                            (row["id"], row["embedding"]),
+                        )
+                        count += 1
+                    logger.info("Migrated %d embeddings to vec0 table", count)
+                except Exception as e:
+                    logger.warning("Failed to create vec0 table: %s", e)
+            await self.conn.execute("PRAGMA user_version = 5")
+            await self.conn.commit()
+            logger.info("Database migrated to version 5 (sqlite-vec)")
+            current_version = 5
+        if current_version < 6:
+            # Calendar integration columns.
+            await _safe_add_column(self.conn, "meetings", "calendar_event_title", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "attendees_json", "TEXT", "'[]'")
+            await _safe_add_column(self.conn, "meetings", "calendar_confidence", "REAL", "0.0")
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
-            logger.info("Database migrated to version %d", SCHEMA_VERSION)
+            logger.info("Database migrated to version %d (calendar columns)", SCHEMA_VERSION)
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

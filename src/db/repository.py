@@ -31,12 +31,12 @@ _MUTABLE_COLUMNS = frozenset(
         "language",
         "word_count",
         "label",
+        "calendar_event_title",
+        "attendees_json",
+        "calendar_confidence",
         "updated_at",
     }
 )
-
-# Module-level cache for get_all_embeddings (invalidated by store_embeddings).
-_embedding_cache: list[dict] | None = None
 
 
 @dataclass
@@ -58,6 +58,9 @@ class MeetingRecord:
     created_at: float
     updated_at: float
     label: str = ""
+    calendar_event_title: str = ""
+    attendees_json: str = "[]"
+    calendar_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +77,9 @@ class MeetingRecord:
             "language": self.language,
             "word_count": self.word_count,
             "label": self.label,
+            "calendar_event_title": self.calendar_event_title,
+            "attendees_json": self.attendees_json,
+            "calendar_confidence": self.calendar_confidence,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -82,6 +88,18 @@ class MeetingRecord:
     def from_row(cls, row) -> "MeetingRecord":
         tags_raw = row["tags"]
         tags = json.loads(tags_raw) if tags_raw else []
+
+        # Calendar fields may not exist in older databases.
+        calendar_event_title = ""
+        attendees_json = "[]"
+        calendar_confidence = 0.0
+        try:
+            calendar_event_title = row["calendar_event_title"] or ""
+            attendees_json = row["attendees_json"] or "[]"
+            calendar_confidence = row["calendar_confidence"] or 0.0
+        except (IndexError, KeyError):
+            pass
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -98,6 +116,9 @@ class MeetingRecord:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             label=row["label"],
+            calendar_event_title=calendar_event_title,
+            attendees_json=attendees_json,
+            calendar_confidence=calendar_confidence,
         )
 
 
@@ -105,8 +126,6 @@ class MeetingRepository:
     """Async data access for meetings."""
 
     def __init__(self, db: Database) -> None:
-        global _embedding_cache
-        _embedding_cache = None
         self._db = db
 
     async def create_meeting(
@@ -405,15 +424,26 @@ class MeetingRepository:
         Each dict in *embeddings* must contain: segment_index, embedding,
         text, speaker (optional), and start_time.
         """
-        global _embedding_cache
-        _embedding_cache = None
-        # Delete existing embeddings for this meeting first.
+        from src.db.database import _vec_available
+
+        # Delete from vec0 first (before deleting from segment_embeddings).
+        if _vec_available:
+            try:
+                await self._db.conn.execute(
+                    "DELETE FROM segment_embeddings_vec WHERE rowid IN "
+                    "(SELECT id FROM segment_embeddings WHERE meeting_id = ?)",
+                    (meeting_id,),
+                )
+            except Exception:
+                pass
+
+        # Delete existing embeddings for this meeting.
         await self._db.conn.execute(
             "DELETE FROM segment_embeddings WHERE meeting_id = ?", (meeting_id,)
         )
         for emb in embeddings:
             embedding_blob = struct.pack(f"{len(emb['embedding'])}f", *emb["embedding"])
-            await self._db.conn.execute(
+            cursor = await self._db.conn.execute(
                 """INSERT INTO segment_embeddings
                    (meeting_id, segment_index, embedding, text, speaker, start_time)
                    VALUES (?, ?, ?, ?, ?, ?)""",
@@ -426,6 +456,15 @@ class MeetingRepository:
                     emb["start_time"],
                 ),
             )
+            if _vec_available:
+                rowid = cursor.lastrowid
+                try:
+                    await self._db.conn.execute(
+                        "INSERT INTO segment_embeddings_vec(rowid, embedding) VALUES (?, ?)",
+                        (rowid, embedding_blob),
+                    )
+                except Exception as e:
+                    logger.warning("Failed to insert embedding into vec0: %s", e)
         await self._db.conn.commit()
 
     async def get_all_embeddings(self) -> list[dict]:
@@ -434,9 +473,6 @@ class MeetingRepository:
         Returns dicts with id, meeting_id, segment_index, embedding, text,
         speaker, and start_time.
         """
-        global _embedding_cache
-        if _embedding_cache is not None:
-            return _embedding_cache
         cursor = await self._db.conn.execute(
             "SELECT id, meeting_id, segment_index, embedding, text, speaker, start_time "
             "FROM segment_embeddings LIMIT 100000"
@@ -458,7 +494,230 @@ class MeetingRepository:
                     "start_time": row["start_time"],
                 }
             )
-        _embedding_cache = results
+        return results
+
+    async def search_embeddings(
+        self,
+        query_embedding: list[float],
+        limit: int = 50,
+        meeting_id: str | None = None,
+        date_from: float | None = None,
+        date_to: float | None = None,
+    ) -> list[dict]:
+        """Search segment embeddings using sqlite-vec KNN.
+
+        Falls back to brute-force if sqlite-vec is not available.
+        """
+        from src.db.database import _vec_available
+
+        if not _vec_available:
+            return await self._search_embeddings_bruteforce(
+                query_embedding, limit, meeting_id, date_from, date_to
+            )
+
+        query_blob = struct.pack(f"{len(query_embedding)}f", *query_embedding)
+
+        # Build query with optional filters.
+        conditions: list[str] = []
+        params: list = [query_blob, limit]
+
+        base_sql = """
+            SELECT se.id, se.meeting_id, se.segment_index, se.text, se.speaker, se.start_time,
+                   v.distance
+            FROM segment_embeddings_vec v
+            JOIN segment_embeddings se ON se.id = v.rowid
+            JOIN meetings m ON se.meeting_id = m.id
+            WHERE v.embedding MATCH ? AND k = ?
+        """
+
+        if meeting_id:
+            conditions.append("se.meeting_id = ?")
+            params.append(meeting_id)
+        if date_from is not None:
+            conditions.append("m.started_at >= ?")
+            params.append(date_from)
+        if date_to is not None:
+            conditions.append("m.started_at <= ?")
+            params.append(date_to)
+
+        if conditions:
+            base_sql += " AND " + " AND ".join(conditions)
+
+        base_sql += " ORDER BY v.distance"
+
+        cursor = await self._db.conn.execute(base_sql, params)
+        rows = await cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append(
+                {
+                    "id": row["id"] if isinstance(row, dict) else row[0],
+                    "meeting_id": row["meeting_id"] if isinstance(row, dict) else row[1],
+                    "segment_index": row["segment_index"] if isinstance(row, dict) else row[2],
+                    "text": row["text"] if isinstance(row, dict) else row[3],
+                    "speaker": row["speaker"] if isinstance(row, dict) else row[4],
+                    "start_time": row["start_time"] if isinstance(row, dict) else row[5],
+                    "distance": row["distance"] if isinstance(row, dict) else row[6],
+                }
+            )
+        return results
+
+    async def _search_embeddings_bruteforce(
+        self,
+        query_embedding: list[float],
+        limit: int = 50,
+        meeting_id: str | None = None,
+        date_from: float | None = None,
+        date_to: float | None = None,
+    ) -> list[dict]:
+        """Brute-force fallback when sqlite-vec is not available."""
+        import numpy as np
+
+        conditions: list[str] = []
+        params: list = []
+
+        sql = """
+            SELECT se.id, se.meeting_id, se.segment_index, se.embedding,
+                   se.text, se.speaker, se.start_time
+            FROM segment_embeddings se
+            JOIN meetings m ON se.meeting_id = m.id
+            WHERE 1=1
+        """
+        if meeting_id:
+            conditions.append("se.meeting_id = ?")
+            params.append(meeting_id)
+        if date_from is not None:
+            conditions.append("m.started_at >= ?")
+            params.append(date_from)
+        if date_to is not None:
+            conditions.append("m.started_at <= ?")
+            params.append(date_to)
+
+        if conditions:
+            sql += " AND " + " AND ".join(conditions)
+        sql += " LIMIT 100000"
+
+        cursor = await self._db.conn.execute(sql, params)
+        rows = await cursor.fetchall()
+
+        query_vec = np.array(query_embedding)
+        query_norm = np.linalg.norm(query_vec)
+        if query_norm < 1e-10:
+            return []
+
+        scored = []
+        for row in rows:
+            blob = row["embedding"]
+            num_floats = len(blob) // 4
+            vec = np.array(struct.unpack(f"{num_floats}f", blob))
+            vec_norm = np.linalg.norm(vec)
+            if vec_norm < 1e-10:
+                continue
+            similarity = float(np.dot(query_vec, vec) / (query_norm * vec_norm))
+            scored.append(
+                {
+                    "id": row["id"],
+                    "meeting_id": row["meeting_id"],
+                    "segment_index": row["segment_index"],
+                    "text": row["text"],
+                    "speaker": row["speaker"],
+                    "start_time": row["start_time"],
+                    "distance": 1.0 - similarity,
+                }
+            )
+
+        scored.sort(key=lambda x: x["distance"])
+        return scored[:limit]
+
+    async def search_hybrid(
+        self,
+        query_text: str,
+        query_embedding: list[float],
+        limit: int = 10,
+        date_from: float | None = None,
+        date_to: float | None = None,
+    ) -> list[dict]:
+        """Hybrid search combining FTS5 keyword results with vector results via RRF."""
+        # 1. Vector search
+        vec_results = await self.search_embeddings(
+            query_embedding, limit=50, date_from=date_from, date_to=date_to
+        )
+
+        # 2. FTS5 keyword search
+        fts_results: list[dict] = []
+        try:
+            safe_query = '"' + query_text.replace('"', "") + '"'
+            sql = """
+                SELECT m.id as meeting_id, m.title, m.started_at,
+                       rank as fts_rank
+                FROM meetings_fts
+                JOIN meetings m ON m.rowid = meetings_fts.rowid
+                WHERE meetings_fts MATCH ?
+            """
+            params: list = [safe_query]
+            if date_from is not None:
+                sql += " AND m.started_at >= ?"
+                params.append(date_from)
+            if date_to is not None:
+                sql += " AND m.started_at <= ?"
+                params.append(date_to)
+            sql += " ORDER BY rank LIMIT 50"
+
+            cursor = await self._db.conn.execute(sql, params)
+            rows = await cursor.fetchall()
+            for i, row in enumerate(rows):
+                fts_results.append(
+                    {
+                        "meeting_id": row["meeting_id"],
+                        "title": row["title"],
+                        "started_at": row["started_at"],
+                        "rank": i,
+                    }
+                )
+        except Exception as e:
+            logger.debug("FTS search failed: %s", e)
+
+        # 3. Reciprocal Rank Fusion (RRF)
+        rrf_k = 60  # RRF constant
+        rrf_scores: dict[str, float] = {}
+        result_data: dict[str, dict] = {}
+
+        # Score vector results
+        for i, r in enumerate(vec_results):
+            key = f"{r['meeting_id']}:{r.get('segment_index', 0)}"
+            rrf_scores[key] = rrf_scores.get(key, 0) + 1.0 / (rrf_k + i)
+            result_data[key] = r
+
+        # Score FTS results -- meeting-level, boost all segments from matched meetings
+        for i, r in enumerate(fts_results):
+            meeting_boost = 1.0 / (rrf_k + i)
+            # Boost any vector results from this meeting
+            for key, data in result_data.items():
+                if data["meeting_id"] == r["meeting_id"]:
+                    rrf_scores[key] = rrf_scores.get(key, 0) + meeting_boost
+            # Also add the meeting itself if no segments matched
+            meeting_key = f"{r['meeting_id']}:fts"
+            if meeting_key not in rrf_scores:
+                rrf_scores[meeting_key] = meeting_boost
+                result_data[meeting_key] = {
+                    "meeting_id": r["meeting_id"],
+                    "segment_index": 0,
+                    "text": r.get("title", ""),
+                    "speaker": "",
+                    "start_time": 0.0,
+                    "distance": 0.0,
+                }
+
+        # Sort by RRF score (descending)
+        sorted_keys = sorted(rrf_scores.keys(), key=lambda k: rrf_scores[k], reverse=True)
+
+        results = []
+        for key in sorted_keys[:limit]:
+            data = result_data[key].copy()
+            data["score"] = round(rrf_scores[key], 4)
+            results.append(data)
+
         return results
 
     # ------------------------------------------------------------------

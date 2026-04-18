@@ -61,6 +61,8 @@ class AudioCapture:
 
         # Audio level callback: called with (system_rms, mic_rms) ~10/sec.
         self.on_audio_level: Callable[[float, float], None] | None = None
+        # Audio data callback: called with mono float32 audio for live transcription.
+        self.on_audio_data: Callable[[np.ndarray], None] | None = None
         self._last_level_time: float = 0.0
 
         # Lifecycle events for non-blocking stop.
@@ -164,6 +166,11 @@ class AudioCapture:
                 if self._recording:
                     mono = self._to_mono(indata)
                     system_file.write(mono)
+                    if self.on_audio_data is not None:
+                        try:
+                            self.on_audio_data(mono)
+                        except Exception:
+                            pass
                     if self.on_audio_level is not None:
                         latest_system_rms[0] = float(np.sqrt(np.mean(mono**2)))
 

@@ -12,6 +12,8 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from src.utils.temporal import parse_temporal
+
 logger = logging.getLogger("meetingmind.api.search")
 
 router = APIRouter()
@@ -30,6 +32,9 @@ def init(repo, embedder) -> None:
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=1000)
     limit: int = Field(ge=1, le=100, default=10)
+    mode: str = Field(default="hybrid", pattern="^(hybrid|semantic|keyword)$")
+    date_from: float | None = None
+    date_to: float | None = None
 
 
 class SearchResult(BaseModel):
@@ -40,6 +45,7 @@ class SearchResult(BaseModel):
     start_time: float
     score: float
     meeting_title: str | None = None
+    meeting_started_at: float | None = None
 
 
 class SearchResponse(BaseModel):
@@ -61,23 +67,50 @@ async def search_transcripts(body: SearchRequest):
     if not body.query.strip():
         return SearchResponse(results=[], query=body.query)
 
-    # Get all embeddings from DB.
-    all_embeddings = await _repo.get_all_embeddings()
-    if not all_embeddings:
-        return SearchResponse(results=[], query=body.query)
+    # Parse temporal references from query.
+    cleaned_query, parsed_from, parsed_to = parse_temporal(body.query)
+    date_from = body.date_from if body.date_from is not None else parsed_from
+    date_to = body.date_to if body.date_to is not None else parsed_to
 
-    # Build (id, vector) pairs for search.
-    id_vec_pairs = [(emb["id"], emb["embedding"]) for emb in all_embeddings]
+    if body.mode == "keyword":
+        # FTS5 only.
+        meetings = await _repo.search_meetings(query=cleaned_query, limit=body.limit)
+        results = [
+            SearchResult(
+                meeting_id=m.id,
+                segment_index=0,
+                text=m.title,
+                speaker="",
+                start_time=0.0,
+                score=1.0,
+                meeting_title=m.title,
+                meeting_started_at=m.started_at,
+            )
+            for m in meetings
+        ]
+        return SearchResponse(results=results, query=body.query)
 
-    # Search.
-    ranked = _embedder.search(body.query, id_vec_pairs, limit=body.limit)
+    # Embed the query for semantic/hybrid modes.
+    query_embedding = _embedder.embed_single(cleaned_query)
 
-    # Build result with metadata.
-    emb_by_id = {emb["id"]: emb for emb in all_embeddings}
+    if body.mode == "semantic":
+        raw_results = await _repo.search_embeddings(
+            query_embedding,
+            limit=body.limit,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    else:  # hybrid
+        raw_results = await _repo.search_hybrid(
+            cleaned_query,
+            query_embedding,
+            limit=body.limit,
+            date_from=date_from,
+            date_to=date_to,
+        )
 
-    # Batch-fetch meetings to avoid N+1 queries.
-    ranked_embs = [emb_by_id[emb_id] for emb_id, _score in ranked]
-    meeting_ids = list({emb["meeting_id"] for emb in ranked_embs})
+    # Batch-fetch meeting titles.
+    meeting_ids = list({r["meeting_id"] for r in raw_results})
     meetings_map: dict = {}
     for mid in meeting_ids:
         m = await _repo.get_meeting(mid)
@@ -85,18 +118,19 @@ async def search_transcripts(body: SearchRequest):
             meetings_map[mid] = m
 
     results = []
-    for emb_id, score in ranked:
-        emb = emb_by_id[emb_id]
-        meeting = meetings_map.get(emb["meeting_id"])
+    for r in raw_results:
+        meeting = meetings_map.get(r["meeting_id"])
+        score = r.get("score", 1.0 - r.get("distance", 0.0))
         results.append(
             SearchResult(
-                meeting_id=emb["meeting_id"],
-                segment_index=emb["segment_index"],
-                text=emb["text"],
-                speaker=emb["speaker"],
-                start_time=emb["start_time"],
+                meeting_id=r["meeting_id"],
+                segment_index=r.get("segment_index", 0),
+                text=r["text"],
+                speaker=r.get("speaker", ""),
+                start_time=r.get("start_time", 0.0),
                 score=round(score, 4),
                 meeting_title=meeting.title if meeting else None,
+                meeting_started_at=meeting.started_at if meeting else None,
             )
         )
 

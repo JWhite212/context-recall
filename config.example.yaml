@@ -106,6 +106,12 @@ transcription:
   # MLX Whisper handles voice activity detection internally.
   vad_threshold: 0.35
 
+  # Enable real-time transcription during recording (requires Apple Silicon GPU).
+  # Live transcript appears in the UI with ~8-10s latency.
+  # The final transcript is still produced by full batch transcription after recording.
+  live_enabled: false
+  live_chunk_interval: 8  # Seconds between live chunks (lower = more responsive, more GPU usage)
+
 # --- Summarisation ---
 summarisation:
   # Backend: "ollama" (local, free) or "claude" (Anthropic API, requires credits).
@@ -161,6 +167,17 @@ diarisation:
 
   # Number of speakers (0 = auto-detect, used by pyannote backend).
   num_speakers: 0
+
+# --- Calendar Integration ---
+# Match detected meetings to macOS calendar events for auto-tagging.
+# Requires Calendar permission (macOS will prompt on first launch).
+# Works with any calendar synced to Calendar.app (Exchange, Google, iCloud).
+calendar:
+  enabled: false
+  # Search window: how far before/after meeting start to look for events.
+  time_window_minutes: 15
+  # Minimum confidence score (0.0-1.0) to accept a calendar match.
+  min_confidence: 0.7
 
 # --- Output: Markdown Vault ---
 markdown:

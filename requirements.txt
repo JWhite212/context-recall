@@ -25,6 +25,10 @@ websockets>=14.0
 
 # Database
 aiosqlite>=0.21.0
+sqlite-vec>=0.1.6
+
+# Calendar integration (macOS EventKit)
+pyobjc-framework-EventKit>=10.0
 
 # Semantic search (optional — vector search disabled without it)
 sentence-transformers>=2.2.0

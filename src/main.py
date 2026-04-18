@@ -40,6 +40,12 @@ from src.templates import TemplateManager
 from src.transcriber import Transcriber
 from src.utils.config import load_config
 
+try:
+    from src.calendar_matcher import CalendarMatch, CalendarMatcher
+except ImportError:
+    CalendarMatcher = None
+    CalendarMatch = None
+
 logger = logging.getLogger("meetingmind")
 
 
@@ -86,6 +92,23 @@ class MeetingMind:
         # API server and event system (initialised lazily in run_daemon).
         self._api_server = None
         self._event_bus = None
+
+        # Live transcription (optional).
+        self._live_transcriber = None
+
+        # Calendar integration (optional).
+        self._calendar_matcher: CalendarMatcher | None = None
+        self._calendar_match: CalendarMatch | None = None
+        if CalendarMatcher and self._config.calendar.enabled:
+            self._calendar_matcher = CalendarMatcher(
+                time_window_minutes=self._config.calendar.time_window_minutes,
+                min_confidence=self._config.calendar.min_confidence,
+            )
+            if self._calendar_matcher.available:
+                logger.info("Calendar integration enabled")
+            else:
+                logger.warning("Calendar integration enabled but not available (check permissions)")
+                self._calendar_matcher = None
 
         # Wire up detector callbacks.
         self._detector.on_meeting_start = self._on_meeting_start
@@ -165,9 +188,68 @@ class MeetingMind:
         self._meeting_started_at = event.started_at or time.time()
         self._emit("meeting.started", started_at=self._meeting_started_at)
 
+        # Match meeting to calendar event.
+        self._calendar_match = None
+        if self._calendar_matcher:
+            try:
+                self._calendar_match = self._calendar_matcher.match(self._meeting_started_at)
+                if self._calendar_match:
+                    logger.info(
+                        "Calendar match: %s (%.0f%% confidence)",
+                        self._calendar_match.event_title,
+                        self._calendar_match.confidence * 100,
+                    )
+                    self._emit(
+                        "meeting.calendar_match",
+                        title=self._calendar_match.event_title,
+                        attendees=[a["name"] for a in self._calendar_match.attendees],
+                        confidence=self._calendar_match.confidence,
+                    )
+            except Exception as e:
+                logger.warning("Calendar matching failed: %s", e)
+
+        # Start live transcription if enabled.
+        if self._config.transcription.live_enabled:
+            try:
+                from src.live_transcriber import LiveTranscriber, LiveTranscriptionConfig
+
+                live_config = LiveTranscriptionConfig(
+                    chunk_interval_seconds=self._config.transcription.live_chunk_interval,
+                )
+
+                def _on_live_segment(seg):
+                    self._emit(
+                        "transcript.segment",
+                        meeting_id=self._active_meeting_id,
+                        segment=asdict(seg),
+                    )
+
+                self._live_transcriber = LiveTranscriber(
+                    model_size=self._config.transcription.model_size,
+                    language=self._config.transcription.language,
+                    on_segment=_on_live_segment,
+                    sample_rate=self._config.audio.sample_rate,
+                    config=live_config,
+                )
+                self._capture.on_audio_data = self._live_transcriber.feed
+                self._live_transcriber.start()
+            except Exception as e:
+                logger.warning("Failed to start live transcription: %s", e)
+                self._live_transcriber = None
+
     def _on_meeting_end(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting ends."""
         logger.info("Stopping audio capture and processing...")
+
+        # Stop live transcriber before batch processing to free GPU.
+        if self._live_transcriber:
+            try:
+                self._live_transcriber.stop()
+            except Exception:
+                pass
+            self._live_transcriber = None
+            self._capture.on_audio_data = None
+
         self._emit(
             "meeting.ended",
             duration=event.duration_seconds,
@@ -338,6 +420,37 @@ class MeetingMind:
             except Exception as e:
                 logger.error("Diarisation failed: %s", e, exc_info=True)
 
+        # Step 2b: Enrich speaker labels from calendar attendees.
+        if self._calendar_match and self._calendar_match.attendees:
+            speakers = {seg.speaker for seg in transcript.segments}
+            remote_label = self._config.diarisation.remote_label
+            my_name = self._config.diarisation.speaker_name
+            other_attendees = [
+                a for a in self._calendar_match.attendees if a.get("name") and a["name"] != my_name
+            ]
+            # Auto-rename in 2-speaker meetings with exactly 1 other attendee.
+            if len(speakers) == 2 and remote_label in speakers and len(other_attendees) == 1:
+                new_name = other_attendees[0]["name"]
+                for seg in transcript.segments:
+                    if seg.speaker == remote_label:
+                        seg.speaker = new_name
+                logger.info("Speaker enrichment: renamed '%s' to '%s'", remote_label, new_name)
+            # Store all attendees as candidate speaker mappings for the UI.
+            if meeting_id and self._api_server and self._api_server.repo and self._api_server.loop:
+                for attendee in other_attendees:
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            self._api_server.repo.set_speaker_name(
+                                meeting_id,
+                                f"candidate:{attendee['name']}",
+                                attendee["name"],
+                                source="calendar",
+                            ),
+                            self._api_server.loop,
+                        ).result(timeout=5)
+                    except Exception:
+                        pass
+
         # Load default template for summarisation.
         template = None
         try:
@@ -375,6 +488,18 @@ class MeetingMind:
             language=transcript.language,
             word_count=transcript.word_count,
         )
+
+        # Attach calendar data to meeting record.
+        if self._calendar_match and meeting_id:
+            try:
+                self._db_update(
+                    meeting_id,
+                    calendar_event_title=self._calendar_match.event_title,
+                    attendees_json=json.dumps(self._calendar_match.attendees),
+                    calendar_confidence=self._calendar_match.confidence,
+                )
+            except Exception as e:
+                logger.warning("Failed to save calendar data: %s", e)
 
         # Step 3b: Embed transcript segments for semantic search (background).
         try:

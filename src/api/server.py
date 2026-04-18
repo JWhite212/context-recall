@@ -119,7 +119,7 @@ class ApiServer:
         )
 
         export_routes.init(self.repo)
-        resummarise_routes.init(self.repo)
+        resummarise_routes.init(self.repo, self.event_bus)
         reprocess_routes.init(self.repo)
         models_routes.init(self.event_bus)
 

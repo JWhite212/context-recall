@@ -78,6 +78,8 @@ class TranscriptionConfig:
     vad_threshold: float = (
         0.35  # Kept for backward compatibility; MLX Whisper handles VAD internally.
     )
+    live_enabled: bool = False  # Enable real-time transcription during recording.
+    live_chunk_interval: float = 8.0  # Seconds between live transcription chunks.
 
     def __post_init__(self) -> None:
         if isinstance(self.temperature, list):
@@ -171,6 +173,13 @@ class RetentionConfig:
 
 
 @dataclass
+class CalendarConfig:
+    enabled: bool = False
+    time_window_minutes: int = 15
+    min_confidence: float = 0.7
+
+
+@dataclass
 class AppConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -181,6 +190,7 @@ class AppConfig:
     notion: NotionConfig = field(default_factory=NotionConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
+    calendar: CalendarConfig = field(default_factory=CalendarConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
 
 
@@ -226,6 +236,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         notion=_build_dataclass(NotionConfig, raw.get("notion", {})),
         logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
         api=_build_dataclass(ApiConfig, raw.get("api", {})),
+        calendar=_build_dataclass(CalendarConfig, raw.get("calendar", {})),
         retention=_build_dataclass(RetentionConfig, raw.get("retention", {})),
     )
 

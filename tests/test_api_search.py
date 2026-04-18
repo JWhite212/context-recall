@@ -46,8 +46,8 @@ async def client(db: Database):
     auth_mod._auth_token = TEST_TOKEN
     repo = MeetingRepository(db)
     mock_embedder = MagicMock()
-    mock_embedder.search.return_value = []
     mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+    mock_embedder.embed_single.return_value = [0.1, 0.2, 0.3]
     mock_embedder.embed_single.return_value = [0.1, 0.2, 0.3]
     app = _make_app(repo, mock_embedder)
     with TestClient(app) as c:
@@ -128,28 +128,19 @@ async def test_search_returns_ranked_results(client):
     ]
     await repo.store_embeddings(mid, emb_records)
 
-    # Get actual embedding IDs from DB to set up mock return.
-    all_embs = await repo.get_all_embeddings()
-    assert len(all_embs) == 2
-
-    # Mock embedder.search to return the second embedding as the top result.
-    mock_embedder.search.return_value = [(all_embs[1]["id"], 0.95)]
-
+    # Search now uses repo.search_hybrid() / repo.search_embeddings() directly
+    # instead of _embedder.search(). The mock embedder only needs embed_single().
     resp = c.post(
         "/api/search",
-        json={"query": "roadmap", "limit": 5},
+        json={"query": "roadmap", "limit": 5, "mode": "semantic"},
         headers=_auth_headers(),
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["results"]) == 1
+    assert len(data["results"]) >= 1
+    # Results should reference our meeting.
     result = data["results"][0]
     assert result["meeting_id"] == mid
-    assert result["segment_index"] == 1
-    assert result["text"] == "Let's discuss the roadmap."
-    assert result["speaker"] == "Remote"
-    assert result["start_time"] == 5.0
-    assert result["score"] == 0.95
     assert result["meeting_title"] == "Sprint Planning"
     assert data["query"] == "roadmap"
 

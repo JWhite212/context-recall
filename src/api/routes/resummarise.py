@@ -22,12 +22,14 @@ logger = logging.getLogger("meetingmind.api.resummarise")
 router = APIRouter()
 
 _repo = None
+_event_bus = None
 _in_flight: set[str] = set()
 
 
-def init(repo) -> None:
-    global _repo
+def init(repo, event_bus=None) -> None:
+    global _repo, _event_bus
     _repo = repo
+    _event_bus = event_bus
 
 
 def _load_summarisation_config() -> SummarisationConfig:
@@ -93,12 +95,24 @@ async def resummarise_meeting(meeting_id: str, template_name: str | None = None)
 
     logger.info("Re-summarising meeting %s (%d segments)", meeting_id, len(transcript.segments))
 
+    # Mark as summarising so the UI shows progress.
+    await _repo.update_meeting(meeting_id, status="summarising")
+    if _event_bus:
+        _event_bus.emit(
+            {"type": "meeting.resummarise", "meeting_id": meeting_id, "status": "summarising"}
+        )
+
     _in_flight.add(meeting_id)
     try:
         summariser = Summariser(config)
         summary = await asyncio.to_thread(summariser.summarise, transcript, template)
     except Exception as e:
         logger.error("Re-summarisation failed: %s", e, exc_info=True)
+        await _repo.update_meeting(meeting_id, status="error")
+        if _event_bus:
+            _event_bus.emit(
+                {"type": "meeting.resummarise", "meeting_id": meeting_id, "status": "error"}
+            )
         raise HTTPException(
             status_code=500, detail="Summarisation failed. Check server logs for details."
         )
@@ -110,8 +124,13 @@ async def resummarise_meeting(meeting_id: str, template_name: str | None = None)
         title=summary.title,
         summary_markdown=summary.raw_markdown,
         tags=summary.tags,
+        status="complete",
     )
     await _repo.update_fts(meeting_id)
+    if _event_bus:
+        _event_bus.emit(
+            {"type": "meeting.resummarise", "meeting_id": meeting_id, "status": "complete"}
+        )
 
     logger.info("Re-summarisation complete: '%s'", summary.title)
     return {

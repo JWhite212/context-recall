@@ -629,6 +629,62 @@ export function MeetingDetail() {
         <div className="mt-2">
           <LabelEditor meetingId={meeting.id} initialLabel={meeting.label} />
         </div>
+
+        {/* Calendar info */}
+        {meeting.calendar_event_title && (
+          <div className="mt-3 rounded-lg bg-surface-raised border border-border p-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-text-muted shrink-0"
+                aria-hidden="true"
+              >
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+              <span className="text-sm font-medium text-text-primary">
+                {meeting.calendar_event_title}
+              </span>
+              {meeting.calendar_confidence > 0 && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent">
+                  {Math.round(meeting.calendar_confidence * 100)}% match
+                </span>
+              )}
+            </div>
+            {(() => {
+              try {
+                const attendees: { name: string; email: string }[] = JSON.parse(
+                  meeting.attendees_json,
+                );
+                if (attendees.length === 0) return null;
+                return (
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {attendees.map((a, i) => (
+                      <span
+                        key={i}
+                        className="text-[11px] px-2 py-0.5 rounded-full bg-purple-400/10 text-purple-400"
+                        title={a.email || undefined}
+                      >
+                        {a.name || a.email}
+                      </span>
+                    ))}
+                  </div>
+                );
+              } catch {
+                return null;
+              }
+            })()}
+          </div>
+        )}
       </div>
 
       {/* Actions row */}

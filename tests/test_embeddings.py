@@ -68,34 +68,6 @@ def test_embed_single():
     assert result == [0.5, 0.6, 0.7]
 
 
-def test_search_returns_sorted():
-    """search() should return results sorted by similarity score descending."""
-    embedder = Embedder()
-
-    # Pre-set query embedding via mock
-    mock_model = MagicMock()
-    # The query will be embedded as [1, 0, 0]
-    mock_model.encode.return_value = np.array([[1.0, 0.0, 0.0]])
-    embedder._model = mock_model
-
-    # Provide pre-computed embeddings with varying similarity to [1, 0, 0]
-    test_embeddings = [
-        (1, [0.0, 1.0, 0.0]),  # orthogonal => ~0.0
-        (2, [1.0, 0.0, 0.0]),  # identical => ~1.0
-        (3, [0.7, 0.7, 0.0]),  # partial => ~0.707
-    ]
-
-    results = embedder.search("query", test_embeddings, limit=3)
-
-    # Should be sorted: id=2 (1.0), id=3 (~0.707), id=1 (0.0)
-    assert len(results) == 3
-    assert results[0][0] == 2
-    assert results[0][1] == pytest.approx(1.0)
-    assert results[1][0] == 3
-    assert results[2][0] == 1
-    assert results[2][1] == pytest.approx(0.0)
-
-
 def test_lazy_loading():
     """Creating an Embedder should NOT load the model; calling embed() should."""
     embedder = Embedder()

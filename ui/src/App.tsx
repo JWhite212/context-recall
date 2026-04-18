@@ -53,9 +53,17 @@ function AppShell() {
       handleEvent(event);
       setLastEvent(event);
 
-      // Invalidate meeting queries on pipeline completion.
-      if (event.type === "pipeline.complete") {
+      // Invalidate meeting queries on pipeline completion or re-summarise status change.
+      if (
+        event.type === "pipeline.complete" ||
+        event.type === "meeting.resummarise"
+      ) {
         queryClient.invalidateQueries({ queryKey: ["meetings"] });
+        if (event.meeting_id) {
+          queryClient.invalidateQueries({
+            queryKey: ["meeting", event.meeting_id],
+          });
+        }
       }
       // Refresh model list on download progress (throttled via staleTime).
       if (

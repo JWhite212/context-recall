@@ -40,6 +40,9 @@ export interface Meeting {
   label: string;
   created_at: number;
   updated_at: number;
+  calendar_event_title: string;
+  attendees_json: string;
+  calendar_confidence: number;
 }
 
 export interface MeetingStats {
@@ -269,5 +272,11 @@ export type WSEvent =
       model: string;
       percent: number;
       error?: string;
+    }
+  | {
+      type: "meeting.calendar_match";
+      title: string;
+      attendees: string[];
+      confidence: number;
     }
   | { type: "daemon.status"; state: DaemonState };
