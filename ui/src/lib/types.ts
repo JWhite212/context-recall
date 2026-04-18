@@ -279,4 +279,5 @@ export type WSEvent =
       attendees: string[];
       confidence: number;
     }
-  | { type: "daemon.status"; state: DaemonState };
+  | { type: "daemon.status"; state: DaemonState }
+  | { type: "meeting.resummarise"; meeting_id: string; status: MeetingStatus };
