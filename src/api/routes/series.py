@@ -14,6 +14,12 @@ def init(repo: SeriesRepository) -> None:
     _repo = repo
 
 
+def _get_repo() -> SeriesRepository:
+    if _repo is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return _repo
+
+
 class CreateSeriesRequest(BaseModel):
     title: str
     calendar_series_id: str | None = None
@@ -32,56 +38,62 @@ class LinkMeetingRequest(BaseModel):
 
 @router.get("")
 async def list_series():
-    return {"series": await _repo.list_all()}
+    return {"series": await _get_repo().list_all()}
 
 
 @router.get("/{series_id}")
 async def get_series(series_id: str):
-    series = await _repo.get(series_id)
+    repo = _get_repo()
+    series = await repo.get(series_id)
     if not series:
         raise HTTPException(status_code=404, detail="Series not found")
-    series["meetings"] = await _repo.get_meetings(series_id)
+    series["meetings"] = await repo.get_meetings(series_id)
     return series
 
 
 @router.post("", status_code=201)
 async def create_series(body: CreateSeriesRequest):
-    series_id = await _repo.create(
+    repo = _get_repo()
+    series_id = await repo.create(
         title=body.title, detection_method="manual", calendar_series_id=body.calendar_series_id
     )
-    return await _repo.get(series_id)
+    return await repo.get(series_id)
 
 
 @router.patch("/{series_id}")
 async def update_series(series_id: str, body: UpdateSeriesRequest):
-    if not await _repo.get(series_id):
+    repo = _get_repo()
+    if not await repo.get(series_id):
         raise HTTPException(status_code=404, detail="Series not found")
     fields = body.model_dump(exclude_none=True)
     if fields:
-        await _repo.update(series_id, **fields)
-    return await _repo.get(series_id)
+        await repo.update(series_id, **fields)
+    return await repo.get(series_id)
 
 
 @router.delete("/{series_id}", status_code=204)
 async def delete_series(series_id: str):
-    if not await _repo.get(series_id):
+    repo = _get_repo()
+    if not await repo.get(series_id):
         raise HTTPException(status_code=404, detail="Series not found")
-    await _repo.delete(series_id)
+    await repo.delete(series_id)
 
 
 @router.post("/{series_id}/meetings", status_code=201)
 async def link_meeting(series_id: str, body: LinkMeetingRequest):
-    if not await _repo.get(series_id):
+    repo = _get_repo()
+    if not await repo.get(series_id):
         raise HTTPException(status_code=404, detail="Series not found")
-    await _repo.link_meeting(body.meeting_id, series_id)
+    await repo.link_meeting(body.meeting_id, series_id)
     return {"status": "linked"}
 
 
 @router.get("/{series_id}/trends")
 async def get_trends(series_id: str):
-    if not await _repo.get(series_id):
+    repo = _get_repo()
+    if not await repo.get(series_id):
         raise HTTPException(status_code=404, detail="Series not found")
-    meetings = await _repo.get_meetings(series_id)
+    meetings = await repo.get_meetings(series_id)
     durations = [m["duration_seconds"] for m in meetings if m.get("duration_seconds")]
     word_counts = [m["word_count"] for m in meetings if m.get("word_count")]
     return {

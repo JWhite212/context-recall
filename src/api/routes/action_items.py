@@ -14,6 +14,12 @@ def init(repo: ActionItemRepository) -> None:
     _repo = repo
 
 
+def _get_repo() -> ActionItemRepository:
+    if _repo is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return _repo
+
+
 class CreateActionItemRequest(BaseModel):
     meeting_id: str
     title: str
@@ -42,7 +48,7 @@ async def list_action_items(
     limit: int = 100,
     offset: int = 0,
 ):
-    items = await _repo.list_items(
+    items = await _get_repo().list_items(
         status=status, assignee=assignee, due_before=due_before, limit=limit, offset=offset
     )
     return {"items": items}
@@ -50,7 +56,7 @@ async def list_action_items(
 
 @router.get("/api/action-items/{item_id}")
 async def get_action_item(item_id: str):
-    item = await _repo.get(item_id)
+    item = await _get_repo().get(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Action item not found")
     return item
@@ -58,7 +64,8 @@ async def get_action_item(item_id: str):
 
 @router.post("/api/action-items", status_code=201)
 async def create_action_item(body: CreateActionItemRequest):
-    item_id = await _repo.create(
+    repo = _get_repo()
+    item_id = await repo.create(
         meeting_id=body.meeting_id,
         title=body.title,
         description=body.description,
@@ -68,27 +75,28 @@ async def create_action_item(body: CreateActionItemRequest):
         reminder_at=body.reminder_at,
         source="manual",
     )
-    return await _repo.get(item_id)
+    return await repo.get(item_id)
 
 
 @router.patch("/api/action-items/{item_id}")
 async def update_action_item(item_id: str, body: UpdateActionItemRequest):
-    if not await _repo.get(item_id):
+    repo = _get_repo()
+    if not await repo.get(item_id):
         raise HTTPException(status_code=404, detail="Action item not found")
     fields = body.model_dump(exclude_none=True)
     if fields:
-        await _repo.update(item_id, **fields)
-    return await _repo.get(item_id)
+        await repo.update(item_id, **fields)
+    return await repo.get(item_id)
 
 
 @router.delete("/api/action-items/{item_id}", status_code=204)
 async def delete_action_item(item_id: str):
-    if not await _repo.get(item_id):
+    if not await _get_repo().get(item_id):
         raise HTTPException(status_code=404, detail="Action item not found")
-    await _repo.delete(item_id)
+    await _get_repo().delete(item_id)
 
 
 @router.get("/api/meetings/{meeting_id}/action-items")
 async def get_meeting_action_items(meeting_id: str):
-    items = await _repo.list_by_meeting(meeting_id)
+    items = await _get_repo().list_by_meeting(meeting_id)
     return {"items": items}

@@ -16,9 +16,15 @@ def init(repo: PrepRepository, generator: PrepBriefingGenerator | None = None) -
     _generator = generator
 
 
+def _get_repo() -> PrepRepository:
+    if _repo is None:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+    return _repo
+
+
 @router.get("/upcoming")
 async def get_upcoming(response: Response):
-    briefing = await _repo.get_upcoming()
+    briefing = await _get_repo().get_upcoming()
     if not briefing:
         response.status_code = 204
         return None
@@ -27,7 +33,7 @@ async def get_upcoming(response: Response):
 
 @router.get("/{meeting_id}")
 async def get_briefing(meeting_id: str):
-    briefing = await _repo.get_by_meeting(meeting_id)
+    briefing = await _get_repo().get_by_meeting(meeting_id)
     if not briefing:
         raise HTTPException(status_code=404, detail="No briefing found")
     return briefing
@@ -43,5 +49,5 @@ async def generate_briefing(meeting_id: str):
         attendee_names=[],
         meeting_id=meeting_id,
     )
-    briefing = await _repo.get(briefing_id)
+    briefing = await _get_repo().get(briefing_id)
     return briefing

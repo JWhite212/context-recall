@@ -28,4 +28,4 @@ build/
 
 # Node
 ui/node_modules/
-~/Library/Logs/
+# Log files are stored outside the repo (~/Library/Logs/MeetingMind/)

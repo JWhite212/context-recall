@@ -138,10 +138,10 @@ class NotificationRepository:
         row = await cursor.fetchone()
         return row[0]
 
-    async def dismiss(self, notif_id: str) -> None:
-        """Update a notification's status to 'dismissed'."""
+    async def dismiss(self, notif_id: str, status: str = "dismissed") -> None:
+        """Update a notification's status."""
         await self._db.conn.execute(
-            "UPDATE notifications SET status = 'dismissed' WHERE id = ?",
-            (notif_id,),
+            "UPDATE notifications SET status = ? WHERE id = ?",
+            (status, notif_id),
         )
         await self._db.conn.commit()

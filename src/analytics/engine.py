@@ -81,6 +81,14 @@ class AnalyticsEngine:
             busiest_hour=busiest_hour,
         )
 
+    async def get_period_summary(self, period_type: str, period_start: str):
+        """Get analytics summary for a specific period."""
+        return await self._analytics_repo.get_period(period_type, period_start)
+
+    async def get_period_range(self, period_type: str, start: str, end: str):
+        """Get analytics data for a range of periods."""
+        return await self._analytics_repo.get_range(period_type, start, end)
+
     async def refresh_current_periods(self) -> None:
         """Refresh today, this week, this month."""
         now = datetime.now(timezone.utc)
