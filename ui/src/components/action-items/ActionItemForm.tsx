@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createActionItem, updateActionItem } from "../../lib/api";
-import type { ActionItem } from "../../lib/types";
+import type { ActionItem, ActionItemPriority } from "../../lib/types";
 
 interface Props {
   item?: ActionItem | null;
@@ -106,7 +106,9 @@ export function ActionItemForm({ item, defaultMeetingId, onClose }: Props) {
               <select
                 className={inputClass}
                 value={priority}
-                onChange={(e) => setPriority(e.target.value)}
+                onChange={(e) =>
+                  setPriority(e.target.value as ActionItemPriority)
+                }
               >
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
