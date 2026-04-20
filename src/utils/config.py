@@ -221,6 +221,18 @@ class EmailChannelConfig:
     to_address: str = ""
     max_per_day: int = 3
 
+    def __repr__(self) -> str:
+        password_display = "****" if self.smtp_password else "<not set>"
+        return (
+            f"EmailChannelConfig(enabled={self.enabled!r}, "
+            f"smtp_host={self.smtp_host!r}, "
+            f"smtp_port={self.smtp_port}, "
+            f"smtp_user={self.smtp_user!r}, "
+            f"smtp_password={password_display!r}, "
+            f"from_address={self.from_address!r}, "
+            f"to_address={self.to_address!r})"
+        )
+
 
 @dataclass
 class NotificationsConfig:

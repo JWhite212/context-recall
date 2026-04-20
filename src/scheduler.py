@@ -33,6 +33,8 @@ class Scheduler:
         self._running = False
 
     def register(self, name: str, func: Job, interval_seconds: float) -> None:
+        if interval_seconds <= 0:
+            raise ValueError(f"interval_seconds must be positive, got {interval_seconds}")
         self._jobs.append(
             _RegisteredJob(
                 name=name,

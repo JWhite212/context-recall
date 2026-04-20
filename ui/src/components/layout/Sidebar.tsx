@@ -233,7 +233,7 @@ export function Sidebar({ daemonRunning }: SidebarProps) {
         onClick={() =>
           window.dispatchEvent(new CustomEvent("toggle-notifications"))
         }
-        className="mx-2 mb-2 flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm text-text-secondary hover:bg-sidebar-hover hover:text-text-primary transition-colors"
+        className="mx-2 mb-2 flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm text-text-secondary hover:bg-sidebar-hover hover:text-text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus-visible:ring-offset-sidebar"
         aria-label="Notifications"
       >
         <Icon name="bell" />

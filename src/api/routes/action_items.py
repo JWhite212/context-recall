@@ -1,5 +1,7 @@
 """API routes for action item management."""
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -25,7 +27,7 @@ class CreateActionItemRequest(BaseModel):
     title: str
     description: str | None = None
     assignee: str | None = None
-    priority: str = "medium"
+    priority: Literal["low", "medium", "high", "urgent"] = "medium"
     due_date: str | None = None
     reminder_at: str | None = None
 
@@ -34,8 +36,8 @@ class UpdateActionItemRequest(BaseModel):
     title: str | None = None
     description: str | None = None
     assignee: str | None = None
-    status: str | None = None
-    priority: str | None = None
+    status: Literal["open", "in_progress", "done", "cancelled"] | None = None
+    priority: Literal["low", "medium", "high", "urgent"] | None = None
     due_date: str | None = None
     reminder_at: str | None = None
 

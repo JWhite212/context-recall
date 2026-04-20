@@ -30,7 +30,12 @@ class HeuristicSeriesDetector:
         if len(meetings) < self._config.min_meetings_for_series:
             return []
 
-        # 2. Parse attendees and datetime for each meeting
+        # 2. Filter out meetings with no started_at, then parse attendees and datetime
+        meetings = [m for m in meetings if m.get("started_at") is not None]
+
+        if len(meetings) < self._config.min_meetings_for_series:
+            return []
+
         for m in meetings:
             try:
                 m["_attendees"] = set(

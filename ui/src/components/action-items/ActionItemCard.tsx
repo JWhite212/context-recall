@@ -37,6 +37,9 @@ export function ActionItemCard({ item, onEdit }: Props) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["action-items"] });
     },
+    onError: (err: Error) => {
+      console.error("Failed to update action item status:", err);
+    },
   });
 
   return (
@@ -50,7 +53,7 @@ export function ActionItemCard({ item, onEdit }: Props) {
           mutation.mutate(nextStatus(item.status));
         }}
         className="mt-0.5 text-lg leading-none hover:opacity-70 transition-opacity"
-        aria-label={`Mark as ${nextStatus(item.status)}`}
+        aria-label={`Status: ${item.status}. Mark as ${nextStatus(item.status)}`}
       >
         {STATUS_ICONS[item.status]}
       </button>

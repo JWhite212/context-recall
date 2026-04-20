@@ -80,7 +80,7 @@ export function SeriesDetail() {
               />
             ))}
           </div>
-          {trends && (
+          {trends && trends.avg_duration_minutes != null && (
             <p className="text-xs text-text-muted mt-2">
               Avg: {trends.avg_duration_minutes.toFixed(0)} min
             </p>
@@ -108,7 +108,9 @@ export function SeriesDetail() {
                     {m.title}
                   </p>
                   <p className="text-xs text-text-muted">
-                    {format(m.started_at * 1000, "MMM d, yyyy")}
+                    {m.started_at != null
+                      ? format(m.started_at * 1000, "MMM d, yyyy")
+                      : "Date unknown"}
                   </p>
                 </div>
               </Link>
