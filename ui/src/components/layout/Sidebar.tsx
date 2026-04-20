@@ -1,12 +1,15 @@
 import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getMeetingStats } from "../../lib/api";
+import { NotificationBadge } from "../notifications/NotificationBadge";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", icon: "grid" },
   { to: "/live", label: "Live", icon: "mic" },
   { to: "/meetings", label: "Meetings", icon: "list" },
   { to: "/calendar", label: "Calendar", icon: "calendar" },
+  { to: "/action-items", label: "Action Items", icon: "check-circle" },
+  { to: "/insights", label: "Insights", icon: "bar-chart" },
   { to: "/search", label: "Search", icon: "search" },
   { to: "/settings", label: "Settings", icon: "settings" },
 ];
@@ -120,6 +123,55 @@ function Icon({ name }: { name: string }) {
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       );
+    case "check-circle":
+      return (
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+          <polyline points="22 4 12 14.01 9 11.01" />
+        </svg>
+      );
+    case "bar-chart":
+      return (
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <line x1="12" y1="20" x2="12" y2="10" />
+          <line x1="18" y1="20" x2="18" y2="4" />
+          <line x1="6" y1="20" x2="6" y2="16" />
+        </svg>
+      );
+    case "bell":
+      return (
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -176,6 +228,18 @@ export function Sidebar({ daemonRunning }: SidebarProps) {
           </NavLink>
         ))}
       </nav>
+
+      <button
+        onClick={() =>
+          window.dispatchEvent(new CustomEvent("toggle-notifications"))
+        }
+        className="mx-2 mb-2 flex items-center gap-2.5 px-3 py-1.5 rounded-md text-sm text-text-secondary hover:bg-sidebar-hover hover:text-text-primary transition-colors"
+        aria-label="Notifications"
+      >
+        <Icon name="bell" />
+        Notifications
+        <NotificationBadge />
+      </button>
 
       {/* Daemon status */}
       <div

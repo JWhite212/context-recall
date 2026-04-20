@@ -28,6 +28,11 @@ interface AppState {
   /** Model download progress from WebSocket events. */
   modelProgress: Record<string, ModelProgress>;
 
+  /** Unread notification count. */
+  unreadNotifications: number;
+  incrementNotifications: () => void;
+  setUnreadNotifications: (count: number) => void;
+
   /** Handle a WebSocket event. */
   handleEvent: (event: WSEvent) => void;
 
@@ -43,6 +48,11 @@ export const useAppStore = create<AppState>((set) => ({
   liveSegments: [],
   audioLevels: { system: 0, mic: 0 },
   modelProgress: {},
+
+  unreadNotifications: 0,
+  incrementNotifications: () =>
+    set((state) => ({ unreadNotifications: state.unreadNotifications + 1 })),
+  setUnreadNotifications: (count) => set({ unreadNotifications: count }),
 
   handleEvent: (event) => {
     switch (event.type) {
@@ -83,6 +93,11 @@ export const useAppStore = create<AppState>((set) => ({
             ...state.modelProgress,
             [event.model]: { percent: event.percent, error: event.error },
           },
+        }));
+        break;
+      case "notification":
+        set((state) => ({
+          unreadNotifications: state.unreadNotifications + 1,
         }));
         break;
     }
