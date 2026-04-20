@@ -41,12 +41,7 @@ class AnalyticsEngine:
         end_ts = end_dt.timestamp()
 
         # Query meetings in range
-        cursor = await self._meeting_repo._db.conn.execute(
-            "SELECT duration_seconds, word_count, attendees_json, series_id, started_at "
-            "FROM meetings WHERE status = 'complete' AND started_at >= ? AND started_at < ?",
-            (start_ts, end_ts),
-        )
-        meetings = [dict(r) for r in await cursor.fetchall()]
+        meetings = await self._meeting_repo.list_complete_in_range(start_ts, end_ts)
 
         total_meetings = len(meetings)
         total_duration = sum((m["duration_seconds"] or 0) for m in meetings) / 60
@@ -151,12 +146,7 @@ class AnalyticsEngine:
         return indicators
 
     async def get_most_met_people(self, limit: int = 10) -> list[dict]:
-        cursor = await self._meeting_repo._db.conn.execute(
-            "SELECT attendees_json FROM meetings "
-            "WHERE status = 'complete' AND attendees_json != '[]' "
-            "ORDER BY started_at DESC LIMIT 200"
-        )
-        rows = await cursor.fetchall()
+        rows = await self._meeting_repo.list_attendee_json_recent(limit=200)
         people_count: Counter = Counter()
         for row in rows:
             try:

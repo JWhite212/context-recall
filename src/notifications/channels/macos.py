@@ -7,9 +7,9 @@ logger = logging.getLogger("meetingmind.notifications.macos")
 
 
 async def send(title: str, body: str, subtitle: str = "") -> None:
-    safe_title = title.replace('"', '\\"')
-    safe_body = body.replace('"', '\\"')
-    safe_subtitle = subtitle.replace('"', '\\"')
+    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
+    safe_subtitle = subtitle.replace("\\", "\\\\").replace('"', '\\"')
     script = f'display notification "{safe_body}" with title "{safe_title}"'
     if safe_subtitle:
         script += f' subtitle "{safe_subtitle}"'

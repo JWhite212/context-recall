@@ -25,13 +25,7 @@ class HeuristicSeriesDetector:
     async def detect(self) -> list[str]:
         """Run heuristic detection on unlinked meetings. Returns new series IDs."""
         # 1. Fetch all complete meetings WHERE series_id IS NULL
-        cursor = await self._meeting_repo._db.conn.execute(
-            "SELECT id, title, started_at, duration_seconds, attendees_json "
-            "FROM meetings WHERE status = 'complete' AND (series_id IS NULL OR series_id = '') "
-            "ORDER BY started_at ASC"
-        )
-        rows = await cursor.fetchall()
-        meetings = [dict(r) for r in rows]
+        meetings = await self._meeting_repo.list_unlinked_complete_meetings()
 
         if len(meetings) < self._config.min_meetings_for_series:
             return []

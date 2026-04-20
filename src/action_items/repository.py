@@ -55,12 +55,14 @@ class ActionItemRepository:
 
         item_id = str(uuid.uuid4())
         now = time.time()
+        completed_at = now if status == "done" else None
         await self._db.conn.execute(
             """
             INSERT INTO action_items
                 (id, meeting_id, title, description, assignee, status, priority,
-                 due_date, reminder_at, source, extracted_text, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 due_date, reminder_at, source, extracted_text,
+                 created_at, updated_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item_id,
@@ -76,6 +78,7 @@ class ActionItemRepository:
                 extracted_text,
                 now,
                 now,
+                completed_at,
             ),
         )
         await self._db.conn.commit()

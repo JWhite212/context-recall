@@ -861,3 +861,48 @@ class MeetingRepository:
                 }
             )
         return results
+
+    # ------------------------------------------------------------------
+    # Helper queries for analytics, series detection, and prep briefings
+    # ------------------------------------------------------------------
+
+    async def list_unlinked_complete_meetings(self) -> list[dict]:
+        """Fetch complete meetings without a series_id."""
+        cursor = await self._db.conn.execute(
+            "SELECT id, title, started_at, duration_seconds, attendees_json "
+            "FROM meetings "
+            "WHERE status = 'complete' AND (series_id IS NULL OR series_id = '') "
+            "ORDER BY started_at ASC"
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def list_recent_complete_with_attendees(self, limit: int = 100) -> list[dict]:
+        """Fetch recent complete meetings with attendee data."""
+        cursor = await self._db.conn.execute(
+            "SELECT id, title, started_at, summary_markdown, attendees_json "
+            "FROM meetings WHERE status = 'complete' "
+            "ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def list_complete_in_range(self, start_ts: float, end_ts: float) -> list[dict]:
+        """Fetch complete meetings in a timestamp range."""
+        cursor = await self._db.conn.execute(
+            "SELECT duration_seconds, word_count, attendees_json, "
+            "series_id, started_at "
+            "FROM meetings "
+            "WHERE status = 'complete' AND started_at >= ? AND started_at < ?",
+            (start_ts, end_ts),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def list_attendee_json_recent(self, limit: int = 200) -> list[dict]:
+        """Fetch attendees_json from recent complete meetings."""
+        cursor = await self._db.conn.execute(
+            "SELECT attendees_json FROM meetings "
+            "WHERE status = 'complete' AND attendees_json != '[]' "
+            "ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]

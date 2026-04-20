@@ -46,11 +46,7 @@ class PrepBriefingGenerator:
             context["series_meetings"] = meetings[: self._config.max_context_meetings]
 
         if attendees:
-            cursor = await self._meeting_repo._db.conn.execute(
-                "SELECT id, title, started_at, summary_markdown, attendees_json "
-                "FROM meetings WHERE status = 'complete' ORDER BY started_at DESC LIMIT 100"
-            )
-            rows = await cursor.fetchall()
+            rows = await self._meeting_repo.list_recent_complete_with_attendees(limit=100)
             for row in rows:
                 try:
                     meeting_attendees = {

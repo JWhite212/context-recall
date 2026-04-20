@@ -13,6 +13,19 @@ from src.db.database import Database
 
 logger = logging.getLogger("meetingmind.series")
 
+_MUTABLE_FIELDS = frozenset(
+    {
+        "title",
+        "calendar_series_id",
+        "detection_method",
+        "typical_attendees_json",
+        "typical_day_of_week",
+        "typical_time",
+        "typical_duration_minutes",
+        "updated_at",
+    }
+)
+
 
 class SeriesRepository:
     """Async data access for meeting series."""
@@ -77,6 +90,9 @@ class SeriesRepository:
 
     async def update(self, series_id: str, **fields) -> None:
         """Update one or more fields on a meeting series."""
+        if not fields:
+            return
+        fields = {k: v for k, v in fields.items() if k in _MUTABLE_FIELDS}
         if not fields:
             return
         fields["updated_at"] = datetime.now(timezone.utc).isoformat()
