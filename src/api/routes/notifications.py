@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 from pydantic import BaseModel
+
 from src.notifications.repository import NotificationRepository
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])

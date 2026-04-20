@@ -32,7 +32,8 @@ class NotificationRepository:
         await self._db.conn.execute(
             """
             INSERT INTO notifications
-                (id, type, reference_id, channel, title, body, status, scheduled_at, sent_at, created_at)
+                (id, type, reference_id, channel, title, body,
+                 status, scheduled_at, sent_at, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
 from src.series.repository import SeriesRepository
 
 router = APIRouter(prefix="/api/series", tags=["series"])

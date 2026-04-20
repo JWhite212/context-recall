@@ -1,0 +1,6 @@
+2026-04-20 13:13:05 [INFO] meetingmind: MeetingMind daemon starting...
+2026-04-20 13:13:05 [INFO] meetingmind.api: API server thread started
+2026-04-20 13:13:05 [INFO] meetingmind.db: Database connected: /Users/jamiewhite/.local/share/meetingmind/meetings.db
+2026-04-20 13:13:05 [WARNING] src.utils.config: No config found at /Users/jamiewhite/Documents/Personal/Projects/meeting-mind/ui/src-tauri/target/release/resources/meetingmind-daemon/config.yaml — using defaults.
+2026-04-20 13:13:06 [INFO] src.detector: Detector started. Polling every 3s.
+2026-04-20 13:13:07 [INFO] meetingmind.api: API server starting on http://127.0.0.1:9876

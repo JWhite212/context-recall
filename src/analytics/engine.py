@@ -134,7 +134,8 @@ class AnalyticsEngine:
         if load["ratio"] > 1.0 and load["label"] != "No data":
             pct = int((load["ratio"] - 1.0) * 100)
             indicators.append(
-                f"You had {pct}% more meeting time than your {self._config.rolling_window_weeks}-week average"
+                f"You had {pct}% more meeting time than your "
+                f"{self._config.rolling_window_weeks}-week average"
             )
         overdue = await self._action_item_repo.list_overdue()
         if overdue:
@@ -143,7 +144,9 @@ class AnalyticsEngine:
 
     async def get_most_met_people(self, limit: int = 10) -> list[dict]:
         cursor = await self._meeting_repo._db.conn.execute(
-            "SELECT attendees_json FROM meetings WHERE status = 'complete' AND attendees_json != '[]' ORDER BY started_at DESC LIMIT 200"
+            "SELECT attendees_json FROM meetings "
+            "WHERE status = 'complete' AND attendees_json != '[]' "
+            "ORDER BY started_at DESC LIMIT 200"
         )
         rows = await cursor.fetchall()
         people_count: Counter = Counter()

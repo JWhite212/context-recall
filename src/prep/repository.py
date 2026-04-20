@@ -2,6 +2,7 @@
 
 import time
 import uuid
+
 from src.db.database import Database
 
 
@@ -62,7 +63,9 @@ class PrepRepository:
     async def get_by_meeting(self, meeting_id: str) -> dict | None:
         now = time.time()
         cursor = await self._db.conn.execute(
-            "SELECT * FROM prep_briefings WHERE meeting_id = ? AND expires_at > ? ORDER BY generated_at DESC LIMIT 1",
+            "SELECT * FROM prep_briefings "
+            "WHERE meeting_id = ? AND expires_at > ? "
+            "ORDER BY generated_at DESC LIMIT 1",
             (meeting_id, now),
         )
         row = await cursor.fetchone()

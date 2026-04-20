@@ -1,6 +1,7 @@
 """API routes for meeting prep briefings."""
 
 from fastapi import APIRouter, HTTPException, Response
+
 from src.prep.briefing import PrepBriefingGenerator
 from src.prep.repository import PrepRepository
 

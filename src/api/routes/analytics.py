@@ -1,7 +1,9 @@
 """API routes for meeting analytics."""
 
 from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter
+
 from src.analytics.engine import AnalyticsEngine
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])

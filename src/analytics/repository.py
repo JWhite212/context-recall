@@ -59,7 +59,9 @@ class AnalyticsRepository:
 
     async def get_range(self, period_type: str, start: str, end: str) -> list[dict]:
         cursor = await self._db.conn.execute(
-            "SELECT * FROM meeting_analytics WHERE period_type = ? AND period_start >= ? AND period_start <= ? ORDER BY period_start ASC",
+            "SELECT * FROM meeting_analytics "
+            "WHERE period_type = ? AND period_start >= ? AND period_start <= ? "
+            "ORDER BY period_start ASC",
             (period_type, start, end),
         )
         return [dict(row) for row in await cursor.fetchall()]
