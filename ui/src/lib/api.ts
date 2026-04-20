@@ -1,21 +1,33 @@
 /** API client for communicating with the MeetingMind daemon. */
 
 import type {
+  ActionItem,
+  ActionItemsResponse,
+  AnalyticsHealthResponse,
+  AnalyticsPeopleResponse,
+  AnalyticsSummaryResponse,
+  AnalyticsTrendsResponse,
   AppConfig,
   CalendarMeetingsResponse,
   DevicesResponse,
   HealthResponse,
+  MeetingSeries,
   MeetingStats,
   MeetingsResponse,
   Meeting,
   ModelsResponse,
+  NotificationsResponse,
+  PrepBriefing,
   RecordingStartResponse,
   RecordingStopResponse,
   ReindexResponse,
   SearchResponse,
+  SeriesListResponse,
+  SeriesTrends,
   SpeakerMapping,
   StatusResponse,
   SummaryTemplate,
+  UnreadCountResponse,
 } from "./types";
 
 import { API_BASE } from "./constants";
@@ -277,4 +289,174 @@ export async function getCalendarMeetings(
   end: number,
 ): Promise<CalendarMeetingsResponse> {
   return request(`/api/calendar/meetings?start=${start}&end=${end}`);
+}
+
+// --- Action Items ---
+
+export async function getActionItems(
+  status?: string,
+  assignee?: string,
+  limit = 100,
+): Promise<ActionItemsResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.set("status", status);
+  if (assignee) params.set("assignee", assignee);
+  return request<ActionItemsResponse>(`/api/action-items?${params}`);
+}
+
+export async function getMeetingActionItems(
+  meetingId: string,
+): Promise<ActionItemsResponse> {
+  return request<ActionItemsResponse>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/action-items`,
+  );
+}
+
+export async function createActionItem(data: {
+  meeting_id: string;
+  title: string;
+  assignee?: string;
+  priority?: string;
+  due_date?: string;
+  description?: string;
+}): Promise<ActionItem> {
+  return request<ActionItem>("/api/action-items", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateActionItem(
+  id: string,
+  data: Partial<ActionItem>,
+): Promise<ActionItem> {
+  return request<ActionItem>(`/api/action-items/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteActionItem(id: string): Promise<void> {
+  await request(`/api/action-items/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+// --- Series ---
+
+export async function getSeries(): Promise<SeriesListResponse> {
+  return request<SeriesListResponse>("/api/series");
+}
+
+export async function getSeriesDetail(id: string): Promise<MeetingSeries> {
+  return request<MeetingSeries>(`/api/series/${encodeURIComponent(id)}`);
+}
+
+export async function createSeries(title: string): Promise<MeetingSeries> {
+  return request<MeetingSeries>("/api/series", {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function deleteSeries(id: string): Promise<void> {
+  await request(`/api/series/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function linkMeetingToSeries(
+  seriesId: string,
+  meetingId: string,
+): Promise<void> {
+  await request(`/api/series/${encodeURIComponent(seriesId)}/meetings`, {
+    method: "POST",
+    body: JSON.stringify({ meeting_id: meetingId }),
+  });
+}
+
+export async function getSeriesTrends(id: string): Promise<SeriesTrends> {
+  return request<SeriesTrends>(`/api/series/${encodeURIComponent(id)}/trends`);
+}
+
+// --- Analytics ---
+
+export async function getAnalyticsSummary(
+  period = "weekly",
+): Promise<AnalyticsSummaryResponse> {
+  return request<AnalyticsSummaryResponse>(
+    `/api/analytics/summary?period=${period}`,
+  );
+}
+
+export async function getAnalyticsTrends(
+  periodType = "weekly",
+  weeks = 8,
+): Promise<AnalyticsTrendsResponse> {
+  const params = new URLSearchParams({
+    period_type: periodType,
+    weeks: String(weeks),
+  });
+  return request<AnalyticsTrendsResponse>(`/api/analytics/trends?${params}`);
+}
+
+export async function getAnalyticsPeople(
+  limit = 10,
+): Promise<AnalyticsPeopleResponse> {
+  return request<AnalyticsPeopleResponse>(
+    `/api/analytics/people?limit=${limit}`,
+  );
+}
+
+export async function getAnalyticsHealth(): Promise<AnalyticsHealthResponse> {
+  return request<AnalyticsHealthResponse>("/api/analytics/health");
+}
+
+export async function refreshAnalytics(): Promise<void> {
+  await request("/api/analytics/refresh", { method: "POST" });
+}
+
+// --- Notifications ---
+
+export async function getNotifications(
+  limit = 50,
+): Promise<NotificationsResponse> {
+  return request<NotificationsResponse>(`/api/notifications?limit=${limit}`);
+}
+
+export async function getUnreadCount(): Promise<UnreadCountResponse> {
+  return request<UnreadCountResponse>("/api/notifications/unread-count");
+}
+
+export async function dismissNotification(id: string): Promise<void> {
+  await request(`/api/notifications/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "dismissed" }),
+  });
+}
+
+// --- Prep Briefings ---
+
+export async function getUpcomingPrep(): Promise<PrepBriefing | null> {
+  const headers: Record<string, string> = {};
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+  const res = await fetch(`${API_BASE}/api/prep/upcoming`, { headers });
+  if (res.status === 204) return null;
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json() as Promise<PrepBriefing>;
+}
+
+export async function getPrepForMeeting(
+  meetingId: string,
+): Promise<PrepBriefing> {
+  return request<PrepBriefing>(`/api/prep/${encodeURIComponent(meetingId)}`);
+}
+
+export async function generatePrep(meetingId: string): Promise<PrepBriefing> {
+  return request<PrepBriefing>(
+    `/api/prep/${encodeURIComponent(meetingId)}/generate`,
+    { method: "POST" },
+  );
 }
