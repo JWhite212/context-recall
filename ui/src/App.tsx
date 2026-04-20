@@ -80,6 +80,12 @@ function AppShell() {
       ) {
         queryClient.invalidateQueries({ queryKey: ["models"] });
       }
+      if (event.type === "action_items.extracted") {
+        queryClient.invalidateQueries({ queryKey: ["action-items"] });
+      }
+      if (event.type === "notification") {
+        queryClient.invalidateQueries({ queryKey: ["notifications-unread"] });
+      }
     },
     [handleEvent],
   );
