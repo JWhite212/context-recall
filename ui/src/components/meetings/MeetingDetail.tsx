@@ -13,7 +13,9 @@ import {
   getTemplates,
   setSpeakerName,
   reprocessMeeting,
+  getMeetingActionItems,
 } from "../../lib/api";
+import { ActionItemCard } from "../action-items/ActionItemCard";
 import { API_BASE } from "../../lib/constants";
 import type { TranscriptSegment } from "../../lib/types";
 import { AudioPlayer, type AudioSeekHandle } from "./AudioPlayer";
@@ -390,6 +392,26 @@ function LabelEditor({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function MeetingActionItems({ meetingId }: { meetingId: string }) {
+  const { data } = useQuery({
+    queryKey: ["action-items", "meeting", meetingId],
+    queryFn: () => getMeetingActionItems(meetingId),
+  });
+
+  if (!data || data.items.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <h2 className="text-sm font-semibold text-text-primary">Action Items</h2>
+      <div className="flex flex-col gap-2">
+        {data.items.map((item) => (
+          <ActionItemCard key={item.id} item={item} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -979,6 +1001,9 @@ export function MeetingDetail() {
           </div>
         </>
       )}
+
+      {/* Action Items */}
+      <MeetingActionItems meetingId={id!} />
 
       {/* Danger zone */}
       <div className="pt-4 border-t border-border">
