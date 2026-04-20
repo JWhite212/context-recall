@@ -152,6 +152,44 @@ class ApiServer:
         app.include_router(speakers_routes.router, dependencies=auth_deps)
         app.include_router(calendar_routes.router, dependencies=auth_deps)
 
+        # Intelligence feature routes.
+        from src.action_items.repository import ActionItemRepository
+        from src.analytics.engine import AnalyticsEngine
+        from src.analytics.repository import AnalyticsRepository
+        from src.api.routes import action_items as action_items_routes
+        from src.api.routes import analytics as analytics_routes
+        from src.api.routes import notifications as notifications_routes
+        from src.api.routes import prep as prep_routes
+        from src.api.routes import series as series_routes
+        from src.notifications.repository import NotificationRepository
+        from src.prep.repository import PrepRepository
+        from src.series.repository import SeriesRepository
+
+        ai_repo = ActionItemRepository(self.db)
+        series_repo = SeriesRepository(self.db)
+        analytics_repo = AnalyticsRepository(self.db)
+        notif_repo = NotificationRepository(self.db)
+        prep_repo = PrepRepository(self.db)
+
+        analytics_engine = AnalyticsEngine(
+            config=load_config().analytics,
+            meeting_repo=self.repo,
+            analytics_repo=analytics_repo,
+            action_item_repo=ai_repo,
+        )
+
+        action_items_routes.init(ai_repo)
+        series_routes.init(series_repo)
+        analytics_routes.init(analytics_engine)
+        notifications_routes.init(notif_repo)
+        prep_routes.init(prep_repo)
+
+        app.include_router(action_items_routes.router, dependencies=auth_deps)
+        app.include_router(series_routes.router, dependencies=auth_deps)
+        app.include_router(analytics_routes.router, dependencies=auth_deps)
+        app.include_router(notifications_routes.router, dependencies=auth_deps)
+        app.include_router(prep_routes.router, dependencies=auth_deps)
+
         # WebSocket endpoint with message-based auth handshake.
         # The client connects, then sends {"type":"auth","token":"<value>"}
         # as its first message. Legacy query-param auth also accepted.
@@ -213,6 +251,13 @@ class ApiServer:
         await self.db.connect()
         self.repo = MeetingRepository(self.db)
 
+        # Start the intelligence scheduler.
+        from src.scheduler import Scheduler
+
+        self._scheduler = Scheduler()
+        self._setup_scheduler_jobs()
+        self._scheduler.start()
+
         # Run data retention cleanup on startup.
         try:
             app_config = load_config()
@@ -244,6 +289,8 @@ class ApiServer:
             await self._server.serve()
         finally:
             # Clean up background tasks and database on shutdown.
+            if hasattr(self, "_scheduler"):
+                self._scheduler.stop()
             if self._retention_task and not self._retention_task.done():
                 self._retention_task.cancel()
                 try:
@@ -251,6 +298,86 @@ class ApiServer:
                 except asyncio.CancelledError:
                     pass
             await self.db.close()
+
+    def _setup_scheduler_jobs(self) -> None:
+        """Register background scheduler jobs."""
+        config = load_config()
+
+        if config.notifications.enabled:
+            self._scheduler.register("reminder_check", self._check_reminders, 60)
+
+        self._scheduler.register(
+            "analytics_refresh",
+            self._refresh_analytics_periodic,
+            config.analytics.refresh_interval_hours * 3600,
+        )
+
+        if config.series.heuristic_enabled:
+            self._scheduler.register("series_detect", self._run_series_detection, 86400)
+
+    async def _check_reminders(self) -> None:
+        """Check for due reminders and overdue action items."""
+        from src.action_items.repository import ActionItemRepository
+        from src.notifications.dispatcher import NotificationDispatcher
+        from src.notifications.repository import NotificationRepository
+
+        config = load_config()
+        ai_repo = ActionItemRepository(self.db)
+        notif_repo = NotificationRepository(self.db)
+        dispatcher = NotificationDispatcher(
+            config=config.notifications, repo=notif_repo, event_bus=self.event_bus
+        )
+        overdue = await ai_repo.list_overdue()
+        for item in overdue:
+            await dispatcher.notify(
+                type="overdue",
+                title=f"Overdue: {item['title']}",
+                body=f"Assigned to {item.get('assignee', 'unassigned')}. Due: {item['due_date']}",
+                reference_id=item["id"],
+                priority="high",
+            )
+        reminders = await ai_repo.list_due_reminders()
+        for item in reminders:
+            await dispatcher.notify(
+                type="reminder",
+                title=f"Reminder: {item['title']}",
+                body=f"Due: {item.get('due_date', 'not set')}",
+                reference_id=item["id"],
+                priority="normal",
+            )
+
+    async def _refresh_analytics_periodic(self) -> None:
+        """Periodic analytics refresh."""
+        from src.action_items.repository import ActionItemRepository
+        from src.analytics.engine import AnalyticsEngine
+        from src.analytics.repository import AnalyticsRepository
+
+        config = load_config()
+        analytics_repo = AnalyticsRepository(self.db)
+        ai_repo = ActionItemRepository(self.db)
+        engine = AnalyticsEngine(
+            config=config.analytics,
+            meeting_repo=self.repo,
+            analytics_repo=analytics_repo,
+            action_item_repo=ai_repo,
+        )
+        await engine.refresh_current_periods()
+
+    async def _run_series_detection(self) -> None:
+        """Run heuristic series detection."""
+        from src.series.detector import HeuristicSeriesDetector
+        from src.series.repository import SeriesRepository
+
+        config = load_config()
+        series_repo = SeriesRepository(self.db)
+        detector = HeuristicSeriesDetector(
+            config=config.series,
+            meeting_repo=self.repo,
+            series_repo=series_repo,
+        )
+        new_series = await detector.detect()
+        if new_series:
+            logger.info("Heuristic detection found %d new series", len(new_series))
 
     async def _periodic_retention_cleanup(self) -> None:
         """Run data retention cleanup every 6 hours."""

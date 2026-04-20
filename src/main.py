@@ -570,8 +570,81 @@ class MeetingMind:
                 logger.error("Notion write failed: %s", e, exc_info=True)
 
         self._emit("pipeline.complete", meeting_id=meeting_id, title=summary.title)
+
+        # Post-processing: intelligence features (non-fatal).
+        self._run_post_processing(meeting_id, transcript)
+
         self._active_meeting_id = None
         logger.info("Processing complete.")
+
+    def _run_post_processing(self, meeting_id: str | None, transcript) -> None:
+        """Run intelligence post-processing after pipeline completes. Non-fatal."""
+        if not meeting_id or not self._api_server or not self._api_server.repo:
+            return
+        loop = self._api_server.loop
+        if not loop or loop.is_closed():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self._post_process_async(meeting_id, transcript), loop)
+        except Exception:
+            logger.warning("Post-processing dispatch failed", exc_info=True)
+
+    async def _post_process_async(self, meeting_id: str, transcript) -> None:
+        """Async post-processing: action items, analytics."""
+        try:
+            if self._config.action_items.auto_extract:
+                await self._extract_action_items(meeting_id, transcript)
+        except Exception:
+            logger.warning("Action item extraction failed", exc_info=True)
+        try:
+            await self._refresh_analytics()
+        except Exception:
+            logger.warning("Analytics refresh failed", exc_info=True)
+
+    async def _extract_action_items(self, meeting_id: str, transcript) -> None:
+        """Extract and store action items from transcript."""
+        from src.action_items.extractor import ActionItemExtractor
+        from src.action_items.repository import ActionItemRepository
+
+        extractor = ActionItemExtractor(
+            summarisation_config=self._config.summarisation,
+            config=self._config.action_items,
+        )
+        items = extractor.extract(transcript)
+        if not items:
+            return
+        ai_repo = ActionItemRepository(self._api_server.db)
+        for item in items:
+            await ai_repo.create(
+                meeting_id=meeting_id,
+                title=item["title"],
+                assignee=item.get("assignee"),
+                due_date=item.get("due_date"),
+                priority=item.get("priority", "medium"),
+                source="extracted",
+                extracted_text=item.get("extracted_text"),
+            )
+        logger.info("Extracted %d action items from meeting %s", len(items), meeting_id)
+        self._emit("action_items.extracted", meeting_id=meeting_id, count=len(items))
+
+    async def _refresh_analytics(self) -> None:
+        """Refresh current day analytics after meeting completes."""
+        from datetime import datetime, timezone
+
+        from src.action_items.repository import ActionItemRepository
+        from src.analytics.engine import AnalyticsEngine
+        from src.analytics.repository import AnalyticsRepository
+
+        analytics_repo = AnalyticsRepository(self._api_server.db)
+        ai_repo = ActionItemRepository(self._api_server.db)
+        engine = AnalyticsEngine(
+            config=self._config.analytics,
+            meeting_repo=self._api_server.repo,
+            analytics_repo=analytics_repo,
+            action_item_repo=ai_repo,
+        )
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        await engine.refresh_period("daily", today)
 
     def _db_update(self, meeting_id: str | None, **fields) -> None:
         """Update a meeting record in the database (fire-and-forget).

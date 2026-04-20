@@ -222,3 +222,107 @@ api:
   enabled: true
   host: "127.0.0.1"
   port: 9876
+
+# --- Data Retention ---
+retention:
+  audio_retention_days: 0   # 0 = keep forever
+  record_retention_days: 0  # 0 = keep forever
+
+# --- Action Item Extraction ---
+# Automatically extract action items from meeting transcripts after summarisation.
+action_items:
+  # Enable automatic extraction using the same LLM backend as summarisation.
+  auto_extract: true
+
+  # Default reminder lead time before due date (e.g. "1d", "2h").
+  default_reminder_before_due: "1d"
+
+  # Similarity threshold (0.0-1.0) for detecting duplicate action items.
+  # Items with title similarity above this are flagged rather than auto-created.
+  duplicate_threshold: 0.85
+
+# --- Recurring Meeting Detection ---
+# Automatically group meetings into recurring series for trend analysis.
+series:
+  # Enable heuristic-based detection (clusters by attendees, day, time, title).
+  # Calendar-based detection works regardless of this setting.
+  heuristic_enabled: true
+
+  # Minimum number of similar meetings needed to form a series.
+  min_meetings_for_series: 3
+
+  # Minimum attendee overlap (Jaccard ratio, 0.0-1.0) to consider similar.
+  attendee_overlap_threshold: 0.6
+
+  # Minimum title similarity (SequenceMatcher ratio, 0.0-1.0).
+  title_similarity_threshold: 0.7
+
+  # Day-of-week tolerance (0 = exact day, 1 = +/-1 day).
+  day_tolerance: 1
+
+  # Time-of-day tolerance in hours.
+  time_tolerance_hours: 1
+
+# --- Meeting Analytics ---
+# Pre-computed analytics for the Insights Panel dashboard.
+analytics:
+  # How often to refresh weekly/monthly analytics (hours).
+  refresh_interval_hours: 6
+
+  # Number of past weeks for the rolling average baseline.
+  rolling_window_weeks: 4
+
+  # Meeting load ratio above which a "heavy week" health alert fires.
+  health_alert_threshold: 1.5
+
+# --- Smart Notifications ---
+# Multi-channel notification system for reminders, alerts, and briefings.
+notifications:
+  enabled: true
+
+  # --- Channels ---
+  # In-app: always delivered via WebSocket to the UI (toast + badge).
+  in_app: true
+
+  # macOS: native Notification Center alerts (appear when app is backgrounded).
+  macos: true
+
+  # Webhook: POST JSON to a URL (Slack-compatible or generic format).
+  webhook:
+    enabled: false
+    url: ""
+    format: "slack"  # "slack" or "generic"
+
+  # Email: SMTP with TLS for high-priority alerts only.
+  email:
+    enabled: false
+    smtp_host: ""
+    smtp_port: 587
+    smtp_user: ""
+    smtp_password: ""
+    from_address: ""
+    to_address: ""
+    max_per_day: 3  # Throttle: max emails per day
+
+  # Reminder timing.
+  default_reminder_before_due: "1d"
+  overdue_check_interval: "6h"
+
+# --- Meeting Preparation ---
+# Automatic pre-meeting briefings with context from past meetings.
+prep:
+  # Minutes before a meeting to generate and push the briefing.
+  lead_time_minutes: 15
+
+  # Automatically generate briefings for upcoming calendar events.
+  # When false, prep is manual only (click "Prepare" in the UI).
+  auto_generate: true
+
+  # Max past meetings from the same series to include in briefing.
+  max_context_meetings: 3
+
+  # Max per-person meeting history to surface (from other contexts).
+  max_attendee_history: 5
+
+  # Hours after meeting start before the briefing expires.
+  briefing_ttl_hours: 2

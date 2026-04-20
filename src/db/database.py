@@ -20,7 +20,7 @@ logger = logging.getLogger("meetingmind.db")
 DEFAULT_DB_DIR = Path(os.path.expanduser("~/.local/share/meetingmind"))
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "meetings.db"
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _vec_available = False
 
@@ -116,7 +116,117 @@ CREATE INDEX IF NOT EXISTS idx_speaker_mappings_meeting
 """
 
 
-_ALLOWED_TABLES = frozenset({"meetings", "speaker_mappings", "segment_embeddings"})
+MEETING_SERIES_SQL = """
+CREATE TABLE IF NOT EXISTS meeting_series (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    calendar_series_id TEXT,
+    detection_method TEXT,
+    typical_attendees_json TEXT,
+    typical_day_of_week INTEGER,
+    typical_time TEXT,
+    typical_duration_minutes INTEGER,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_series_calendar
+    ON meeting_series(calendar_series_id);
+"""
+
+ACTION_ITEMS_SQL = """
+CREATE TABLE IF NOT EXISTS action_items (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    assignee TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    priority TEXT NOT NULL DEFAULT 'medium',
+    due_date TEXT,
+    reminder_at REAL,
+    source TEXT NOT NULL DEFAULT 'extracted',
+    extracted_text TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    completed_at REAL,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_action_items_meeting ON action_items(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_action_items_status ON action_items(status);
+CREATE INDEX IF NOT EXISTS idx_action_items_assignee ON action_items(assignee);
+CREATE INDEX IF NOT EXISTS idx_action_items_due_date ON action_items(due_date);
+"""
+
+MEETING_ANALYTICS_SQL = """
+CREATE TABLE IF NOT EXISTS meeting_analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_type TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    total_meetings INTEGER NOT NULL DEFAULT 0,
+    total_duration_minutes REAL NOT NULL DEFAULT 0,
+    total_words INTEGER NOT NULL DEFAULT 0,
+    unique_attendees INTEGER NOT NULL DEFAULT 0,
+    recurring_ratio REAL NOT NULL DEFAULT 0,
+    action_items_created INTEGER NOT NULL DEFAULT 0,
+    action_items_completed INTEGER NOT NULL DEFAULT 0,
+    busiest_hour INTEGER,
+    computed_at REAL NOT NULL,
+    UNIQUE(period_type, period_start)
+);
+"""
+
+NOTIFICATIONS_SQL = """
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    reference_id TEXT,
+    channel TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    scheduled_at REAL,
+    sent_at REAL,
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_type ON notifications(type);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
+CREATE INDEX IF NOT EXISTS idx_notifications_reference ON notifications(reference_id);
+"""
+
+PREP_BRIEFINGS_SQL = """
+CREATE TABLE IF NOT EXISTS prep_briefings (
+    id TEXT PRIMARY KEY,
+    meeting_id TEXT,
+    series_id TEXT,
+    content_markdown TEXT,
+    attendees_json TEXT,
+    related_meeting_ids_json TEXT,
+    open_action_items_json TEXT,
+    generated_at REAL NOT NULL,
+    expires_at REAL,
+    FOREIGN KEY (series_id) REFERENCES meeting_series(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_prep_briefings_series ON prep_briefings(series_id);
+CREATE INDEX IF NOT EXISTS idx_prep_briefings_expires ON prep_briefings(expires_at);
+"""
+
+
+_ALLOWED_TABLES = frozenset(
+    {
+        "meetings",
+        "speaker_mappings",
+        "segment_embeddings",
+        "meeting_series",
+        "action_items",
+        "meeting_analytics",
+        "notifications",
+        "prep_briefings",
+    }
+)
 _ALLOWED_COL_TYPES = frozenset({"TEXT", "REAL", "INTEGER", "BLOB"})
 
 
@@ -199,6 +309,13 @@ class Database:
             # Teams meeting identity columns (v8).
             await _safe_add_column(self.conn, "meetings", "teams_join_url", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "teams_meeting_id", "TEXT", "''")
+            # Meeting intelligence tables (v9).
+            await self.conn.executescript(MEETING_SERIES_SQL)
+            await self.conn.executescript(ACTION_ITEMS_SQL)
+            await self.conn.executescript(MEETING_ANALYTICS_SQL)
+            await self.conn.executescript(NOTIFICATIONS_SQL)
+            await self.conn.executescript(PREP_BRIEFINGS_SQL)
+            await _safe_add_column(self.conn, "meetings", "series_id", "TEXT", "NULL")
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -269,8 +386,19 @@ class Database:
             # Teams meeting identity columns.
             await _safe_add_column(self.conn, "meetings", "teams_join_url", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "teams_meeting_id", "TEXT", "''")
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 8")
             await self.conn.commit()
             logger.info("Database migrated to version 8 (Teams identity columns)")
+            current_version = 8
+        if current_version < 9:
+            await self.conn.executescript(MEETING_SERIES_SQL)
+            await self.conn.executescript(ACTION_ITEMS_SQL)
+            await self.conn.executescript(MEETING_ANALYTICS_SQL)
+            await self.conn.executescript(NOTIFICATIONS_SQL)
+            await self.conn.executescript(PREP_BRIEFINGS_SQL)
+            await _safe_add_column(self.conn, "meetings", "series_id", "TEXT", "NULL")
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 9 (meeting intelligence)")
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

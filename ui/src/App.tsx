@@ -18,7 +18,12 @@ import { Settings } from "./components/settings/Settings";
 import { Search } from "./components/search/Search";
 import { LiveView } from "./components/live/LiveView";
 import { CalendarView } from "./components/calendar/CalendarView";
+import { InsightsPanel } from "./components/insights/InsightsPanel";
+import { ActionItemList } from "./components/action-items/ActionItemList";
+import { PrepBriefing } from "./components/prep/PrepBriefing";
+import { SeriesDetail } from "./components/series/SeriesDetail";
 import { CommandPalette } from "./components/common/CommandPalette";
+import { NotificationPanel } from "./components/notifications/NotificationPanel";
 import { ToastProvider } from "./components/common/Toast";
 import {
   OnboardingWizard,
@@ -75,6 +80,12 @@ function AppShell() {
       ) {
         queryClient.invalidateQueries({ queryKey: ["models"] });
       }
+      if (event.type === "action_items.extracted") {
+        queryClient.invalidateQueries({ queryKey: ["action-items"] });
+      }
+      if (event.type === "notification") {
+        queryClient.invalidateQueries({ queryKey: ["notifications-unread"] });
+      }
     },
     [handleEvent],
   );
@@ -99,6 +110,7 @@ function AppShell() {
           <Outlet />
         </ErrorBoundary>
       </main>
+      <NotificationPanel />
     </div>
   );
 }
@@ -111,6 +123,11 @@ const router = createBrowserRouter(
       <Route path="/meetings" element={<MeetingList />} />
       <Route path="/meetings/:id" element={<MeetingDetail />} />
       <Route path="/calendar" element={<CalendarView />} />
+      <Route path="/action-items" element={<ActionItemList />} />
+      <Route path="/insights" element={<InsightsPanel />} />
+      <Route path="/prep" element={<PrepBriefing />} />
+      <Route path="/prep/:meetingId" element={<PrepBriefing />} />
+      <Route path="/series/:id" element={<SeriesDetail />} />
       <Route path="/search" element={<Search />} />
       <Route path="/settings" element={<Settings />} />
     </Route>,

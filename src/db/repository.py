@@ -36,6 +36,7 @@ _MUTABLE_COLUMNS = frozenset(
         "calendar_confidence",
         "teams_join_url",
         "teams_meeting_id",
+        "series_id",
         "updated_at",
     }
 )
@@ -65,6 +66,7 @@ class MeetingRecord:
     calendar_confidence: float = 0.0
     teams_join_url: str = ""
     teams_meeting_id: str = ""
+    series_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,6 +88,7 @@ class MeetingRecord:
             "calendar_confidence": self.calendar_confidence,
             "teams_join_url": self.teams_join_url,
             "teams_meeting_id": self.teams_meeting_id,
+            "series_id": self.series_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -110,6 +113,12 @@ class MeetingRecord:
         except (IndexError, KeyError):
             pass
 
+        series_id = None
+        try:
+            series_id = row["series_id"]
+        except (IndexError, KeyError):
+            pass
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -131,6 +140,7 @@ class MeetingRecord:
             calendar_confidence=calendar_confidence,
             teams_join_url=teams_join_url,
             teams_meeting_id=teams_meeting_id,
+            series_id=series_id,
         )
 
 
@@ -851,3 +861,48 @@ class MeetingRepository:
                 }
             )
         return results
+
+    # ------------------------------------------------------------------
+    # Helper queries for analytics, series detection, and prep briefings
+    # ------------------------------------------------------------------
+
+    async def list_unlinked_complete_meetings(self) -> list[dict]:
+        """Fetch complete meetings without a series_id."""
+        cursor = await self._db.conn.execute(
+            "SELECT id, title, started_at, duration_seconds, attendees_json "
+            "FROM meetings "
+            "WHERE status = 'complete' AND (series_id IS NULL OR series_id = '') "
+            "ORDER BY started_at ASC"
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def list_recent_complete_with_attendees(self, limit: int = 100) -> list[dict]:
+        """Fetch recent complete meetings with attendee data."""
+        cursor = await self._db.conn.execute(
+            "SELECT id, title, started_at, summary_markdown, attendees_json "
+            "FROM meetings WHERE status = 'complete' "
+            "ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def list_complete_in_range(self, start_ts: float, end_ts: float) -> list[dict]:
+        """Fetch complete meetings in a timestamp range."""
+        cursor = await self._db.conn.execute(
+            "SELECT duration_seconds, word_count, attendees_json, "
+            "series_id, started_at "
+            "FROM meetings "
+            "WHERE status = 'complete' AND started_at >= ? AND started_at < ?",
+            (start_ts, end_ts),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def list_attendee_json_recent(self, limit: int = 200) -> list[dict]:
+        """Fetch attendees_json from recent complete meetings."""
+        cursor = await self._db.conn.execute(
+            "SELECT attendees_json FROM meetings "
+            "WHERE status = 'complete' AND attendees_json != '[]' "
+            "ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]

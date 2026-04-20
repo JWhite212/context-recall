@@ -287,4 +287,149 @@ export type WSEvent =
       confidence: number;
     }
   | { type: "daemon.status"; state: DaemonState }
-  | { type: "meeting.resummarise"; meeting_id: string; status: MeetingStatus };
+  | { type: "meeting.resummarise"; meeting_id: string; status: MeetingStatus }
+  | {
+      type: "notification";
+      notification_type: string;
+      title: string;
+      body: string;
+      reference_id: string | null;
+    }
+  | { type: "action_items.extracted"; meeting_id: string; count: number };
+
+/** Action item types. */
+export type ActionItemStatus = "open" | "in_progress" | "done" | "cancelled";
+export type ActionItemPriority = "low" | "medium" | "high" | "urgent";
+
+export interface ActionItem {
+  id: string;
+  meeting_id: string;
+  title: string;
+  description: string | null;
+  assignee: string | null;
+  status: ActionItemStatus;
+  priority: ActionItemPriority;
+  due_date: string | null;
+  reminder_at: string | null;
+  source: "extracted" | "manual";
+  extracted_text: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
+export interface ActionItemsResponse {
+  items: ActionItem[];
+}
+
+/** Meeting series types. */
+export interface MeetingSeries {
+  id: string;
+  title: string;
+  calendar_series_id: string | null;
+  detection_method: "calendar" | "heuristic" | "manual";
+  typical_attendees_json: string | null;
+  typical_day_of_week: number | null;
+  typical_time: string | null;
+  typical_duration_minutes: number | null;
+  created_at: string;
+  updated_at: string;
+  meetings?: Meeting[];
+}
+
+export interface SeriesListResponse {
+  series: MeetingSeries[];
+}
+
+export interface SeriesTrends {
+  series_id: string;
+  meeting_count: number;
+  duration_trend: number[];
+  word_count_trend: number[];
+  avg_duration_minutes: number;
+}
+
+/** Analytics types. */
+export interface AnalyticsPeriod {
+  id: number;
+  period_type: string;
+  period_start: string;
+  total_meetings: number;
+  total_duration_minutes: number;
+  total_words: number;
+  unique_attendees: number;
+  recurring_ratio: number;
+  action_items_created: number;
+  action_items_completed: number;
+  busiest_hour: number | null;
+  computed_at: number;
+}
+
+export interface AnalyticsSummaryResponse {
+  current_period: AnalyticsPeriod | null;
+  period_type: string;
+  period_start: string;
+}
+
+export interface AnalyticsTrendsResponse {
+  trends: AnalyticsPeriod[];
+  period_type: string;
+}
+
+export interface LoadScore {
+  ratio: number;
+  label: string;
+  current_minutes: number;
+  average_minutes: number;
+}
+
+export interface AnalyticsHealthResponse {
+  load_score: LoadScore;
+  indicators: string[];
+}
+
+export interface MostMetPerson {
+  name: string;
+  meeting_count: number;
+}
+
+export interface AnalyticsPeopleResponse {
+  people: MostMetPerson[];
+}
+
+/** Notification types. */
+export type NotificationStatus = "sent" | "dismissed" | "failed";
+
+export interface AppNotification {
+  id: string;
+  type: string;
+  reference_id: string | null;
+  channel: string;
+  title: string;
+  body: string | null;
+  status: NotificationStatus;
+  scheduled_at: number | null;
+  sent_at: number | null;
+  created_at: number;
+}
+
+export interface NotificationsResponse {
+  notifications: AppNotification[];
+}
+
+export interface UnreadCountResponse {
+  count: number;
+}
+
+/** Prep briefing types. */
+export interface PrepBriefing {
+  id: string;
+  meeting_id: string | null;
+  series_id: string | null;
+  content_markdown: string;
+  attendees_json: string;
+  related_meeting_ids_json: string;
+  open_action_items_json: string;
+  generated_at: number;
+  expires_at: number;
+}

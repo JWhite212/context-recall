@@ -180,6 +180,69 @@ class CalendarConfig:
 
 
 @dataclass
+class ActionItemsConfig:
+    auto_extract: bool = True
+    default_reminder_before_due: str = "1d"
+    duplicate_threshold: float = 0.85
+
+
+@dataclass
+class SeriesConfig:
+    heuristic_enabled: bool = True
+    min_meetings_for_series: int = 3
+    attendee_overlap_threshold: float = 0.6
+    title_similarity_threshold: float = 0.7
+    time_tolerance_hours: int = 1
+    day_tolerance: int = 1
+
+
+@dataclass
+class AnalyticsConfig:
+    refresh_interval_hours: int = 6
+    rolling_window_weeks: int = 4
+    health_alert_threshold: float = 1.5
+
+
+@dataclass
+class WebhookChannelConfig:
+    enabled: bool = False
+    url: str = ""
+    format: str = "slack"
+
+
+@dataclass
+class EmailChannelConfig:
+    enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    from_address: str = ""
+    to_address: str = ""
+    max_per_day: int = 3
+
+
+@dataclass
+class NotificationsConfig:
+    enabled: bool = True
+    in_app: bool = True
+    macos: bool = True
+    webhook: WebhookChannelConfig = field(default_factory=WebhookChannelConfig)
+    email: EmailChannelConfig = field(default_factory=EmailChannelConfig)
+    default_reminder_before_due: str = "1d"
+    overdue_check_interval: str = "6h"
+
+
+@dataclass
+class PrepConfig:
+    lead_time_minutes: int = 15
+    auto_generate: bool = True
+    max_context_meetings: int = 3
+    max_attendee_history: int = 5
+    briefing_ttl_hours: int = 2
+
+
+@dataclass
 class AppConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -192,6 +255,11 @@ class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     calendar: CalendarConfig = field(default_factory=CalendarConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)
+    action_items: ActionItemsConfig = field(default_factory=ActionItemsConfig)
+    series: SeriesConfig = field(default_factory=SeriesConfig)
+    analytics: AnalyticsConfig = field(default_factory=AnalyticsConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    prep: PrepConfig = field(default_factory=PrepConfig)
 
 
 def _expand_path(path_str: str) -> str:
@@ -238,7 +306,19 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         api=_build_dataclass(ApiConfig, raw.get("api", {})),
         calendar=_build_dataclass(CalendarConfig, raw.get("calendar", {})),
         retention=_build_dataclass(RetentionConfig, raw.get("retention", {})),
+        action_items=_build_dataclass(ActionItemsConfig, raw.get("action_items", {})),
+        series=_build_dataclass(SeriesConfig, raw.get("series", {})),
+        analytics=_build_dataclass(AnalyticsConfig, raw.get("analytics", {})),
+        notifications=_build_dataclass(NotificationsConfig, raw.get("notifications", {})),
+        prep=_build_dataclass(PrepConfig, raw.get("prep", {})),
     )
+
+    # Handle nested notification channel configs.
+    notif_raw = raw.get("notifications", {})
+    if "webhook" in notif_raw and isinstance(notif_raw["webhook"], dict):
+        config.notifications.webhook = _build_dataclass(WebhookChannelConfig, notif_raw["webhook"])
+    if "email" in notif_raw and isinstance(notif_raw["email"], dict):
+        config.notifications.email = _build_dataclass(EmailChannelConfig, notif_raw["email"])
 
     # Expand user paths so downstream code doesn't need to worry about tildes.
     config.audio.temp_audio_dir = _expand_path(config.audio.temp_audio_dir)
