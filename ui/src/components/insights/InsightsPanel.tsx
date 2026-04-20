@@ -45,11 +45,16 @@ export function InsightsPanel() {
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-lg font-semibold text-text-primary">Insights</h1>
-        <div className="flex gap-1 bg-surface border border-border rounded-lg p-0.5">
+        <div
+          className="flex gap-1 bg-surface border border-border rounded-lg p-0.5"
+          role="group"
+          aria-label="Period selector"
+        >
           {PERIOD_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               onClick={() => setPeriod(opt.value)}
+              aria-pressed={period === opt.value}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
                 period === opt.value
                   ? "bg-accent text-white"

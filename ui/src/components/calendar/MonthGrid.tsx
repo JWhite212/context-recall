@@ -64,6 +64,7 @@ export function MonthGrid({
             <button
               key={key}
               onClick={() => onDayClick(day)}
+              aria-label={format(day, "EEEE, MMMM d")}
               className={`flex flex-col border-b border-r border-border p-1 min-h-[80px] text-left transition-colors hover:bg-surface-hover ${
                 !inMonth ? "opacity-40" : ""
               }`}

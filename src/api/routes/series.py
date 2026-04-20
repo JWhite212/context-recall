@@ -94,8 +94,8 @@ async def get_trends(series_id: str):
     if not await repo.get(series_id):
         raise HTTPException(status_code=404, detail="Series not found")
     meetings = await repo.get_meetings(series_id)
-    durations = [m["duration_seconds"] for m in meetings if m.get("duration_seconds")]
-    word_counts = [m["word_count"] for m in meetings if m.get("word_count")]
+    durations = [m["duration_seconds"] for m in meetings if m.get("duration_seconds") is not None]
+    word_counts = [m["word_count"] for m in meetings if m.get("word_count") is not None]
     return {
         "series_id": series_id,
         "meeting_count": len(meetings),

@@ -251,13 +251,6 @@ class ApiServer:
         await self.db.connect()
         self.repo = MeetingRepository(self.db)
 
-        # Start the intelligence scheduler.
-        from src.scheduler import Scheduler
-
-        self._scheduler = Scheduler()
-        self._setup_scheduler_jobs()
-        self._scheduler.start()
-
         # Run data retention cleanup on startup.
         try:
             app_config = load_config()
@@ -272,6 +265,13 @@ class ApiServer:
 
         # Create the app (routes are initialized here with the ready repo).
         self._app = self._create_app()
+
+        # Start the intelligence scheduler after app creation.
+        from src.scheduler import Scheduler
+
+        self._scheduler = Scheduler()
+        self._setup_scheduler_jobs()
+        self._scheduler.start()
 
         # Schedule periodic retention cleanup (every 6 hours).
         self._retention_task = asyncio.create_task(self._periodic_retention_cleanup())
@@ -348,36 +348,42 @@ class ApiServer:
 
     async def _refresh_analytics_periodic(self) -> None:
         """Periodic analytics refresh."""
-        from src.action_items.repository import ActionItemRepository
-        from src.analytics.engine import AnalyticsEngine
-        from src.analytics.repository import AnalyticsRepository
+        try:
+            from src.action_items.repository import ActionItemRepository
+            from src.analytics.engine import AnalyticsEngine
+            from src.analytics.repository import AnalyticsRepository
 
-        config = load_config()
-        analytics_repo = AnalyticsRepository(self.db)
-        ai_repo = ActionItemRepository(self.db)
-        engine = AnalyticsEngine(
-            config=config.analytics,
-            meeting_repo=self.repo,
-            analytics_repo=analytics_repo,
-            action_item_repo=ai_repo,
-        )
-        await engine.refresh_current_periods()
+            config = load_config()
+            analytics_repo = AnalyticsRepository(self.db)
+            ai_repo = ActionItemRepository(self.db)
+            engine = AnalyticsEngine(
+                config=config.analytics,
+                meeting_repo=self.repo,
+                analytics_repo=analytics_repo,
+                action_item_repo=ai_repo,
+            )
+            await engine.refresh_current_periods()
+        except Exception:
+            logger.exception("Periodic analytics refresh failed")
 
     async def _run_series_detection(self) -> None:
         """Run heuristic series detection."""
-        from src.series.detector import HeuristicSeriesDetector
-        from src.series.repository import SeriesRepository
+        try:
+            from src.series.detector import HeuristicSeriesDetector
+            from src.series.repository import SeriesRepository
 
-        config = load_config()
-        series_repo = SeriesRepository(self.db)
-        detector = HeuristicSeriesDetector(
-            config=config.series,
-            meeting_repo=self.repo,
-            series_repo=series_repo,
-        )
-        new_series = await detector.detect()
-        if new_series:
-            logger.info("Heuristic detection found %d new series", len(new_series))
+            config = load_config()
+            series_repo = SeriesRepository(self.db)
+            detector = HeuristicSeriesDetector(
+                config=config.series,
+                meeting_repo=self.repo,
+                series_repo=series_repo,
+            )
+            new_series = await detector.detect()
+            if new_series:
+                logger.info("Heuristic detection found %d new series", len(new_series))
+        except Exception:
+            logger.exception("Heuristic series detection failed")
 
     async def _periodic_retention_cleanup(self) -> None:
         """Run data retention cleanup every 6 hours."""

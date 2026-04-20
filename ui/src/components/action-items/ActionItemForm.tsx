@@ -81,13 +81,19 @@ export function ActionItemForm({ item, defaultMeetingId, onClose }: Props) {
   return (
     <div
       className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="action-item-form-heading"
       onClick={onClose}
     >
       <div
         className="bg-surface-raised border border-border rounded-xl p-6 w-full max-w-md shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-lg font-semibold text-text-primary mb-4">
+        <h2
+          id="action-item-form-heading"
+          className="text-lg font-semibold text-text-primary mb-4"
+        >
           {isEditing ? "Edit Action Item" : "New Action Item"}
         </h2>
         {formError && (
