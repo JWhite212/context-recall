@@ -18,6 +18,7 @@ import { Settings } from "./components/settings/Settings";
 import { Search } from "./components/search/Search";
 import { LiveView } from "./components/live/LiveView";
 import { CalendarView } from "./components/calendar/CalendarView";
+import { InsightsPanel } from "./components/insights/InsightsPanel";
 import { ActionItemList } from "./components/action-items/ActionItemList";
 import { CommandPalette } from "./components/common/CommandPalette";
 import { NotificationPanel } from "./components/notifications/NotificationPanel";
@@ -115,6 +116,7 @@ const router = createBrowserRouter(
       <Route path="/meetings/:id" element={<MeetingDetail />} />
       <Route path="/calendar" element={<CalendarView />} />
       <Route path="/action-items" element={<ActionItemList />} />
+      <Route path="/insights" element={<InsightsPanel />} />
       <Route path="/search" element={<Search />} />
       <Route path="/settings" element={<Settings />} />
     </Route>,
