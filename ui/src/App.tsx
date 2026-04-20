@@ -20,6 +20,7 @@ import { LiveView } from "./components/live/LiveView";
 import { CalendarView } from "./components/calendar/CalendarView";
 import { ActionItemList } from "./components/action-items/ActionItemList";
 import { CommandPalette } from "./components/common/CommandPalette";
+import { NotificationPanel } from "./components/notifications/NotificationPanel";
 import { ToastProvider } from "./components/common/Toast";
 import {
   OnboardingWizard,
@@ -100,6 +101,7 @@ function AppShell() {
           <Outlet />
         </ErrorBoundary>
       </main>
+      <NotificationPanel />
     </div>
   );
 }
