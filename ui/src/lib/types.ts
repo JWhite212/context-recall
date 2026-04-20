@@ -43,6 +43,13 @@ export interface Meeting {
   calendar_event_title: string;
   attendees_json: string;
   calendar_confidence: number;
+  teams_join_url: string;
+  teams_conference_id: string;
+}
+
+export interface CalendarMeetingsResponse {
+  meetings: Meeting[];
+  count: number;
 }
 
 export interface MeetingStats {

@@ -2,6 +2,7 @@
 
 import type {
   AppConfig,
+  CalendarMeetingsResponse,
   DevicesResponse,
   HealthResponse,
   MeetingStats,
@@ -50,7 +51,13 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail || body.error || body.message || detail;
+      if (Array.isArray(body.detail)) {
+        detail = body.detail
+          .map((e: { msg?: string }) => e.msg ?? JSON.stringify(e))
+          .join("; ");
+      } else {
+        detail = body.detail || body.error || body.message || detail;
+      }
     } catch {}
     throw new Error(`API ${res.status}: ${detail}`);
   }
@@ -263,4 +270,11 @@ export async function setSpeakerName(
       body: JSON.stringify({ display_name: displayName }),
     },
   );
+}
+
+export async function getCalendarMeetings(
+  start: number,
+  end: number,
+): Promise<CalendarMeetingsResponse> {
+  return request(`/api/calendar/meetings?start=${start}&end=${end}`);
 }

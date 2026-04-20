@@ -497,6 +497,8 @@ class MeetingMind:
                     calendar_event_title=self._calendar_match.event_title,
                     attendees_json=json.dumps(self._calendar_match.attendees),
                     calendar_confidence=self._calendar_match.confidence,
+                    teams_join_url=self._calendar_match.teams_join_url,
+                    teams_conference_id=self._calendar_match.teams_conference_id,
                 )
             except Exception as e:
                 logger.warning("Failed to save calendar data: %s", e)

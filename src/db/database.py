@@ -20,7 +20,7 @@ logger = logging.getLogger("meetingmind.db")
 DEFAULT_DB_DIR = Path(os.path.expanduser("~/.local/share/meetingmind"))
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "meetings.db"
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 _vec_available = False
 
@@ -196,6 +196,9 @@ class Database:
             await _safe_add_column(self.conn, "meetings", "calendar_event_title", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "attendees_json", "TEXT", "'[]'")
             await _safe_add_column(self.conn, "meetings", "calendar_confidence", "REAL", "0.0")
+            # Teams meeting identity columns (v8).
+            await _safe_add_column(self.conn, "meetings", "teams_join_url", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "teams_conference_id", "TEXT", "''")
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -246,8 +249,28 @@ class Database:
             await _safe_add_column(self.conn, "meetings", "calendar_event_title", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "attendees_json", "TEXT", "'[]'")
             await _safe_add_column(self.conn, "meetings", "calendar_confidence", "REAL", "0.0")
+            await self.conn.execute("PRAGMA user_version = 6")
+            await self.conn.commit()
+            logger.info("Database migrated to version 6 (calendar columns)")
+            current_version = 6
+        if current_version < 7:
+            # Recreate FTS table to include transcript_text column.
+            try:
+                await self.conn.execute("DROP TABLE IF EXISTS meetings_fts")
+                await self.conn.executescript(FTS_SQL)
+                logger.info("Recreated FTS table with transcript_text column")
+            except Exception:
+                logger.warning("FTS5 not available; full-text search disabled.")
+            await self.conn.execute("PRAGMA user_version = 7")
+            await self.conn.commit()
+            logger.info("Database migrated to version 7 (FTS rebuild)")
+            current_version = 7
+        if current_version < 8:
+            # Teams meeting identity columns.
+            await _safe_add_column(self.conn, "meetings", "teams_join_url", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "teams_conference_id", "TEXT", "''")
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
-            logger.info("Database migrated to version %d (calendar columns)", SCHEMA_VERSION)
+            logger.info("Database migrated to version 8 (Teams identity columns)")
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

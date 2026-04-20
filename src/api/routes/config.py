@@ -81,9 +81,7 @@ def _mask_secrets(config: dict) -> dict:
     return masked
 
 
-def _deep_merge(
-    base: dict, updates: dict, existing: dict, _path: tuple[str, ...] = ()
-) -> dict:
+def _deep_merge(base: dict, updates: dict, existing: dict, _path: tuple[str, ...] = ()) -> dict:
     """
     Recursively merge *updates* into *base*.
 
@@ -93,9 +91,7 @@ def _deep_merge(
     merged = copy.deepcopy(base)
     for key, value in updates.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(
-                merged[key], value, existing.get(key, {}), _path + (key,)
-            )
+            merged[key] = _deep_merge(merged[key], value, existing.get(key, {}), _path + (key,))
         else:
             full_path = _path + (key,)
             if full_path in _SECRET_FIELDS and value == _MASK:
@@ -113,6 +109,7 @@ async def get_config():
 
 class ConfigUpdateBody(BaseModel):
     """Validated schema for config updates — rejects unknown top-level keys."""
+
     model_config = ConfigDict(extra="forbid")
 
     detection: dict | None = None
@@ -124,6 +121,7 @@ class ConfigUpdateBody(BaseModel):
     notion: dict | None = None
     logging: dict | None = None
     api: dict | None = None
+    calendar: dict | None = None
     retention: dict | None = None
 
 

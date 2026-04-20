@@ -683,6 +683,18 @@ export function MeetingDetail() {
                 return null;
               }
             })()}
+            {meeting.teams_join_url && (
+              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/50">
+                <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[10px] font-medium">
+                  Teams
+                </span>
+                {meeting.teams_conference_id && (
+                  <span className="text-[10px] text-text-muted">
+                    Conference ID: {meeting.teams_conference_id}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

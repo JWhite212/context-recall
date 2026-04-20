@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.auth import _get_token, verify_token
 from src.api.events import EventBus
+from src.api.routes import calendar as calendar_routes
 from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
 from src.api.routes import export as export_routes
@@ -118,6 +119,7 @@ class ApiServer:
             self._is_recording,
         )
 
+        calendar_routes.init(self.repo)
         export_routes.init(self.repo)
         resummarise_routes.init(self.repo, self.event_bus)
         reprocess_routes.init(self.repo)
@@ -148,6 +150,7 @@ class ApiServer:
         app.include_router(templates_routes.router, dependencies=auth_deps)
         app.include_router(search_routes.router, dependencies=auth_deps)
         app.include_router(speakers_routes.router, dependencies=auth_deps)
+        app.include_router(calendar_routes.router, dependencies=auth_deps)
 
         # WebSocket endpoint with message-based auth handshake.
         # The client connects, then sends {"type":"auth","token":"<value>"}

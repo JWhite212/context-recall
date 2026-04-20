@@ -17,6 +17,7 @@ import { MeetingDetail } from "./components/meetings/MeetingDetail";
 import { Settings } from "./components/settings/Settings";
 import { Search } from "./components/search/Search";
 import { LiveView } from "./components/live/LiveView";
+import { CalendarView } from "./components/calendar/CalendarView";
 import { CommandPalette } from "./components/common/CommandPalette";
 import { ToastProvider } from "./components/common/Toast";
 import {
@@ -107,6 +108,7 @@ const router = createBrowserRouter(
       <Route path="/live" element={<LiveView />} />
       <Route path="/meetings" element={<MeetingList />} />
       <Route path="/meetings/:id" element={<MeetingDetail />} />
+      <Route path="/calendar" element={<CalendarView />} />
       <Route path="/search" element={<Search />} />
       <Route path="/settings" element={<Settings />} />
     </Route>,
