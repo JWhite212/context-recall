@@ -27,8 +27,8 @@ export function InsightsPanel() {
     queryFn: () => getAnalyticsSummary(period),
   });
   const { data: trends } = useQuery({
-    queryKey: ["analytics-trends"],
-    queryFn: () => getAnalyticsTrends("weekly", 8),
+    queryKey: ["analytics-trends", period],
+    queryFn: () => getAnalyticsTrends(period, 8),
   });
   const { data: people } = useQuery({
     queryKey: ["analytics-people"],

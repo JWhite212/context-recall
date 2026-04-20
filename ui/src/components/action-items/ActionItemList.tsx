@@ -17,7 +17,7 @@ export function ActionItemList() {
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState<ActionItem | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ["action-items", statusFilter],
     queryFn: () => getActionItems(statusFilter || undefined),
   });
@@ -55,7 +55,11 @@ export function ActionItemList() {
       </div>
 
       {/* Content */}
-      {isLoading ? (
+      {isError ? (
+        <p className="text-sm text-status-error text-center py-12">
+          Failed to load action items. Please try again.
+        </p>
+      ) : isLoading ? (
         <div className="space-y-3">
           {[1, 2, 3].map((i) => (
             <div

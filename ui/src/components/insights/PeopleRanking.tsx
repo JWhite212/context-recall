@@ -19,7 +19,7 @@ export function PeopleRanking({ people }: Props) {
       <p className="text-xs text-text-muted mb-2">Most Met People</p>
       <ul className="space-y-1">
         {people.map((person, idx) => (
-          <li key={person.name} className="flex items-center gap-2 text-sm">
+          <li key={idx} className="flex items-center gap-2 text-sm">
             <span className="text-text-muted w-4 text-right">{idx + 1}.</span>
             <span className="text-text-primary truncate flex-1">
               {person.name}

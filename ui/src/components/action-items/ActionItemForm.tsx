@@ -19,11 +19,16 @@ export function ActionItemForm({ item, defaultMeetingId, onClose }: Props) {
   const [dueDate, setDueDate] = useState(item?.due_date ?? "");
   const [description, setDescription] = useState(item?.description ?? "");
 
+  const [formError, setFormError] = useState<string | null>(null);
+
   const createMutation = useMutation({
     mutationFn: createActionItem,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["action-items"] });
       onClose();
+    },
+    onError: (err: Error) => {
+      setFormError(err.message || "Failed to create action item");
     },
   });
 
@@ -33,11 +38,20 @@ export function ActionItemForm({ item, defaultMeetingId, onClose }: Props) {
       queryClient.invalidateQueries({ queryKey: ["action-items"] });
       onClose();
     },
+    onError: (err: Error) => {
+      setFormError(err.message || "Failed to update action item");
+    },
   });
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setFormError(null);
     if (!title.trim()) return;
+
+    if (!isEditing && !defaultMeetingId) {
+      setFormError("Cannot create action item without an associated meeting.");
+      return;
+    }
 
     if (isEditing) {
       updateMutation.mutate({
@@ -76,6 +90,9 @@ export function ActionItemForm({ item, defaultMeetingId, onClose }: Props) {
         <h2 className="text-lg font-semibold text-text-primary mb-4">
           {isEditing ? "Edit Action Item" : "New Action Item"}
         </h2>
+        {formError && (
+          <p className="text-sm text-status-error mb-4">{formError}</p>
+        )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs text-text-muted mb-1">Title</label>

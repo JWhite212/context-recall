@@ -20,7 +20,8 @@ const PRIORITY_COLORS: Record<string, string> = {
 function nextStatus(current: ActionItemStatus): ActionItemStatus {
   if (current === "open") return "in_progress";
   if (current === "in_progress") return "done";
-  return "open";
+  if (current === "done") return "open";
+  return current; // cancelled stays cancelled
 }
 
 interface Props {
