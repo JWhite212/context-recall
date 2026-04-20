@@ -153,17 +153,17 @@ class ApiServer:
         app.include_router(calendar_routes.router, dependencies=auth_deps)
 
         # Intelligence feature routes.
+        from src.action_items.repository import ActionItemRepository
+        from src.analytics.engine import AnalyticsEngine
+        from src.analytics.repository import AnalyticsRepository
         from src.api.routes import action_items as action_items_routes
-        from src.api.routes import series as series_routes
         from src.api.routes import analytics as analytics_routes
         from src.api.routes import notifications as notifications_routes
         from src.api.routes import prep as prep_routes
-        from src.action_items.repository import ActionItemRepository
-        from src.series.repository import SeriesRepository
-        from src.analytics.engine import AnalyticsEngine
-        from src.analytics.repository import AnalyticsRepository
+        from src.api.routes import series as series_routes
         from src.notifications.repository import NotificationRepository
         from src.prep.repository import PrepRepository
+        from src.series.repository import SeriesRepository
 
         ai_repo = ActionItemRepository(self.db)
         series_repo = SeriesRepository(self.db)
@@ -318,8 +318,8 @@ class ApiServer:
     async def _check_reminders(self) -> None:
         """Check for due reminders and overdue action items."""
         from src.action_items.repository import ActionItemRepository
-        from src.notifications.repository import NotificationRepository
         from src.notifications.dispatcher import NotificationDispatcher
+        from src.notifications.repository import NotificationRepository
 
         config = load_config()
         ai_repo = ActionItemRepository(self.db)
@@ -348,9 +348,9 @@ class ApiServer:
 
     async def _refresh_analytics_periodic(self) -> None:
         """Periodic analytics refresh."""
+        from src.action_items.repository import ActionItemRepository
         from src.analytics.engine import AnalyticsEngine
         from src.analytics.repository import AnalyticsRepository
-        from src.action_items.repository import ActionItemRepository
 
         config = load_config()
         analytics_repo = AnalyticsRepository(self.db)

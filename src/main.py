@@ -629,10 +629,11 @@ class MeetingMind:
 
     async def _refresh_analytics(self) -> None:
         """Refresh current day analytics after meeting completes."""
+        from datetime import datetime, timezone
+
+        from src.action_items.repository import ActionItemRepository
         from src.analytics.engine import AnalyticsEngine
         from src.analytics.repository import AnalyticsRepository
-        from src.action_items.repository import ActionItemRepository
-        from datetime import datetime, timezone
 
         analytics_repo = AnalyticsRepository(self._api_server.db)
         ai_repo = ActionItemRepository(self._api_server.db)

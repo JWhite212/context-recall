@@ -1,13 +1,12 @@
 import json
-
-import pytest
 from datetime import datetime, timezone
 
+import pytest
+
+from src.action_items.repository import ActionItemRepository
 from src.analytics.engine import AnalyticsEngine
 from src.analytics.repository import AnalyticsRepository
-from src.action_items.repository import ActionItemRepository
 from src.db.database import Database
-from src.db.repository import MeetingRepository
 from src.utils.config import AnalyticsConfig
 
 

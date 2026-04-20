@@ -48,7 +48,11 @@ def test_parse_llm_response_malformed(extractor):
 
 
 def test_parse_llm_response_with_markdown_fence(extractor):
-    response = '```json\n[{"title": "Test", "assignee": "Me", "due_date": null, "priority": "medium", "extracted_text": "test"}]\n```'
+    response = (
+        '```json\n[{"title": "Test", "assignee": "Me", '
+        '"due_date": null, "priority": "medium", '
+        '"extracted_text": "test"}]\n```'
+    )
     items = extractor.parse_response(response)
     assert len(items) == 1
     assert items[0]["title"] == "Test"

@@ -3,7 +3,6 @@
 import pytest
 
 from src.db.database import Database
-from src.db.repository import MeetingRepository
 from src.series.repository import SeriesRepository
 
 
