@@ -172,6 +172,33 @@ export interface RetentionConfig {
   record_retention_days: number;
 }
 
+export interface WebhookChannelConfig {
+  enabled: boolean;
+  url: string;
+  format: string;
+}
+
+export interface EmailChannelConfig {
+  enabled: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_password: string;
+  from_address: string;
+  to_address: string;
+  max_per_day: number;
+}
+
+export interface NotificationsConfig {
+  enabled: boolean;
+  in_app: boolean;
+  macos: boolean;
+  webhook: WebhookChannelConfig;
+  email: EmailChannelConfig;
+  default_reminder_before_due: string;
+  overdue_check_interval: string;
+}
+
 export interface AppConfig {
   detection: DetectionConfig;
   audio: AudioConfig;
@@ -183,6 +210,7 @@ export interface AppConfig {
   logging: LoggingConfig;
   api: ApiConfig;
   retention: RetentionConfig;
+  notifications: NotificationsConfig;
 }
 
 /** Whisper model info from the daemon. */

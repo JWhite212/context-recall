@@ -21,6 +21,7 @@ import { CalendarView } from "./components/calendar/CalendarView";
 import { InsightsPanel } from "./components/insights/InsightsPanel";
 import { ActionItemList } from "./components/action-items/ActionItemList";
 import { PrepBriefing } from "./components/prep/PrepBriefing";
+import { SeriesList } from "./components/series/SeriesList";
 import { SeriesDetail } from "./components/series/SeriesDetail";
 import { CommandPalette } from "./components/common/CommandPalette";
 import { NotificationPanel } from "./components/notifications/NotificationPanel";
@@ -127,6 +128,7 @@ const router = createBrowserRouter(
       <Route path="/insights" element={<InsightsPanel />} />
       <Route path="/prep" element={<PrepBriefing />} />
       <Route path="/prep/:meetingId" element={<PrepBriefing />} />
+      <Route path="/series" element={<SeriesList />} />
       <Route path="/series/:id" element={<SeriesDetail />} />
       <Route path="/search" element={<Search />} />
       <Route path="/settings" element={<Settings />} />

@@ -19,12 +19,15 @@ from src.utils.config import (
     AudioConfig,
     DetectionConfig,
     DiarisationConfig,
+    EmailChannelConfig,
     LoggingConfig,
     MarkdownConfig,
+    NotificationsConfig,
     NotionConfig,
     RetentionConfig,
     SummarisationConfig,
     TranscriptionConfig,
+    WebhookChannelConfig,
     _build_dataclass,
 )
 
@@ -36,6 +39,7 @@ _config_path: Path | None = None
 _SECRET_FIELDS = {
     ("summarisation", "anthropic_api_key"),
     ("notion", "api_key"),
+    ("notifications", "email", "smtp_password"),
 }
 
 _MASK = "••••••••"
@@ -66,18 +70,32 @@ def _full_config_dict(raw: dict) -> dict:
         logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
         api=_build_dataclass(ApiConfig, raw.get("api", {})),
         retention=_build_dataclass(RetentionConfig, raw.get("retention", {})),
+        notifications=_build_dataclass(NotificationsConfig, raw.get("notifications", {})),
     )
+    # Handle nested notification channel configs.
+    notif_raw = raw.get("notifications", {})
+    if "webhook" in notif_raw and isinstance(notif_raw["webhook"], dict):
+        config.notifications.webhook = _build_dataclass(WebhookChannelConfig, notif_raw["webhook"])
+    if "email" in notif_raw and isinstance(notif_raw["email"], dict):
+        config.notifications.email = _build_dataclass(EmailChannelConfig, notif_raw["email"])
     return dataclasses.asdict(config)
 
 
 def _mask_secrets(config: dict) -> dict:
     """Replace secret values with a mask, preserving structure."""
     masked = copy.deepcopy(config)
-    for section, key in _SECRET_FIELDS:
-        if section in masked and key in masked[section]:
-            val = masked[section][key]
-            if val and val.strip():
-                masked[section][key] = _MASK
+    for path in _SECRET_FIELDS:
+        node = masked
+        for segment in path[:-1]:
+            node = node.get(segment, {})
+            if not isinstance(node, dict):
+                break
+        else:
+            key = path[-1]
+            if key in node:
+                val = node[key]
+                if isinstance(val, str) and val.strip():
+                    node[key] = _MASK
     return masked
 
 
@@ -123,6 +141,7 @@ class ConfigUpdateBody(BaseModel):
     api: dict | None = None
     calendar: dict | None = None
     retention: dict | None = None
+    notifications: dict | None = None
 
 
 @router.put("/api/config", summary="Update configuration")

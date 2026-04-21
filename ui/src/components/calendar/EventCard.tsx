@@ -65,6 +65,17 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
               Teams
             </span>
           )}
+          {meeting.status !== "complete" && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/prep/${meeting.id}`);
+              }}
+              className="px-1.5 py-0.5 rounded bg-accent/10 text-accent text-[10px] font-medium hover:bg-accent/20 transition-colors"
+            >
+              Prep
+            </button>
+          )}
         </div>
       </div>
     </button>

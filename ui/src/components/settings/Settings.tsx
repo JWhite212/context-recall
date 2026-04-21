@@ -34,6 +34,7 @@ const SETTINGS_SECTIONS = [
   { id: "markdown", label: "Markdown" },
   { id: "notion", label: "Notion" },
   { id: "retention", label: "Retention" },
+  { id: "notifications", label: "Notifications" },
   { id: "logging", label: "Logging" },
   { id: "templates", label: "Templates" },
   { id: "daemon", label: "Daemon" },
@@ -729,6 +730,37 @@ export function Settings() {
         notion: {
           ...prev.notion,
           properties: { ...prev.notion.properties, [key]: value },
+        },
+      };
+    });
+  }
+
+  function setWebhookProp<
+    K extends keyof AppConfig["notifications"]["webhook"],
+  >(key: K, value: AppConfig["notifications"]["webhook"][K]) {
+    setForm((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        notifications: {
+          ...prev.notifications,
+          webhook: { ...prev.notifications.webhook, [key]: value },
+        },
+      };
+    });
+  }
+
+  function setEmailProp<K extends keyof AppConfig["notifications"]["email"]>(
+    key: K,
+    value: AppConfig["notifications"]["email"][K],
+  ) {
+    setForm((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        notifications: {
+          ...prev.notifications,
+          email: { ...prev.notifications.email, [key]: value },
         },
       };
     });
@@ -1623,6 +1655,138 @@ export function Settings() {
                 />
                 <span className="text-xs text-text-muted">days</span>
               </div>
+            </Field>
+          </Section>
+
+          {/* Notifications */}
+          <Section
+            id="notifications"
+            title="Notifications"
+            description="Configure how and where you receive notifications"
+          >
+            <Field label="Enabled" help="Master toggle for all notifications">
+              <Toggle
+                checked={form.notifications.enabled}
+                onChange={(v) => set("notifications", "enabled", v)}
+                label="Enable notifications"
+              />
+            </Field>
+            <Field label="In-App" help="Show toast notifications in the UI">
+              <Toggle
+                checked={form.notifications.in_app}
+                onChange={(v) => set("notifications", "in_app", v)}
+                label="In-App"
+              />
+            </Field>
+            <Field
+              label="macOS Native"
+              help="System Notification Center alerts"
+            >
+              <Toggle
+                checked={form.notifications.macos}
+                onChange={(v) => set("notifications", "macos", v)}
+                label="macOS Native"
+              />
+            </Field>
+
+            <p className="text-xs font-medium text-text-secondary mt-4 mb-1">
+              Webhook
+            </p>
+            <Field label="Webhook">
+              <Toggle
+                checked={form.notifications.webhook.enabled}
+                onChange={(v) => setWebhookProp("enabled", v)}
+                label="Webhook"
+              />
+            </Field>
+            <Field label="Webhook URL" help="POST JSON to this URL">
+              <input
+                type="text"
+                value={form.notifications.webhook.url}
+                onChange={(e) => setWebhookProp("url", e.target.value)}
+                className={WIDE}
+              />
+            </Field>
+            <Field label="Format">
+              <select
+                value={form.notifications.webhook.format}
+                onChange={(e) => setWebhookProp("format", e.target.value)}
+                className={SELECT}
+              >
+                <option value="slack">slack</option>
+                <option value="generic">generic</option>
+              </select>
+            </Field>
+
+            <p className="text-xs font-medium text-text-secondary mt-4 mb-1">
+              Email
+            </p>
+            <Field label="Email">
+              <Toggle
+                checked={form.notifications.email.enabled}
+                onChange={(v) => setEmailProp("enabled", v)}
+                label="Email"
+              />
+            </Field>
+            <Field label="SMTP Host">
+              <input
+                type="text"
+                value={form.notifications.email.smtp_host}
+                onChange={(e) => setEmailProp("smtp_host", e.target.value)}
+                className={TEXT}
+              />
+            </Field>
+            <Field label="SMTP Port">
+              <input
+                type="number"
+                value={form.notifications.email.smtp_port}
+                onChange={(e) =>
+                  setEmailProp("smtp_port", Number(e.target.value))
+                }
+                className={NUM}
+              />
+            </Field>
+            <Field label="SMTP User">
+              <input
+                type="text"
+                value={form.notifications.email.smtp_user}
+                onChange={(e) => setEmailProp("smtp_user", e.target.value)}
+                className={TEXT}
+              />
+            </Field>
+            <Field label="SMTP Password">
+              <input
+                type="password"
+                value={form.notifications.email.smtp_password}
+                onChange={(e) => setEmailProp("smtp_password", e.target.value)}
+                className={TEXT}
+              />
+            </Field>
+            <Field label="From Address">
+              <input
+                type="text"
+                value={form.notifications.email.from_address}
+                onChange={(e) => setEmailProp("from_address", e.target.value)}
+                className={TEXT}
+              />
+            </Field>
+            <Field label="To Address">
+              <input
+                type="text"
+                value={form.notifications.email.to_address}
+                onChange={(e) => setEmailProp("to_address", e.target.value)}
+                className={TEXT}
+              />
+            </Field>
+            <Field label="Max per Day" help="Daily email limit">
+              <input
+                type="number"
+                value={form.notifications.email.max_per_day}
+                onChange={(e) =>
+                  setEmailProp("max_per_day", Number(e.target.value))
+                }
+                className={NUM}
+              />
             </Field>
           </Section>
 
