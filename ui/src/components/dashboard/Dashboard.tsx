@@ -7,6 +7,8 @@ import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
 import { SkeletonCard } from "../common/Skeleton";
 import { useToast } from "../common/Toast";
+import { HealthSummary } from "./HealthSummary";
+import { OverdueItems } from "./OverdueItems";
 
 function StatusCard() {
   const { daemonRunning, state, activeMeeting } = useDaemonStatus();
@@ -305,6 +307,8 @@ export function Dashboard() {
       <StatusCard />
       <StatsRow />
       <PendingCallout />
+      <HealthSummary />
+      <OverdueItems />
       <RecentMeetings />
     </div>
   );
