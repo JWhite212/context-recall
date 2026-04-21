@@ -44,9 +44,17 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
   }
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => navigate(`/meetings/${meeting.id}`)}
-      className="flex items-start gap-3 w-full text-left p-3 rounded-lg border border-border bg-surface-raised hover:bg-surface-hover transition-colors"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          navigate(`/meetings/${meeting.id}`);
+        }
+      }}
+      className="flex items-start gap-3 w-full text-left p-3 rounded-lg border border-border bg-surface-raised hover:bg-surface-hover transition-colors cursor-pointer"
     >
       <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${statusColor}`} />
       <div className="min-w-0 flex-1">
@@ -78,6 +86,6 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
           )}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
