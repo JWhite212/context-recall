@@ -21,12 +21,13 @@ function formatSchedule(series: MeetingSeries): string {
   if (series.typical_day_of_week == null && series.typical_time == null) {
     return "No schedule";
   }
+  const dayIndex = series.typical_day_of_week;
   const day =
-    series.typical_day_of_week != null
-      ? DAYS[series.typical_day_of_week]
+    dayIndex != null && dayIndex >= 0 && dayIndex < DAYS.length
+      ? DAYS[dayIndex]
       : null;
   const time = series.typical_time ?? null;
-  return [day, time].filter(Boolean).join(" ");
+  return [day, time].filter(Boolean).join(" ") || "No schedule";
 }
 
 export function SeriesList() {

@@ -59,6 +59,11 @@ def _read_yaml() -> dict:
 
 def _full_config_dict(raw: dict) -> dict:
     """Build a complete config dict with dataclass defaults for any missing fields."""
+    notif_raw = raw.get("notifications", {})
+    if not isinstance(notif_raw, dict):
+        notif_raw = {}
+    # Strip nested channel dicts so _build_dataclass doesn't pass them as scalars.
+    notif_base = {k: v for k, v in notif_raw.items() if k not in {"webhook", "email"}}
     config = AppConfig(
         detection=_build_dataclass(DetectionConfig, raw.get("detection", {})),
         audio=_build_dataclass(AudioConfig, raw.get("audio", {})),
@@ -70,14 +75,15 @@ def _full_config_dict(raw: dict) -> dict:
         logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
         api=_build_dataclass(ApiConfig, raw.get("api", {})),
         retention=_build_dataclass(RetentionConfig, raw.get("retention", {})),
-        notifications=_build_dataclass(NotificationsConfig, raw.get("notifications", {})),
+        notifications=_build_dataclass(NotificationsConfig, notif_base),
     )
     # Handle nested notification channel configs.
-    notif_raw = raw.get("notifications", {})
-    if "webhook" in notif_raw and isinstance(notif_raw["webhook"], dict):
-        config.notifications.webhook = _build_dataclass(WebhookChannelConfig, notif_raw["webhook"])
-    if "email" in notif_raw and isinstance(notif_raw["email"], dict):
-        config.notifications.email = _build_dataclass(EmailChannelConfig, notif_raw["email"])
+    webhook_raw = notif_raw.get("webhook", {})
+    if isinstance(webhook_raw, dict):
+        config.notifications.webhook = _build_dataclass(WebhookChannelConfig, webhook_raw)
+    email_raw = notif_raw.get("email", {})
+    if isinstance(email_raw, dict):
+        config.notifications.email = _build_dataclass(EmailChannelConfig, email_raw)
     return dataclasses.asdict(config)
 
 

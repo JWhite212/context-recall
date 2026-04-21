@@ -1739,6 +1739,9 @@ export function Settings() {
             <Field label="SMTP Port">
               <input
                 type="number"
+                min={1}
+                max={65535}
+                step={1}
                 value={form.notifications.email.smtp_port}
                 onChange={(e) =>
                   setEmailProp("smtp_port", Number(e.target.value))
@@ -1781,6 +1784,8 @@ export function Settings() {
             <Field label="Max per Day" help="Daily email limit">
               <input
                 type="number"
+                min={0}
+                step={1}
                 value={form.notifications.email.max_per_day}
                 onChange={(e) =>
                   setEmailProp("max_per_day", Number(e.target.value))

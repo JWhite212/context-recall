@@ -20,9 +20,16 @@ export function OverdueItems() {
 
   if (isLoading || isError || !data) return null;
 
-  const overdueItems: ActionItem[] = data.items.filter(
-    (item) => item.due_date && new Date(item.due_date) < new Date(),
-  );
+  const now = Date.now();
+  const overdueItems = data.items
+    .filter((item): item is ActionItem & { due_date: string } => {
+      if (!item.due_date) return false;
+      const dueAt = new Date(item.due_date).getTime();
+      return Number.isFinite(dueAt) && dueAt < now;
+    })
+    .sort(
+      (a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime(),
+    );
 
   if (overdueItems.length === 0) return null;
 
@@ -45,7 +52,7 @@ export function OverdueItems() {
               <p className="text-sm text-text-primary truncate">{item.title}</p>
               <p className="text-xs text-text-muted">
                 {item.assignee && `${item.assignee} \u00B7 `}
-                Due {formatDate(item.due_date!)}
+                Due {formatDate(item.due_date)}
               </p>
             </div>
           </button>
