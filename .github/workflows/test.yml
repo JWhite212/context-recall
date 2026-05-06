@@ -50,3 +50,7 @@ jobs:
 
       - name: Type check
         run: cd ui && npx tsc --noEmit
+
+      - name: Run UI tests
+        working-directory: ui
+        run: npm test
