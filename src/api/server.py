@@ -19,6 +19,7 @@ from src.api.events import EventBus
 from src.api.routes import calendar as calendar_routes
 from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
+from src.api.routes import diagnostics as diagnostics_routes
 from src.api.routes import export as export_routes
 from src.api.routes import meetings as meetings_routes
 from src.api.routes import models as models_routes
@@ -144,6 +145,7 @@ class ApiServer:
         app.include_router(config_routes.router, dependencies=auth_deps)
         app.include_router(recording_routes.router, dependencies=auth_deps)
         app.include_router(devices_routes.router, dependencies=auth_deps)
+        app.include_router(diagnostics_routes.router, dependencies=auth_deps)
         app.include_router(support_bundle_routes.router, dependencies=auth_deps)
         app.include_router(export_routes.router, dependencies=auth_deps)
         app.include_router(resummarise_routes.router, dependencies=auth_deps)

@@ -39,7 +39,13 @@ export function setAuthToken(token: string) {
   authToken = token;
 }
 
-/** Return the current auth token (used by WebSocket to authenticate via query param). */
+/**
+ * Return the current bearer token, or null if none is set.
+ *
+ * Used by the WebSocket as the first message after the connection opens
+ * (`{ type: "auth", token }`), and by HTTP requests as the
+ * `Authorization: Bearer <token>` header.
+ */
 export function getAuthToken(): string | null {
   return authToken;
 }
