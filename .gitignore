@@ -6,6 +6,11 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Coverage reports
+.coverage
+coverage.xml
+htmlcov/
+
 # Virtual environment
 .venv/
 

@@ -1,3 +1,20 @@
+# Continuous integration matrix for Context Recall.
+#
+# Jobs (run on push to any branch and on pull requests targeting main,
+# unless noted otherwise):
+#
+#   python-tests     macOS runner. Ruff lint plus pytest with coverage.
+#                    Uploads coverage.xml as a workflow artifact (kept
+#                    local; no external upload).
+#   typescript-check macOS runner. npm ci + tsc --noEmit.
+#   rust-check       macOS runner. cargo check + cargo clippy -D warnings.
+#   gitleaks         Ubuntu runner. Secret scanning across full history.
+#   packaging-smoke  macOS runner. PyInstaller daemon build + Tauri build
+#                    with --no-bundle. Path-filtered so it only runs when
+#                    packaging-relevant files change (macOS minutes are
+#                    scarce on free GitHub Actions). Also exposes
+#                    workflow_dispatch for manual runs.
+
 name: Test
 
 on:
@@ -5,9 +22,10 @@ on:
     branches: ['**']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
-# Least-privilege default for GITHUB_TOKEN. Both jobs only need to read
-# the repository contents; no job in this workflow writes back to GitHub.
+# Least-privilege default for GITHUB_TOKEN. Individual jobs only inherit
+# what they need; gitleaks reads PR metadata via the standard token.
 permissions:
   contents: read
 
@@ -31,8 +49,16 @@ jobs:
       - name: Lint with ruff
         run: ruff check src/ tests/
 
-      - name: Run tests
-        run: python -m pytest tests/ -v
+      - name: Run tests with coverage
+        run: python -m pytest tests/ -v --cov=src --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
 
   typescript-check:
     runs-on: macos-latest
@@ -50,3 +76,136 @@ jobs:
 
       - name: Type check
         run: cd ui && npx tsc --noEmit
+
+  rust-check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ui/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('ui/src-tauri/Cargo.lock') }}
+
+      - name: cargo check
+        run: cd ui/src-tauri && cargo check
+
+      - name: cargo clippy
+        run: cd ui/src-tauri && cargo clippy -- -D warnings
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Packaging smoke test: build the PyInstaller daemon bundle, copy it
+  # into Tauri resources, and run a Tauri build without producing an
+  # installer. Path-filtered so PRs that only touch docs/UI-only code
+  # do not burn macOS minutes; runs unconditionally on direct pushes
+  # and on workflow_dispatch.
+  packaging-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect packaging-relevant changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            packaging:
+              - 'context-recall.spec'
+              - 'requirements*.txt'
+              - 'requirements*.in'
+              - 'requirements*.lock'
+              - 'scripts/build_daemon.sh'
+              - 'Makefile'
+              - 'ui/src-tauri/**'
+              - 'src/**'
+
+      - name: Decide whether to run
+        id: should-run
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ steps.changes.outputs.packaging }}" != "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping: no packaging-relevant changes."
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.should-run.outputs.run == 'true'
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install Python dependencies
+        if: steps.should-run.outputs.run == 'true'
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+          .venv/bin/pip install pyinstaller
+
+      - name: Build daemon (PyInstaller)
+        if: steps.should-run.outputs.run == 'true'
+        run: bash scripts/build_daemon.sh
+
+      - name: Copy daemon into Tauri resources
+        if: steps.should-run.outputs.run == 'true'
+        run: make copy-daemon
+
+      - uses: actions/setup-node@v4
+        if: steps.should-run.outputs.run == 'true'
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Rust toolchain
+        if: steps.should-run.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        if: steps.should-run.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ui/src-tauri/target
+          key: ${{ runner.os }}-cargo-pkg-${{ hashFiles('ui/src-tauri/Cargo.lock') }}
+
+      - name: Install UI dependencies
+        if: steps.should-run.outputs.run == 'true'
+        run: cd ui && npm ci
+
+      - name: cargo check (Tauri)
+        if: steps.should-run.outputs.run == 'true'
+        run: cd ui/src-tauri && cargo check
+
+      # Tauri v2 supports `--no-bundle` to skip installer/DMG creation
+      # while still compiling the Rust binary and bundling the frontend.
+      - name: Tauri build (no bundle)
+        if: steps.should-run.outputs.run == 'true'
+        run: cd ui && npx tauri build --no-bundle
