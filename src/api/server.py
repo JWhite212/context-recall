@@ -29,6 +29,7 @@ from src.api.routes import resummarise as resummarise_routes
 from src.api.routes import search as search_routes
 from src.api.routes import speakers as speakers_routes
 from src.api.routes import status as status_routes
+from src.api.routes import support_bundle as support_bundle_routes
 from src.api.routes import templates as templates_routes
 from src.api.websocket import ConnectionManager
 from src.db.database import Database
@@ -145,6 +146,7 @@ class ApiServer:
         app.include_router(recording_routes.router, dependencies=auth_deps)
         app.include_router(devices_routes.router, dependencies=auth_deps)
         app.include_router(diagnostics_routes.router, dependencies=auth_deps)
+        app.include_router(support_bundle_routes.router, dependencies=auth_deps)
         app.include_router(export_routes.router, dependencies=auth_deps)
         app.include_router(resummarise_routes.router, dependencies=auth_deps)
         app.include_router(reprocess_routes.router, dependencies=auth_deps)
