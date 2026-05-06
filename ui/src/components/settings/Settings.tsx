@@ -10,7 +10,9 @@ import {
   getTemplates,
   saveTemplate,
   deleteTemplate,
+  getAuthToken,
 } from "../../lib/api";
+import { API_BASE } from "../../lib/constants";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
 import { useTheme } from "../../hooks/useTheme";
@@ -38,6 +40,7 @@ const SETTINGS_SECTIONS = [
   { id: "logging", label: "Logging" },
   { id: "templates", label: "Templates" },
   { id: "daemon", label: "Daemon" },
+  { id: "system", label: "System" },
   { id: "about", label: "About" },
 ] as const;
 
@@ -289,6 +292,208 @@ function UpdateChecker() {
       )}
       {error && <p className="text-xs text-status-error mt-1">{error}</p>}
     </div>
+  );
+}
+
+/**
+ * Try to save the bundle via the optional Tauri dialog/fs plugins.
+ * Returns "saved" on success, "cancelled" if the user dismissed the
+ * dialog, or "unavailable" when the plugins aren't bundled.
+ */
+async function trySaveViaDialog(
+  filename: string,
+  blob: Blob,
+): Promise<"saved" | "cancelled" | "unavailable"> {
+  try {
+    // Use an indirect specifier so the bundler doesn't fail at build time
+    // when the optional plugin isn't installed.
+    const dialogModule = "@tauri-apps/plugin-dialog";
+    const fsModule = "@tauri-apps/plugin-fs";
+    const dialog = (await import(/* @vite-ignore */ dialogModule)) as {
+      save: (opts: {
+        defaultPath?: string;
+        filters?: { name: string; extensions: string[] }[];
+      }) => Promise<string | null>;
+    };
+    const target = await dialog.save({
+      defaultPath: filename,
+      filters: [{ name: "Zip Archive", extensions: ["zip"] }],
+    });
+    if (!target) return "cancelled";
+    const fs = (await import(/* @vite-ignore */ fsModule)) as {
+      writeFile: (path: string, data: Uint8Array) => Promise<void>;
+    };
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    await fs.writeFile(target, bytes);
+    return "saved";
+  } catch {
+    return "unavailable";
+  }
+}
+
+function SystemSection({ id }: { id?: string }) {
+  const toast = useToast();
+  const [startAtLogin, setStartAtLogin] = useState(false);
+  const [loadingToggle, setLoadingToggle] = useState(true);
+  const [savingToggle, setSavingToggle] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    invoke<boolean>("is_start_at_login_enabled")
+      .then((value) => setStartAtLogin(value))
+      .catch(() => {
+        // Non-fatal: leave the toggle off if we can't read state.
+      })
+      .finally(() => setLoadingToggle(false));
+  }, []);
+
+  async function handleToggle(next: boolean) {
+    setSavingToggle(true);
+    try {
+      await invoke("set_start_at_login", { enabled: next });
+      setStartAtLogin(next);
+      toast.success(
+        next
+          ? "Start at login enabled. Sign out and back in to activate."
+          : "Start at login disabled.",
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Failed to update start at login preference.",
+      );
+    } finally {
+      setSavingToggle(false);
+    }
+  }
+
+  async function openLogs() {
+    try {
+      await invoke("open_logs_dir");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to open logs folder.",
+      );
+    }
+  }
+
+  async function openData() {
+    try {
+      await invoke("open_app_support_dir");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to open data folder.",
+      );
+    }
+  }
+
+  async function downloadBlob(filename: string, blob: Blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      // Defer revocation so the browser has a chance to start the download.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  }
+
+  async function exportSupportBundle() {
+    setExporting(true);
+    try {
+      const headers: Record<string, string> = {};
+      const token = getAuthToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      let res: Response;
+      try {
+        res = await fetch(`${API_BASE}/api/support_bundle`, { headers });
+      } catch {
+        toast.warning("Support bundle endpoint not yet available.");
+        return;
+      }
+
+      if (res.status === 404) {
+        toast.warning("Support bundle endpoint not yet available.");
+        return;
+      }
+      if (!res.ok) {
+        toast.error(`Failed to export support bundle: ${res.status}`);
+        return;
+      }
+
+      const blob = await res.blob();
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `context-recall-support-${stamp}.zip`;
+
+      // Try the dialog plugin first (if bundled); otherwise fall back to a
+      // blob URL download. The dialog plugin is loaded lazily so this code
+      // still works when the plugin isn't installed.
+      const saved = await trySaveViaDialog(filename, blob);
+      if (saved === "saved") {
+        toast.success("Support bundle saved.");
+      } else if (saved === "cancelled") {
+        return;
+      } else {
+        await downloadBlob(filename, blob);
+        toast.success("Support bundle downloaded.");
+      }
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const BTN =
+    "text-xs px-3 py-1 rounded-lg bg-surface border border-border text-text-secondary hover:bg-sidebar-hover transition-colors disabled:opacity-50";
+
+  return (
+    <Section
+      id={id}
+      title="System"
+      description="Login behaviour, folder shortcuts, and diagnostics"
+    >
+      <Field
+        label="Start Context Recall at login"
+        help="Writes a LaunchAgent. Sign out and back in to activate."
+      >
+        <Toggle
+          checked={startAtLogin}
+          onChange={(v) => {
+            if (loadingToggle || savingToggle) return;
+            void handleToggle(v);
+          }}
+          label="Start Context Recall at login"
+        />
+      </Field>
+      <Field label="Logs folder" help="View daemon and app log files">
+        <button type="button" onClick={openLogs} className={BTN}>
+          Open logs folder
+        </button>
+      </Field>
+      <Field label="Data folder" help="Application Support directory">
+        <button type="button" onClick={openData} className={BTN}>
+          Open data folder
+        </button>
+      </Field>
+      <Field
+        label="Support bundle"
+        help="Anonymised diagnostics zip for support"
+      >
+        <button
+          type="button"
+          onClick={exportSupportBundle}
+          disabled={exporting}
+          className={BTN}
+        >
+          {exporting ? "Exporting..." : "Export support bundle"}
+        </button>
+      </Field>
+    </Section>
   );
 }
 
@@ -1834,6 +2039,9 @@ export function Settings() {
         />
         <InfoRow label="API" value="http://127.0.0.1:9876" />
       </Section>
+
+      {/* System — login behaviour, folder shortcuts, support bundle */}
+      <SystemSection id="system" />
 
       <Section id="about" title="About">
         <InfoRow label="App" value="Context Recall" />
