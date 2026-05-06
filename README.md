@@ -696,7 +696,14 @@ python3 -m src.main           # Run daemon
 
 make test                     # Run pytest suite (31 test files)
 make lint                     # Run ruff linter
+make typecheck-python         # Run Pyright (config in pyproject.toml)
 ```
+
+`make typecheck-python` runs [Pyright](https://microsoft.github.io/pyright/)
+in `basic` mode against `src/`. The configuration lives under
+`[tool.pyright]` in `pyproject.toml`. This is currently a soft baseline:
+findings are reported but do not fail CI yet, and the gate will be
+tightened over time.
 
 ### Frontend (Desktop App)
 

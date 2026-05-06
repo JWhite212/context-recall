@@ -31,6 +31,14 @@ jobs:
       - name: Lint with ruff
         run: ruff check src/ tests/
 
+      # Soft type-check baseline. Pyright runs in `basic` mode against
+      # src/ (see [tool.pyright] in pyproject.toml). `continue-on-error`
+      # prevents existing untyped code from breaking CI; tighten this
+      # gate (drop continue-on-error, raise typeCheckingMode) over time.
+      - name: Type check with pyright
+        continue-on-error: true
+        run: pyright src
+
       - name: Run tests
         run: python -m pytest tests/ -v
 
