@@ -176,4 +176,5 @@ async def diagnostics() -> dict[str, Any]:
         "logs_dir_writable": _writable(paths.logs_dir()),
         "app_support_dir_writable": _writable(paths.app_support_dir()),
         "ffmpeg_available": shutil.which("ffmpeg") is not None,
+        "active_profile": paths.profile_name(),
     }
