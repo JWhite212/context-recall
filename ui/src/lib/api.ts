@@ -183,7 +183,7 @@ export async function resummariseMeeting(
 
 export async function reprocessMeeting(
   id: string,
-): Promise<{ meeting_id: string; title: string; status: string }> {
+): Promise<{ meeting_id: string; status: string }> {
   return request(`/api/meetings/${encodeURIComponent(id)}/reprocess`, {
     method: "POST",
   });

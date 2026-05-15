@@ -531,9 +531,14 @@ export function MeetingDetail() {
   const reprocess = useMutation({
     mutationFn: () => reprocessMeeting(id!),
     onSuccess: () => {
+      // The endpoint returns 202 immediately and the pipeline runs in
+      // the background. The pipeline.complete WebSocket event triggers
+      // an automatic refetch via the appShell handler, so we don't need
+      // to invalidate here — but do it anyway to update status to
+      // 'transcribing' immediately so the user sees progress.
       queryClient.invalidateQueries({ queryKey: ["meeting", id] });
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
-      toast.success("Meeting reprocessed successfully.");
+      toast.info("Reprocessing started — this may take a few minutes.");
     },
     onError: (err) => {
       queryClient.invalidateQueries({ queryKey: ["meeting", id] });

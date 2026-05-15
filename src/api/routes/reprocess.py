@@ -3,7 +3,13 @@ Reprocess endpoint.
 
 POST /api/meetings/{id}/reprocess — re-run the full pipeline (transcribe →
 summarise) on a meeting's existing audio file. Useful for retrying after
-transient errors (e.g. missing ffmpeg, OOM, timeout).
+transient errors (e.g. missing ffmpeg, OOM, timeout) or recovering meetings
+left in 'transcribing' by a daemon crash.
+
+The endpoint submits the pipeline as a background asyncio task and returns
+202 Accepted immediately so long meetings can't time out the HTTP request
+(Bug C4). The UI relies on the existing pipeline.* WebSocket events plus
+react-query invalidation on `pipeline.complete` to surface the result.
 """
 
 import asyncio
@@ -14,6 +20,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from src.summariser import Summariser
 from src.templates import TemplateManager
@@ -30,12 +37,29 @@ logger = logging.getLogger("contextrecall.api.reprocess")
 router = APIRouter()
 
 _repo = None
+_event_bus = None
 _in_flight: set[str] = set()
 
 
-def init(repo) -> None:
-    global _repo
+def init(repo, event_bus=None) -> None:
+    global _repo, _event_bus
     _repo = repo
+    _event_bus = event_bus
+
+
+def _emit(event: dict) -> None:
+    """Push an event to subscribers if the event bus is wired up.
+
+    Mirrors the orchestrator's pipeline.* event shapes so the UI's
+    existing handlers (appStore, usePipelineSync) can drive the result
+    UI without knowing the work came from a reprocess vs auto-detect.
+    """
+    if _event_bus is None:
+        return
+    try:
+        _event_bus.emit(event)
+    except Exception:
+        logger.warning("Failed to emit reprocess event", exc_info=True)
 
 
 def _load_config_sections() -> tuple[TranscriptionConfig, SummarisationConfig]:
@@ -66,7 +90,6 @@ def _run_pipeline(
             f"The audio may be silent or corrupted."
         )
 
-    # Load default template.
     template = None
     try:
         tm = TemplateManager()
@@ -81,6 +104,82 @@ def _run_pipeline(
         "transcript": transcript,
         "summary": summary,
     }
+
+
+async def _do_reprocess(
+    meeting_id: str,
+    audio_path: Path,
+    started_at: float,
+    trans_config: TranscriptionConfig,
+    summ_config: SummarisationConfig,
+) -> None:
+    """Background task: run the pipeline, update the DB, emit events.
+
+    Runs after the HTTP request has already returned 202. Any failure is
+    captured and reflected on the meeting row as status='error' — there
+    is nowhere to raise to since the client connection is gone.
+    """
+    try:
+        _emit({"type": "pipeline.stage", "meeting_id": meeting_id, "stage": "transcribing"})
+        try:
+            result = await asyncio.to_thread(_run_pipeline, audio_path, trans_config, summ_config)
+        except Exception as e:
+            logger.error("Reprocessing failed for %s: %s", meeting_id, e, exc_info=True)
+            try:
+                await _repo.update_meeting(meeting_id, status="error")
+            except Exception:
+                logger.error(
+                    "Failed to mark meeting %s as error after pipeline failure",
+                    meeting_id,
+                    exc_info=True,
+                )
+            _emit(
+                {
+                    "type": "pipeline.error",
+                    "meeting_id": meeting_id,
+                    "stage": "transcribing",
+                    "error": str(e),
+                }
+            )
+            return
+
+        transcript = result["transcript"]
+        summary = result["summary"]
+
+        try:
+            await _repo.update_meeting(
+                meeting_id,
+                title=summary.title,
+                ended_at=started_at + transcript.duration_seconds,
+                duration_seconds=transcript.duration_seconds,
+                status="complete",
+                transcript_json=json.dumps(transcript.to_dict()),
+                summary_markdown=summary.raw_markdown,
+                tags=summary.tags,
+                language=transcript.language,
+                word_count=transcript.word_count,
+            )
+            await _repo.update_fts(meeting_id)
+        except Exception:
+            logger.error(
+                "Failed to persist reprocess result for %s",
+                meeting_id,
+                exc_info=True,
+            )
+            _emit(
+                {
+                    "type": "pipeline.error",
+                    "meeting_id": meeting_id,
+                    "stage": "writing",
+                    "error": "Failed to persist reprocess result.",
+                }
+            )
+            return
+
+        logger.info("Reprocessing complete: '%s'", summary.title)
+        _emit({"type": "pipeline.complete", "meeting_id": meeting_id, "title": summary.title})
+    finally:
+        _in_flight.discard(meeting_id)
 
 
 @router.post(
@@ -107,49 +206,18 @@ async def reprocess_meeting(meeting_id: str):
     audio_path = Path(meeting.audio_path)
     trans_config, summ_config = _load_config_sections()
 
-    logger.info("Reprocessing meeting %s from %s", meeting_id, audio_path)
+    logger.info("Reprocessing meeting %s from %s (background)", meeting_id, audio_path)
 
-    # Mark as transcribing.
+    # Mark as transcribing synchronously so an immediately-following GET
+    # of the meeting returns the in-flight status.
     await _repo.update_meeting(meeting_id, status="transcribing")
 
     _in_flight.add(meeting_id)
-    try:
-        result = await asyncio.to_thread(
-            _run_pipeline,
-            audio_path,
-            trans_config,
-            summ_config,
-        )
-    except Exception as e:
-        logger.error("Reprocessing failed: %s", e, exc_info=True)
-        await _repo.update_meeting(meeting_id, status="error")
-        raise HTTPException(
-            status_code=500,
-            detail="Reprocessing failed. Check daemon logs for details.",
-        )
-    finally:
-        _in_flight.discard(meeting_id)
-
-    transcript = result["transcript"]
-    summary = result["summary"]
-
-    await _repo.update_meeting(
-        meeting_id,
-        title=summary.title,
-        ended_at=meeting.started_at + transcript.duration_seconds,
-        duration_seconds=transcript.duration_seconds,
-        status="complete",
-        transcript_json=json.dumps(transcript.to_dict()),
-        summary_markdown=summary.raw_markdown,
-        tags=summary.tags,
-        language=transcript.language,
-        word_count=transcript.word_count,
+    asyncio.create_task(
+        _do_reprocess(meeting_id, audio_path, meeting.started_at, trans_config, summ_config)
     )
-    await _repo.update_fts(meeting_id)
 
-    logger.info("Reprocessing complete: '%s'", summary.title)
-    return {
-        "meeting_id": meeting_id,
-        "title": summary.title,
-        "status": "complete",
-    }
+    return JSONResponse(
+        status_code=202,
+        content={"meeting_id": meeting_id, "status": "accepted"},
+    )
