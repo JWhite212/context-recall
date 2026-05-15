@@ -142,6 +142,16 @@ a = Analysis(
         "tkinter",
         "matplotlib",
         "pytest",
+        "pytest_cov",
+        # coverage gets pulled in transitively by numba's coverage_support
+        # module (numba is a transitive of pyannote). numba imports coverage
+        # in a try/except ImportError, so excluding it lets numba fall back
+        # to coverage_available=False. Including it instead is actively
+        # harmful: coverage.__init__ runs realpath(getcwd()) at import
+        # time, which raises FileNotFoundError if the daemon's spawn cwd
+        # is unresolvable — exactly what happens when the Tauri shell
+        # spawns the bundled sidecar.
+        "coverage",
         "ruff",
         "pip",
         "setuptools",
