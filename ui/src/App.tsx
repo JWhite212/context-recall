@@ -111,31 +111,35 @@ function AppShell() {
       <main id="main-content" className="flex-1 overflow-y-auto" role="main">
         {/* Titlebar drag region over the content area */}
         <div data-tauri-drag-region className="h-[52px] shrink-0" />
-        <ErrorBoundary>
-          <Outlet />
-        </ErrorBoundary>
+        <Outlet />
       </main>
       <NotificationPanel />
     </div>
   );
 }
 
+// Each top-level route is wrapped in its own ErrorBoundary so a crash on one
+// screen doesn't blank the rest of the app.
+function boundary(node: React.ReactNode) {
+  return <ErrorBoundary>{node}</ErrorBoundary>;
+}
+
 const router = createBrowserRouter(
   createRoutesFromElements(
     <Route element={<AppShell />}>
-      <Route path="/" element={<Dashboard />} />
-      <Route path="/live" element={<LiveView />} />
-      <Route path="/meetings" element={<MeetingList />} />
-      <Route path="/meetings/:id" element={<MeetingDetail />} />
-      <Route path="/calendar" element={<CalendarView />} />
-      <Route path="/action-items" element={<ActionItemList />} />
-      <Route path="/insights" element={<InsightsPanel />} />
-      <Route path="/prep" element={<PrepBriefing />} />
-      <Route path="/prep/:meetingId" element={<PrepBriefing />} />
-      <Route path="/series" element={<SeriesList />} />
-      <Route path="/series/:id" element={<SeriesDetail />} />
-      <Route path="/search" element={<Search />} />
-      <Route path="/settings" element={<Settings />} />
+      <Route path="/" element={boundary(<Dashboard />)} />
+      <Route path="/live" element={boundary(<LiveView />)} />
+      <Route path="/meetings" element={boundary(<MeetingList />)} />
+      <Route path="/meetings/:id" element={boundary(<MeetingDetail />)} />
+      <Route path="/calendar" element={boundary(<CalendarView />)} />
+      <Route path="/action-items" element={boundary(<ActionItemList />)} />
+      <Route path="/insights" element={boundary(<InsightsPanel />)} />
+      <Route path="/prep" element={boundary(<PrepBriefing />)} />
+      <Route path="/prep/:meetingId" element={boundary(<PrepBriefing />)} />
+      <Route path="/series" element={boundary(<SeriesList />)} />
+      <Route path="/series/:id" element={boundary(<SeriesDetail />)} />
+      <Route path="/search" element={boundary(<Search />)} />
+      <Route path="/settings" element={boundary(<Settings />)} />
     </Route>,
   ),
 );

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getDevices, getModels, downloadModel, getConfig } from "../../lib/api";
 import { Spinner } from "../common/Spinner";
@@ -30,6 +30,12 @@ const STEPS = [
 export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [stepIdx, setStepIdx] = useState(0);
   const step = STEPS[stepIdx];
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
+
+  // Move keyboard / screen-reader focus to the step heading whenever the step changes.
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [stepIdx]);
 
   const next = () => {
     if (stepIdx < STEPS.length - 1) setStepIdx(stepIdx + 1);
@@ -73,12 +79,16 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
         {/* Step content */}
         <div className="min-h-[320px]" aria-live="polite">
-          {step === "Welcome" && <WelcomeStep />}
-          {step === "Audio Setup" && <AudioStep />}
-          {step === "Transcription" && <TranscriptionStep />}
-          {step === "Summarisation" && <SummarisationStep />}
-          {step === "Output" && <OutputStep />}
-          {step === "Done" && <DoneStep />}
+          {step === "Welcome" && <WelcomeStep headingRef={headingRef} />}
+          {step === "Audio Setup" && <AudioStep headingRef={headingRef} />}
+          {step === "Transcription" && (
+            <TranscriptionStep headingRef={headingRef} />
+          )}
+          {step === "Summarisation" && (
+            <SummarisationStep headingRef={headingRef} />
+          )}
+          {step === "Output" && <OutputStep headingRef={headingRef} />}
+          {step === "Done" && <DoneStep headingRef={headingRef} />}
         </div>
 
         {/* Navigation */}
@@ -115,7 +125,11 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 /*  Step components                                                    */
 /* ------------------------------------------------------------------ */
 
-function WelcomeStep() {
+type StepProps = {
+  headingRef: React.RefObject<HTMLHeadingElement | null>;
+};
+
+function WelcomeStep({ headingRef }: StepProps) {
   return (
     <div className="text-center">
       <div className="text-4xl mb-4">
@@ -129,6 +143,7 @@ function WelcomeStep() {
           strokeLinecap="round"
           strokeLinejoin="round"
           className="text-accent mx-auto"
+          aria-hidden="true"
         >
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
           <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
@@ -136,7 +151,11 @@ function WelcomeStep() {
           <line x1="8" y1="23" x2="16" y2="23" />
         </svg>
       </div>
-      <h1 className="text-2xl font-semibold text-text-primary mb-3">
+      <h1
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-2xl font-semibold text-text-primary mb-3 focus:outline-none"
+      >
         Welcome to Context Recall
       </h1>
       <p className="text-sm text-text-secondary max-w-md mx-auto leading-relaxed">
@@ -150,7 +169,7 @@ function WelcomeStep() {
   );
 }
 
-function AudioStep() {
+function AudioStep({ headingRef }: StepProps) {
   const { data, isLoading } = useQuery({
     queryKey: ["devices"],
     queryFn: getDevices,
@@ -163,7 +182,11 @@ function AudioStep() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary mb-2">
+      <h2
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-xl font-semibold text-text-primary mb-2 focus:outline-none"
+      >
         Audio Setup
       </h2>
       <p className="text-sm text-text-secondary mb-6">
@@ -222,7 +245,7 @@ function AudioStep() {
   );
 }
 
-function TranscriptionStep() {
+function TranscriptionStep({ headingRef }: StepProps) {
   const { data, isLoading } = useQuery({
     queryKey: ["models"],
     queryFn: getModels,
@@ -242,7 +265,11 @@ function TranscriptionStep() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary mb-2">
+      <h2
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-xl font-semibold text-text-primary mb-2 focus:outline-none"
+      >
         Transcription Model
       </h2>
       <p className="text-sm text-text-secondary mb-6">
@@ -290,7 +317,7 @@ function TranscriptionStep() {
   );
 }
 
-function SummarisationStep() {
+function SummarisationStep({ headingRef }: StepProps) {
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: getConfig,
@@ -300,7 +327,11 @@ function SummarisationStep() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary mb-2">
+      <h2
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-xl font-semibold text-text-primary mb-2 focus:outline-none"
+      >
         Summarisation
       </h2>
       <p className="text-sm text-text-secondary mb-6">
@@ -350,7 +381,7 @@ function SummarisationStep() {
   );
 }
 
-function OutputStep() {
+function OutputStep({ headingRef }: StepProps) {
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: getConfig,
@@ -358,7 +389,13 @@ function OutputStep() {
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-text-primary mb-2">Output</h2>
+      <h2
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-xl font-semibold text-text-primary mb-2 focus:outline-none"
+      >
+        Output
+      </h2>
       <p className="text-sm text-text-secondary mb-6">
         Summaries can be written to an Obsidian vault and/or Notion. Configure
         these in Settings.
@@ -399,7 +436,7 @@ function OutputStep() {
   );
 }
 
-function DoneStep() {
+function DoneStep({ headingRef }: StepProps) {
   return (
     <div className="text-center">
       <div className="mb-4">
@@ -413,12 +450,17 @@ function DoneStep() {
           strokeLinecap="round"
           strokeLinejoin="round"
           className="text-status-idle mx-auto"
+          aria-hidden="true"
         >
           <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
           <polyline points="22 4 12 14.01 9 11.01" />
         </svg>
       </div>
-      <h2 className="text-2xl font-semibold text-text-primary mb-3">
+      <h2
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-2xl font-semibold text-text-primary mb-3 focus:outline-none"
+      >
         You're all set
       </h2>
       <p className="text-sm text-text-secondary max-w-sm mx-auto">

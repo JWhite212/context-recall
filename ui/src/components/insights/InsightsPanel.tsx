@@ -10,6 +10,7 @@ import { StatCard } from "./StatCard";
 import { TrendChart } from "./TrendChart";
 import { PeopleRanking } from "./PeopleRanking";
 import { HealthAlerts } from "./HealthAlerts";
+import { Skeleton, SkeletonLine } from "../common/Skeleton";
 
 type Period = "daily" | "weekly" | "monthly";
 
@@ -22,19 +23,19 @@ const PERIOD_OPTIONS: { value: Period; label: string }[] = [
 export function InsightsPanel() {
   const [period, setPeriod] = useState<Period>("weekly");
 
-  const { data: summary } = useQuery({
+  const { data: summary, isLoading: summaryLoading } = useQuery({
     queryKey: ["analytics-summary", period],
     queryFn: () => getAnalyticsSummary(period),
   });
-  const { data: trends } = useQuery({
+  const { data: trends, isLoading: trendsLoading } = useQuery({
     queryKey: ["analytics-trends", period],
     queryFn: () => getAnalyticsTrends(period, 8),
   });
-  const { data: people } = useQuery({
+  const { data: people, isLoading: peopleLoading } = useQuery({
     queryKey: ["analytics-people"],
     queryFn: () => getAnalyticsPeople(10),
   });
-  const { data: health } = useQuery({
+  const { data: health, isLoading: healthLoading } = useQuery({
     queryKey: ["analytics-health"],
     queryFn: getAnalyticsHealth,
   });
@@ -68,32 +69,72 @@ export function InsightsPanel() {
       </div>
 
       {/* Stat grid */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
-        <StatCard label="Meetings" value={current?.total_meetings ?? 0} />
-        <StatCard
-          label="Hours"
-          value={current ? Math.round(current.total_duration_minutes / 60) : 0}
-        />
-        <StatCard label="Load" value={health?.load_score.label ?? "N/A"} />
-        <StatCard label="Attendees" value={current?.unique_attendees ?? 0} />
-      </div>
+      {summaryLoading || healthLoading ? (
+        <div
+          className="grid grid-cols-4 gap-3 mb-6"
+          role="status"
+          aria-label="Loading insights summary"
+        >
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div
+              key={i}
+              className="p-4 bg-surface-raised border border-border rounded-lg"
+              aria-hidden="true"
+            >
+              <SkeletonLine width="w-16" />
+              <Skeleton className="h-6 w-20 mt-2" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-4 gap-3 mb-6">
+          <StatCard label="Meetings" value={current?.total_meetings ?? 0} />
+          <StatCard
+            label="Hours"
+            value={
+              current ? Math.round(current.total_duration_minutes / 60) : 0
+            }
+          />
+          <StatCard label="Load" value={health?.load_score.label ?? "N/A"} />
+          <StatCard label="Attendees" value={current?.unique_attendees ?? 0} />
+        </div>
+      )}
 
       {/* Trend + People row */}
-      <div className="grid grid-cols-2 gap-3 mb-6">
-        {trends && trends.trends.length > 0 ? (
-          <TrendChart
-            periods={trends.trends}
-            metricKey="total_meetings"
-            label="Meetings per Week"
-          />
-        ) : (
-          <div className="p-4 bg-surface-raised border border-border rounded-lg">
-            <p className="text-xs text-text-muted">Meetings per Week</p>
-            <p className="text-sm text-text-muted mt-2">No trend data yet</p>
-          </div>
-        )}
-        <PeopleRanking people={people?.people ?? []} />
-      </div>
+      {trendsLoading || peopleLoading ? (
+        <div
+          className="grid grid-cols-2 gap-3 mb-6"
+          role="status"
+          aria-label="Loading trend and people data"
+        >
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div
+              key={i}
+              className="p-4 bg-surface-raised border border-border rounded-lg"
+              aria-hidden="true"
+            >
+              <SkeletonLine width="w-32" />
+              <Skeleton className="h-24 w-full mt-3" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 mb-6">
+          {trends && trends.trends.length > 0 ? (
+            <TrendChart
+              periods={trends.trends}
+              metricKey="total_meetings"
+              label="Meetings per Week"
+            />
+          ) : (
+            <div className="p-4 bg-surface-raised border border-border rounded-lg">
+              <p className="text-xs text-text-muted">Meetings per Week</p>
+              <p className="text-sm text-text-muted mt-2">No trend data yet</p>
+            </div>
+          )}
+          <PeopleRanking people={people?.people ?? []} />
+        </div>
+      )}
 
       {/* Health alerts */}
       {health && (
