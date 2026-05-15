@@ -19,7 +19,10 @@ Anthropic API, or "ollama" for a local Ollama model.
 
 import json as _json
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TypeVar
 from urllib.parse import urlparse
 
 import anthropic
@@ -40,6 +43,52 @@ Claude's 200k context window and most Ollama models' windows.
 """
 
 _ALLOWED_OLLAMA_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_ALLOWED_OLLAMA_PORTS = {11434, 80, 443}
+
+# Default retry policy for outbound LLM calls.
+_RETRYABLE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    anthropic.APIConnectionError,
+    anthropic.RateLimitError,
+    httpx.TimeoutException,
+    httpx.ConnectError,
+)
+
+T = TypeVar("T")
+
+
+def _with_retries(
+    call: Callable[[], T],
+    *,
+    max_attempts: int = 3,
+    backoff: float = 2.0,
+    retryable: tuple[type[BaseException], ...] = _RETRYABLE_EXCEPTIONS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> T:
+    """Invoke *call* with bounded retries on transient failures.
+
+    Sleeps ``backoff * (2 ** attempt)`` seconds between attempts.
+    Only the exception types in *retryable* are retried; everything
+    else (including ``AuthenticationError`` and non-429 4xx) re-raises
+    immediately on the first failure.
+    """
+    for attempt in range(max_attempts):
+        try:
+            return call()
+        except retryable as exc:
+            if attempt == max_attempts - 1:
+                raise
+            delay = backoff * (2**attempt)
+            logger.warning(
+                "Transient LLM call failure (%s); retrying in %.1fs (attempt %d/%d).",
+                type(exc).__name__,
+                delay,
+                attempt + 2,
+                max_attempts,
+            )
+            sleep(delay)
+    # The loop body always returns or raises; this is unreachable but
+    # gives static type-checkers a definite terminator.
+    raise RuntimeError("unreachable: _with_retries exited the retry loop")
 
 
 @dataclass
@@ -95,9 +144,15 @@ class Summariser:
     def __init__(self, config: SummarisationConfig):
         self._config = config
         self._claude_client: anthropic.Anthropic | None = None
+        # Fail fast on a misconfigured Ollama URL rather than waiting
+        # until the first summarisation request. The check is cheap
+        # and runs even for claude-only configs (which keep the
+        # default localhost URL).
+        if self._config.ollama_base_url:
+            self._validate_ollama_url(self._config.ollama_base_url)
 
     def _get_claude_client(self) -> anthropic.Anthropic:
-        """Lazy-initialise the Anthropic client."""
+        """Lazy-initialise the Anthropic client with explicit timeouts."""
         if self._claude_client is None:
             if not self._config.anthropic_api_key:
                 raise ValueError(
@@ -105,7 +160,15 @@ class Summariser:
                     "under summarisation.anthropic_api_key, or switch to "
                     "backend: ollama."
                 )
-            self._claude_client = anthropic.Anthropic(api_key=self._config.anthropic_api_key)
+            self._claude_client = anthropic.Anthropic(
+                api_key=self._config.anthropic_api_key,
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=600.0,
+                    write=30.0,
+                    pool=10.0,
+                ),
+            )
         return self._claude_client
 
     def _prepare_transcript(self, transcript: Transcript) -> tuple[str, int]:
@@ -154,16 +217,24 @@ class Summariser:
         )
 
     def _claude_chat(self, system: str, user: str) -> str:
-        """Send a single chat request to Claude and return the text."""
+        """Send a single chat request to Claude and return the text.
+
+        Wrapped in ``_with_retries`` for transient connection / rate-limit
+        / timeout failures. ``AuthenticationError`` and non-429 4xx errors
+        re-raise on the first attempt.
+        """
         client = self._get_claude_client()
 
-        try:
-            message = client.messages.create(
+        def _do_call() -> anthropic.types.Message:
+            return client.messages.create(
                 model=self._config.model,
                 max_tokens=self._config.max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )
+
+        try:
+            message = _with_retries(_do_call)
         except anthropic.RateLimitError:
             logger.error(
                 "Anthropic rate limit exceeded. The transcript has been "
@@ -304,7 +375,15 @@ class Summariser:
 
     @staticmethod
     def _validate_ollama_url(base_url: str) -> str:
-        """Validate that the Ollama URL points to a local service."""
+        """Validate that the Ollama URL points to a local service.
+
+        Enforces three rules to defend against SSRF and accidental
+        misconfiguration:
+          - scheme must be http or https
+          - hostname must be in ``_ALLOWED_OLLAMA_HOSTS``
+          - port (explicit or scheme-default) must be in
+            ``_ALLOWED_OLLAMA_PORTS``
+        """
         parsed = urlparse(base_url)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(f"Ollama URL scheme must be http or https, got: {parsed.scheme!r}")
@@ -314,6 +393,17 @@ class Summariser:
                 f"got: {parsed.hostname!r}. If you need a remote "
                 f"Ollama instance, add its hostname to "
                 f"_ALLOWED_OLLAMA_HOSTS in summariser.py."
+            )
+        # Derive port: explicit > scheme default.
+        port = parsed.port
+        if port is None:
+            port = 443 if parsed.scheme == "https" else 80
+        if port not in _ALLOWED_OLLAMA_PORTS:
+            raise ValueError(
+                f"Ollama URL port must be one of "
+                f"{sorted(_ALLOWED_OLLAMA_PORTS)}, got: {port}. "
+                f"If you need a different port, add it to "
+                f"_ALLOWED_OLLAMA_PORTS in summariser.py."
             )
         return base_url.rstrip("/")
 
@@ -359,7 +449,8 @@ class Summariser:
 
         Uses Ollama's streaming API so that tokens arrive incrementally,
         keeping the HTTP connection alive and avoiding read-timeouts on
-        long generations.
+        long generations. Wrapped in ``_with_retries`` for transient
+        connection / timeout failures.
         """
         timeout = float(self._config.ollama_timeout)
         payload = {
@@ -374,13 +465,21 @@ class Summariser:
                 "num_ctx": self._config.ollama_num_ctx,
             },
         }
+        # Per-stage timeouts: short connect, generous read for long
+        # generations, modest write, modest pool acquisition.
+        http_timeout = httpx.Timeout(
+            connect=10.0,
+            read=timeout,
+            write=30.0,
+            pool=10.0,
+        )
 
-        try:
+        def _do_call() -> str:
             with httpx.stream(
                 "POST",
                 f"{base_url}/api/chat",
                 json=payload,
-                timeout=httpx.Timeout(timeout, connect=30.0),
+                timeout=http_timeout,
             ) as response:
                 response.raise_for_status()
                 content_parts: list[str] = []
@@ -393,6 +492,9 @@ class Summariser:
                     if data.get("done", False):
                         break
                 return "".join(content_parts)
+
+        try:
+            return _with_retries(_do_call)
         except httpx.ConnectError:
             raise ConnectionError(
                 f"Could not connect to Ollama at {base_url}. "
