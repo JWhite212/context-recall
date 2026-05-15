@@ -1,5 +1,6 @@
 """Tests for src/main.py - Context Recall orchestrator with heavy mocking."""
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1180,3 +1181,259 @@ def test_setup_logging_installs_rotating_file_handler(
         for h in saved_handlers:
             root.addHandler(h)
         root.setLevel(saved_level)
+
+
+# ---------------------------------------------------------------------------
+# Unit 20: orchestrator robustness — bounded future queue + signal-safe
+# shutdown handler.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_end_caps_concurrent_pipelines(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """If 16 in-flight processing futures have already accumulated (e.g.
+    the pipeline thread is stuck on a network call), _on_meeting_end must
+    refuse to submit another job rather than grow the queue unboundedly.
+
+    It must also emit pipeline.error so the saturation surfaces in the UI
+    instead of as a slow memory leak."""
+    from concurrent.futures import Future
+
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._live_transcriber = None
+    app._capture.stop = MagicMock(return_value=Path("/tmp/audio.wav"))
+
+    # Pretend 16 prior pipelines are still in flight (none done).
+    stuck_futures = []
+    for _ in range(16):
+        fut = Future()
+        # Future is "pending" — done() returns False.
+        stuck_futures.append(fut)
+    app._processing_futures = stuck_futures
+
+    app._emit = MagicMock()
+
+    event = MeetingEvent(
+        state=MeetingState.IDLE,
+        started_at=1000.0,
+        ended_at=1060.0,
+        duration_seconds=60.0,
+    )
+
+    # Make stop() return a path that "exists" so we get past the early-out.
+    with patch.object(Path, "exists", return_value=True):
+        with pytest.raises(RuntimeError, match="too many concurrent pipelines"):
+            app._on_meeting_end(event)
+
+    error_calls = [c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.error"]
+    assert error_calls, "saturation must be surfaced as pipeline.error before raising"
+    assert "too many concurrent pipelines" in error_calls[0].kwargs.get("error", "")
+
+    # Cleanup: cancel the stub futures so executor shutdown is clean.
+    for f in stuck_futures:
+        f.cancel()
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_end_prunes_done_futures_under_cap(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Completed futures must be pruned before the cap is enforced, so a
+    long-running daemon with many historical (done) jobs doesn't trip the
+    saturation guard on its 17th meeting of the session."""
+    from concurrent.futures import Future
+
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._live_transcriber = None
+    app._capture.stop = MagicMock(return_value=Path("/tmp/audio.wav"))
+
+    # 16 already-completed futures — they must be pruned, not block submit.
+    done_futures = []
+    for _ in range(16):
+        fut = Future()
+        fut.set_result(None)
+        done_futures.append(fut)
+    app._processing_futures = done_futures
+
+    event = MeetingEvent(
+        state=MeetingState.IDLE,
+        started_at=1000.0,
+        ended_at=1060.0,
+        duration_seconds=60.0,
+    )
+
+    # Make the submitted pipeline a no-op so the test doesn't actually run it.
+    app._process_audio = MagicMock()
+
+    with patch.object(Path, "exists", return_value=True):
+        # Must not raise — prior futures are all done() == True and pruned.
+        app._on_meeting_end(event)
+
+    # A new future was queued and the done ones were pruned.
+    assert len(app._processing_futures) == 1
+    assert not app._processing_futures[0].done() or app._process_audio.called
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_shutdown_watcher_stops_detector_and_capture(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """The shutdown watcher thread must call detector.stop() when the event
+    fires, and also call capture.stop(blocking=False) if a recording is in
+    flight. This is the safe alternative to running heavyweight cleanup
+    inside a signal handler from arbitrary threads."""
+    import threading as _threading
+
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture.is_recording = True
+    app._capture.stop = MagicMock()
+    app._detector.stop = MagicMock()
+
+    t = _threading.Thread(target=app._shutdown_watcher, daemon=True)
+    t.start()
+
+    # Pre-condition: nothing called yet.
+    assert not app._detector.stop.called
+
+    app._shutdown_event.set()
+    t.join(timeout=2.0)
+
+    assert not t.is_alive(), "shutdown watcher must exit once event is set"
+    app._detector.stop.assert_called_once()
+    app._capture.stop.assert_called_once_with(blocking=False)
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_shutdown_watcher_skips_capture_stop_when_not_recording(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Counterpart: if no recording is in flight, the watcher must not
+    touch capture.stop() — calling stop() on an idle capture would error."""
+    import threading as _threading
+
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture.is_recording = False
+    app._capture.stop = MagicMock()
+    app._detector.stop = MagicMock()
+
+    t = _threading.Thread(target=app._shutdown_watcher, daemon=True)
+    t.start()
+    app._shutdown_event.set()
+    t.join(timeout=2.0)
+
+    app._detector.stop.assert_called_once()
+    app._capture.stop.assert_not_called()
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_signal_handlers_are_idempotent(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """First SIGINT/SIGTERM delivery sets the shutdown event; second
+    delivery restores the previous handler and re-raises the signal so
+    the process can be killed even if graceful shutdown is wedged."""
+    import signal as _signal
+
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+
+    # Capture the handler that gets installed without actually swapping out
+    # the real signal handlers on the test process.
+    installed: dict[int, object] = {}
+
+    def fake_signal(signum, handler):
+        installed[signum] = handler
+        return _signal.SIG_DFL  # pretend there was no prior handler
+
+    with patch("src.main.signal.signal", side_effect=fake_signal):
+        app._install_signal_handlers()
+
+    assert _signal.SIGINT in installed
+    assert _signal.SIGTERM in installed
+
+    handler = installed[_signal.SIGINT]
+    assert callable(handler)
+
+    # First invocation: sets the event, does not re-raise.
+    handler(_signal.SIGINT, None)
+    assert app._shutdown_event.is_set()
+    assert app._signal_handler_invocations == 1
+
+    # Second invocation: restores the previous handler and sends the signal
+    # to the process. Patch os.kill so the test process doesn't actually die.
+    with patch("src.main.signal.signal", side_effect=fake_signal):
+        with patch("src.main.os.kill") as mock_kill:
+            handler(_signal.SIGINT, None)
+            mock_kill.assert_called_once_with(os.getpid(), _signal.SIGINT)
+    assert app._signal_handler_invocations == 2
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_install_signal_handlers_tolerates_non_main_thread(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """signal.signal raises ValueError off the main thread. The installer
+    must catch that so unit-test contexts (and any future background-thread
+    daemon entry) don't crash on startup."""
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+
+    with patch("src.main.signal.signal", side_effect=ValueError("not main thread")):
+        # Must not raise.
+        app._install_signal_handlers()

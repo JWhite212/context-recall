@@ -98,6 +98,14 @@ class ContextRecall:
         self._api_server = None
         self._event_bus = None
 
+        # Shutdown coordination for run_daemon. The signal handler sets the
+        # event; a watcher thread translates that into detector.stop() and
+        # capture teardown, so signal-handler code never re-enters into
+        # pipeline threads.
+        self._shutdown_event = threading.Event()
+        self._signal_handler_invocations = 0
+        self._previous_signal_handlers: dict[int, object] = {}
+
         # Live transcription (optional).
         self._live_transcriber = None
 
@@ -387,6 +395,22 @@ class ContextRecall:
 
         # Remove completed futures.
         self._processing_futures = [f for f in self._processing_futures if not f.done()]
+
+        # Cap concurrent in-flight pipelines. Past this point the executor
+        # would queue work indefinitely if the pipeline thread stalls (e.g.
+        # MLX hung, Ollama unreachable), so the daemon would silently grow
+        # an unbounded backlog of meeting jobs and the future list. Surface
+        # the saturation loudly so it shows up in the UI instead of as a
+        # memory leak.
+        if len(self._processing_futures) >= 16:
+            err = RuntimeError("too many concurrent pipelines")
+            self._emit(
+                "pipeline.error",
+                meeting_id=meeting_id,
+                stage="dispatch",
+                error=str(err),
+            )
+            raise err
 
         future = self._processing_executor.submit(
             self._process_audio,
@@ -951,6 +975,62 @@ class ContextRecall:
         # Give the server a moment to bind.
         time.sleep(0.5)
 
+    def _shutdown_watcher(self) -> None:
+        """Translate the shutdown event into detector + capture teardown.
+
+        Runs on a dedicated daemon thread so the signal handler never
+        re-enters detector or capture code from arbitrary threads while
+        the pipeline might be holding their internal locks.
+        """
+        self._shutdown_event.wait()
+        logger.info("Shutdown watcher: tearing down detector and capture.")
+        try:
+            self._detector.stop()
+        except Exception:
+            logger.exception("Shutdown watcher: detector.stop() failed")
+        try:
+            if self._capture.is_recording:
+                self._capture.stop(blocking=False)
+        except Exception:
+            logger.exception("Shutdown watcher: capture.stop() failed")
+
+    def _install_signal_handlers(self) -> None:
+        """Install idempotent SIGINT/SIGTERM handlers.
+
+        First delivery sets `_shutdown_event` so the watcher thread can run
+        graceful teardown on the main path. Second delivery restores the
+        original handler so the next signal terminates the process via the
+        platform default — preventing a hung shutdown from being un-killable.
+        """
+
+        def _handler(signum, frame):
+            self._signal_handler_invocations += 1
+            logger.info(
+                "Shutdown signal %s received (delivery #%d).",
+                signum,
+                self._signal_handler_invocations,
+            )
+            if self._signal_handler_invocations == 1:
+                self._shutdown_event.set()
+                return
+            # Second delivery: restore default behaviour and re-raise so the
+            # process exits even if graceful shutdown is wedged.
+            previous = self._previous_signal_handlers.get(signum, signal.SIG_DFL)
+            try:
+                signal.signal(signum, previous)
+            except (ValueError, OSError):
+                signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                self._previous_signal_handlers[sig] = signal.signal(sig, _handler)
+            except (ValueError, OSError) as e:
+                # signal.signal may fail when not on the main thread (e.g.
+                # in some test contexts). Log and continue — the watcher
+                # thread can still be driven from inside the process.
+                logger.warning("Could not install handler for signal %s: %s", sig, e)
+
     def run_daemon(self) -> None:
         """
         Run as a background daemon, polling for Teams meetings.
@@ -961,14 +1041,18 @@ class ContextRecall:
         # Start the API server for UI communication.
         self._start_api_server()
 
-        # Handle graceful shutdown — signal handler only sets a flag;
-        # heavy cleanup runs on the main thread after the poll loop exits.
-        def shutdown_handler(signum, frame):
-            logger.info("Shutdown signal received.")
-            self._detector.stop()
-
-        signal.signal(signal.SIGINT, shutdown_handler)
-        signal.signal(signal.SIGTERM, shutdown_handler)
+        # Wire shutdown plumbing: a tiny daemon thread waits on the event
+        # flag and drives the actual teardown, so the signal handler stays
+        # tiny and signal-safe.
+        self._shutdown_event.clear()
+        self._signal_handler_invocations = 0
+        watcher = threading.Thread(
+            target=self._shutdown_watcher,
+            name="shutdown-watcher",
+            daemon=True,
+        )
+        watcher.start()
+        self._install_signal_handlers()
 
         # Blocking poll loop — exits when stop() is called.
         self._detector.run()
