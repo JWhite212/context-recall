@@ -33,10 +33,19 @@ import type {
 import { API_BASE } from "./constants";
 
 let authToken: string | null = null;
+const tokenSubscribers = new Set<(token: string | null) => void>();
 
 /** Set the auth token (read from ~/Library/Application Support/Context Recall/auth_token by the Tauri side). */
-export function setAuthToken(token: string) {
+export function setAuthToken(token: string | null) {
+  if (authToken === token) return;
   authToken = token;
+  for (const sub of tokenSubscribers) {
+    try {
+      sub(token);
+    } catch {
+      // Subscribers must not throw; swallow to keep the rest notified.
+    }
+  }
 }
 
 /**
@@ -48,6 +57,20 @@ export function setAuthToken(token: string) {
  */
 export function getAuthToken(): string | null {
   return authToken;
+}
+
+/**
+ * Subscribe to auth-token changes. The subscriber fires whenever
+ * `setAuthToken` is called with a value different from the previous token
+ * (including null on logout/rotation). Returns an unsubscribe function.
+ */
+export function subscribeAuthToken(
+  subscriber: (token: string | null) => void,
+): () => void {
+  tokenSubscribers.add(subscriber);
+  return () => {
+    tokenSubscribers.delete(subscriber);
+  };
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
