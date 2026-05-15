@@ -158,14 +158,15 @@ class MeetingRepository:
         """Insert a new meeting and return its ID."""
         meeting_id = str(uuid.uuid4())
         now = time.time()
-        await self._db.conn.execute(
-            """
-            INSERT INTO meetings (id, started_at, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (meeting_id, started_at, status, now, now),
-        )
-        await self._db.conn.commit()
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                """
+                INSERT INTO meetings (id, started_at, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (meeting_id, started_at, status, now, now),
+            )
+            await self._db.conn.commit()
         logger.debug("Created meeting %s", meeting_id)
         return meeting_id
 
@@ -192,17 +193,36 @@ class MeetingRepository:
         set_clause = ", ".join(f"{k} = ?" for k, _ in pairs)
         values = [v for _, v in pairs] + [meeting_id]
 
-        await self._db.conn.execute(
-            f"UPDATE meetings SET {set_clause} WHERE id = ?",
-            values,
-        )
-        await self._db.conn.commit()
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                f"UPDATE meetings SET {set_clause} WHERE id = ?",
+                values,
+            )
+            await self._db.conn.commit()
 
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None:
         """Fetch a single meeting by ID."""
         cursor = await self._db.conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,))
         row = await cursor.fetchone()
         return MeetingRecord.from_row(row) if row else None
+
+    async def get_meetings_by_ids(self, ids: list[str]) -> list[MeetingRecord]:
+        """Batched fetch for many meetings in a single SELECT.
+
+        Preserves the requested order via a dict-lookup so callers don't
+        have to re-sort. Returns an empty list when ``ids`` is empty.
+        Missing ids are simply omitted from the result.
+        """
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        cursor = await self._db.conn.execute(
+            f"SELECT * FROM meetings WHERE id IN ({placeholders})",
+            ids,
+        )
+        rows = await cursor.fetchall()
+        by_id = {row["id"]: MeetingRecord.from_row(row) for row in rows}
+        return [by_id[mid] for mid in ids if mid in by_id]
 
     _SORT_MAP = {
         "started_at:desc": "started_at DESC",
@@ -289,9 +309,10 @@ class MeetingRepository:
 
     async def delete_meeting(self, meeting_id: str) -> bool:
         """Delete a meeting. Returns True if a row was deleted."""
-        cursor = await self._db.conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
-        await self._db.conn.commit()
-        return cursor.rowcount > 0
+        async with self._db.write_lock:
+            cursor = await self._db.conn.execute("DELETE FROM meetings WHERE id = ?", (meeting_id,))
+            await self._db.conn.commit()
+            return cursor.rowcount > 0
 
     async def count_meetings(self, status: str | None = None, tag: str | None = None) -> int:
         """Count total meetings, optionally filtered by status and/or tag."""
@@ -371,19 +392,20 @@ class MeetingRepository:
                 (cutoff,),
             )
             rows = await cursor.fetchall()
-            for row in rows:
-                path = row["audio_path"]
-                if path and os.path.isfile(path):
-                    try:
-                        os.remove(path)
-                        audio_deleted += 1
-                    except OSError:
-                        pass
-                await self._db.conn.execute(
-                    "UPDATE meetings SET audio_path = NULL, updated_at = ? WHERE id = ?",
-                    (now, row["id"]),
-                )
-            await self._db.conn.commit()
+            async with self._db.write_lock:
+                for row in rows:
+                    path = row["audio_path"]
+                    if path and os.path.isfile(path):
+                        try:
+                            os.remove(path)
+                            audio_deleted += 1
+                        except OSError:
+                            pass
+                    await self._db.conn.execute(
+                        "UPDATE meetings SET audio_path = NULL, updated_at = ? WHERE id = ?",
+                        (now, row["id"]),
+                    )
+                await self._db.conn.commit()
             if audio_deleted:
                 logger.info("Retention: deleted %d audio file(s)", audio_deleted)
 
@@ -402,8 +424,9 @@ class MeetingRepository:
                         os.remove(path)
                     except OSError:
                         pass
-            await self._db.conn.execute("DELETE FROM meetings WHERE started_at < ?", (cutoff,))
-            await self._db.conn.commit()
+            async with self._db.write_lock:
+                await self._db.conn.execute("DELETE FROM meetings WHERE started_at < ?", (cutoff,))
+                await self._db.conn.commit()
             records_deleted = len(rows)
             if records_deleted:
                 logger.info("Retention: deleted %d meeting record(s)", records_deleted)
@@ -419,13 +442,14 @@ class MeetingRepository:
         this, such rows stay 'transcribing' forever and the UI surfaces no
         recovery action for them.
         """
-        cursor = await self._db.conn.execute(
-            "UPDATE meetings SET status = 'error', updated_at = ? "
-            "WHERE status IN ('recording', 'transcribing')",
-            (time.time(),),
-        )
-        await self._db.conn.commit()
-        return cursor.rowcount
+        async with self._db.write_lock:
+            cursor = await self._db.conn.execute(
+                "UPDATE meetings SET status = 'error', updated_at = ? "
+                "WHERE status IN ('recording', 'transcribing')",
+                (time.time(),),
+            )
+            await self._db.conn.commit()
+            return cursor.rowcount
 
     async def update_fts(self, meeting_id: str) -> None:
         """Update the FTS index for a meeting after transcript/summary changes."""
@@ -444,19 +468,21 @@ class MeetingRepository:
                     pass
 
             # Delete old FTS entry then insert new one.
-            await self._db.conn.execute(
-                "DELETE FROM meetings_fts WHERE rowid = (SELECT rowid FROM meetings WHERE id = ?)",
-                (meeting_id,),
-            )
-            await self._db.conn.execute(
-                """
-                INSERT INTO meetings_fts (rowid, title, summary_markdown, transcript_text)
-                SELECT rowid, title, summary_markdown, ?
-                FROM meetings WHERE id = ?
-                """,
-                (transcript_text, meeting_id),
-            )
-            await self._db.conn.commit()
+            async with self._db.write_lock:
+                await self._db.conn.execute(
+                    "DELETE FROM meetings_fts WHERE rowid = "
+                    "(SELECT rowid FROM meetings WHERE id = ?)",
+                    (meeting_id,),
+                )
+                await self._db.conn.execute(
+                    """
+                    INSERT INTO meetings_fts (rowid, title, summary_markdown, transcript_text)
+                    SELECT rowid, title, summary_markdown, ?
+                    FROM meetings WHERE id = ?
+                    """,
+                    (transcript_text, meeting_id),
+                )
+                await self._db.conn.commit()
         except Exception as e:
             if "no such table" in str(e).lower():
                 logger.debug("FTS update skipped (FTS5 not available)")
@@ -479,46 +505,47 @@ class MeetingRepository:
         """
         from src.db.database import _vec_available
 
-        # Delete from vec0 first (before deleting from segment_embeddings).
-        if _vec_available:
-            try:
-                await self._db.conn.execute(
-                    "DELETE FROM segment_embeddings_vec WHERE rowid IN "
-                    "(SELECT id FROM segment_embeddings WHERE meeting_id = ?)",
-                    (meeting_id,),
-                )
-            except Exception:
-                pass
-
-        # Delete existing embeddings for this meeting.
-        await self._db.conn.execute(
-            "DELETE FROM segment_embeddings WHERE meeting_id = ?", (meeting_id,)
-        )
-        for emb in embeddings:
-            embedding_blob = struct.pack(f"{len(emb['embedding'])}f", *emb["embedding"])
-            cursor = await self._db.conn.execute(
-                """INSERT INTO segment_embeddings
-                   (meeting_id, segment_index, embedding, text, speaker, start_time)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    meeting_id,
-                    emb["segment_index"],
-                    embedding_blob,
-                    emb["text"],
-                    emb.get("speaker", ""),
-                    emb["start_time"],
-                ),
-            )
+        async with self._db.write_lock:
+            # Delete from vec0 first (before deleting from segment_embeddings).
             if _vec_available:
-                rowid = cursor.lastrowid
                 try:
                     await self._db.conn.execute(
-                        "INSERT INTO segment_embeddings_vec(rowid, embedding) VALUES (?, ?)",
-                        (rowid, embedding_blob),
+                        "DELETE FROM segment_embeddings_vec WHERE rowid IN "
+                        "(SELECT id FROM segment_embeddings WHERE meeting_id = ?)",
+                        (meeting_id,),
                     )
-                except Exception as e:
-                    logger.warning("Failed to insert embedding into vec0: %s", e)
-        await self._db.conn.commit()
+                except Exception:
+                    pass
+
+            # Delete existing embeddings for this meeting.
+            await self._db.conn.execute(
+                "DELETE FROM segment_embeddings WHERE meeting_id = ?", (meeting_id,)
+            )
+            for emb in embeddings:
+                embedding_blob = struct.pack(f"{len(emb['embedding'])}f", *emb["embedding"])
+                cursor = await self._db.conn.execute(
+                    """INSERT INTO segment_embeddings
+                       (meeting_id, segment_index, embedding, text, speaker, start_time)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        meeting_id,
+                        emb["segment_index"],
+                        embedding_blob,
+                        emb["text"],
+                        emb.get("speaker", ""),
+                        emb["start_time"],
+                    ),
+                )
+                if _vec_available:
+                    rowid = cursor.lastrowid
+                    try:
+                        await self._db.conn.execute(
+                            "INSERT INTO segment_embeddings_vec(rowid, embedding) VALUES (?, ?)",
+                            (rowid, embedding_blob),
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to insert embedding into vec0: %s", e)
+            await self._db.conn.commit()
 
     async def get_all_embeddings(self) -> list[dict]:
         """Retrieve all embeddings for search.
@@ -785,16 +812,18 @@ class MeetingRepository:
         Also updates the transcript_json to replace speaker labels.
         """
         now = time.time()
-        await self._db.conn.execute(
-            """INSERT INTO speaker_mappings
-               (meeting_id, speaker_id, display_name, source, created_at)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET
-                   display_name = excluded.display_name,
-                   source = excluded.source,
-                   created_at = excluded.created_at""",
-            (meeting_id, speaker_id, display_name, source, now),
-        )
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                """INSERT INTO speaker_mappings
+                   (meeting_id, speaker_id, display_name, source, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET
+                       display_name = excluded.display_name,
+                       source = excluded.source,
+                       created_at = excluded.created_at""",
+                (meeting_id, speaker_id, display_name, source, now),
+            )
+            await self._db.conn.commit()
 
         # Update transcript_json to replace speaker labels.
         meeting = await self.get_meeting(meeting_id)
