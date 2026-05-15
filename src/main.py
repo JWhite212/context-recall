@@ -22,6 +22,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import logging.handlers
 import os
 import shutil
 import signal
@@ -127,7 +128,13 @@ class ContextRecall:
         self._detector.on_meeting_end = self._on_meeting_end
 
     def _setup_logging(self) -> None:
-        """Configure logging to both console and file."""
+        """Configure logging to both console and file.
+
+        Uses RotatingFileHandler so a long-running daemon doesn't grow an
+        unbounded log file: at 10 MiB the active log rolls over and up to
+        5 historical copies (.1 ... .5) are kept before older ones are
+        discarded.
+        """
         log_level = getattr(logging, self._config.logging.level.upper(), logging.INFO)
         log_file = self._config.logging.log_file
 
@@ -139,7 +146,12 @@ class ContextRecall:
             datefmt="%Y-%m-%d %H:%M:%S",
             handlers=[
                 logging.StreamHandler(sys.stdout),
-                logging.FileHandler(log_file, encoding="utf-8"),
+                logging.handlers.RotatingFileHandler(
+                    log_file,
+                    maxBytes=10 * 1024 * 1024,
+                    backupCount=5,
+                    encoding="utf-8",
+                ),
             ],
         )
 

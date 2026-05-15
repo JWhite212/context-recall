@@ -489,6 +489,7 @@ name = "context-recall"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "plist",
  "serde",
  "serde_json",
  "tauri",

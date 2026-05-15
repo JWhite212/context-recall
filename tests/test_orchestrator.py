@@ -1121,3 +1121,62 @@ def test_on_meeting_start_emits_preflight_warnings_but_continues(
     app._capture.start.assert_called_once()
     warning_events = [e for e in emitted if e["type"] == "pipeline.warning"]
     assert any("Microphone permission" in str(w.get("message", "")) for w in warning_events)
+
+
+# ---------------------------------------------------------------------------
+# Unit 18: _setup_logging must use RotatingFileHandler so a long-running
+# daemon doesn't grow an unbounded log file.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_setup_logging_installs_rotating_file_handler(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """The daemon runs under launchd for weeks at a time. A plain FileHandler
+    would grow forever; _setup_logging must wire a RotatingFileHandler with
+    a bounded size and a small backup count.
+    """
+    import logging
+    import logging.handlers
+
+    from src.main import ContextRecall
+
+    # Reset the root logger so the assertion sees this run's handlers, not
+    # a previous test's pile-up (basicConfig is a no-op if root already has
+    # handlers).
+    root = logging.getLogger()
+    saved_handlers = root.handlers[:]
+    saved_level = root.level
+    for h in saved_handlers:
+        root.removeHandler(h)
+    try:
+        ContextRecall(config_path=tmp_config)
+
+        rotating = [
+            h
+            for h in logging.getLogger().handlers
+            if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert rotating, (
+            "Expected a RotatingFileHandler on the root logger after "
+            "_setup_logging — otherwise daemon logs grow without bound."
+        )
+        handler = rotating[0]
+        assert handler.maxBytes == 10 * 1024 * 1024
+        assert handler.backupCount == 5
+    finally:
+        # Restore the root logger so other tests see the harness's normal
+        # configuration.
+        for h in logging.getLogger().handlers[:]:
+            logging.getLogger().removeHandler(h)
+        for h in saved_handlers:
+            root.addHandler(h)
+        root.setLevel(saved_level)

@@ -29,46 +29,96 @@ fn resolve_daemon_binary(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Render the LaunchAgent plist XML for the given daemon binary path.
-fn render_launch_agent_plist(daemon_path: &str, home: &Path) -> String {
+/// Build the LaunchAgent plist as a structured dictionary.
+///
+/// Using `plist::Dictionary` instead of `format!()`-style XML guarantees
+/// that any character in the daemon path, home dir, or future fields is
+/// XML-escaped properly — so a username containing `<`, `>`, `&`, `"`,
+/// or `'` can't corrupt the plist and break auto-start.
+fn build_launch_agent_plist(daemon_path: &str, home: &Path) -> plist::Value {
     let logs_dir = home
         .join("Library")
         .join("Logs")
         .join("Context Recall");
     let stdout_path = logs_dir.join("launchagent.out.log");
     let stderr_path = logs_dir.join("launchagent.err.log");
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>Label</key>
-    <string>{label}</string>
-    <key>ProgramArguments</key>
-    <array>
-      <string>{daemon}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <dict>
-      <key>SuccessfulExit</key>
-      <false/>
-    </dict>
-    <key>ThrottleInterval</key>
-    <integer>30</integer>
-    <key>StandardOutPath</key>
-    <string>{stdout}</string>
-    <key>StandardErrorPath</key>
-    <string>{stderr}</string>
-  </dict>
-</plist>
-"#,
-        label = LAUNCH_AGENT_LABEL,
-        daemon = daemon_path,
-        stdout = stdout_path.display(),
-        stderr = stderr_path.display(),
-    )
+
+    let mut keep_alive = plist::Dictionary::new();
+    keep_alive.insert(
+        "SuccessfulExit".into(),
+        plist::Value::Boolean(false),
+    );
+
+    // Inherit a stable PATH under launchd so pgrep/lsof/osascript resolve.
+    // launchd does NOT inherit the user's shell PATH, so without this the
+    // daemon's platform-detection helpers can silently fail.
+    let mut environment = plist::Dictionary::new();
+    environment.insert(
+        "PATH".into(),
+        plist::Value::String("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+    );
+
+    let mut dict = plist::Dictionary::new();
+    dict.insert("Label".into(), plist::Value::String(LAUNCH_AGENT_LABEL.into()));
+    dict.insert(
+        "ProgramArguments".into(),
+        plist::Value::Array(vec![plist::Value::String(daemon_path.into())]),
+    );
+    dict.insert("RunAtLoad".into(), plist::Value::Boolean(true));
+    dict.insert("KeepAlive".into(), plist::Value::Dictionary(keep_alive));
+    dict.insert("ThrottleInterval".into(), plist::Value::Integer(30.into()));
+    dict.insert(
+        "StandardOutPath".into(),
+        plist::Value::String(stdout_path.display().to_string()),
+    );
+    dict.insert(
+        "StandardErrorPath".into(),
+        plist::Value::String(stderr_path.display().to_string()),
+    );
+    dict.insert(
+        "EnvironmentVariables".into(),
+        plist::Value::Dictionary(environment),
+    );
+
+    plist::Value::Dictionary(dict)
+}
+
+/// Atomically write the LaunchAgent plist to `path`.
+///
+/// Writes to a sibling `.tmp` file then renames into place, so an app
+/// crash mid-write can't leave a corrupt half-written plist that breaks
+/// auto-start on next login.
+fn write_launch_agent_plist(path: &Path, daemon_path: &str, home: &Path) -> Result<(), String> {
+    let value = build_launch_agent_plist(daemon_path, home);
+
+    let tmp_path = match path.file_name() {
+        Some(name) => {
+            let mut tmp_name = name.to_os_string();
+            tmp_name.push(".tmp");
+            path.with_file_name(tmp_name)
+        }
+        None => return Err(format!("Invalid plist path: {}", path.display())),
+    };
+
+    {
+        let tmp_file = fs::File::create(&tmp_path).map_err(|e| {
+            format!("Failed to create {}: {}", tmp_path.display(), e)
+        })?;
+        plist::to_writer_xml(tmp_file, &value).map_err(|e| {
+            // Clean up the partial temp file on serialisation failure.
+            let _ = fs::remove_file(&tmp_path);
+            format!("Failed to serialize plist: {e}")
+        })?;
+    }
+
+    fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp_path);
+        format!(
+            "Failed to atomically install plist at {}: {}",
+            path.display(),
+            e
+        )
+    })
 }
 
 /// Return whether the LaunchAgent plist currently exists.
@@ -109,11 +159,8 @@ fn set_start_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), String
 
     let daemon = resolve_daemon_binary(&app)?;
     let home = dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?;
-    let contents = render_launch_agent_plist(&daemon.display().to_string(), &home);
 
-    fs::write(&path, contents)
-        .map_err(|e| format!("Failed to write plist {}: {}", path.display(), e))?;
-    Ok(())
+    write_launch_agent_plist(&path, &daemon.display().to_string(), &home)
 }
 
 /// Read the shared auth token so the frontend can authenticate with the API.
