@@ -1,5 +1,6 @@
 """Tests for src/main.py - Context Recall orchestrator with heavy mocking."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -72,6 +73,73 @@ def _make_summary():
         title="Test Meeting",
         tags=["test"],
     )
+
+
+@pytest.fixture
+def app_with_mocked_api(tmp_config):
+    """ContextRecall instance with a wired-up mock API server.
+
+    Bug X6: most orchestrator tests construct ContextRecall without an
+    _api_server, which short-circuits _persist_audio and _db_update to
+    no-ops. Status-transition correctness (which calls write 'transcribing'
+    vs 'complete' vs 'error') and silent DB write drops (Bug C3) are
+    therefore invisible to the suite — C3 specifically wasn't catchable
+    until tests were written for it.
+
+    This fixture wires:
+      - app._api_server: a MagicMock with repo + a non-closed loop, so
+        _db_update doesn't bail out at the "no api_server" gate.
+      - app._persist_audio: stubbed to a deterministic meeting_id, so
+        tests don't have to mock asyncio.run_coroutine_threadsafe.
+      - app._db_update: replaced with a MagicMock spy so every status
+        write is introspectable.
+    """
+    from src.main import ContextRecall
+
+    patches = [
+        patch("src.main.AudioCapture"),
+        patch("src.main.TeamsDetector"),
+        patch("src.main.Transcriber"),
+        patch("src.main.Summariser"),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        app = ContextRecall(config_path=tmp_config)
+
+        mock_repo = MagicMock()
+        mock_loop = MagicMock()
+        mock_loop.is_closed.return_value = False
+        mock_server = MagicMock()
+        mock_server.repo = mock_repo
+        mock_server.loop = mock_loop
+        mock_server.db = MagicMock()
+        app._api_server = mock_server
+
+        # _persist_audio is exercised in its own dedicated tests; here we
+        # want the focus on what comes after — what _db_update is called
+        # with as the pipeline progresses.
+        app._persist_audio = MagicMock(return_value=(Path("/tmp/audio.wav"), "test-meeting-id"))
+        app._db_update = MagicMock()
+
+        # Suppress post-processing: _post_process_async is a coroutine the
+        # mocked loop never awaits, which produces a RuntimeWarning at gc
+        # time. None of the X6 tests are about post-processing behaviour.
+        app._run_post_processing = MagicMock()
+
+        yield app
+    finally:
+        for p in patches:
+            p.stop()
+
+
+def _statuses_written(app) -> list[str]:
+    """Return every status= value passed to _db_update, in call order."""
+    return [
+        call.kwargs.get("status")
+        for call in app._db_update.call_args_list
+        if "status" in call.kwargs
+    ]
 
 
 @patch("src.main.Summariser")
@@ -572,6 +640,119 @@ def test_api_start_recording_no_warning_emitted_on_clean_start(
         c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.warning"
     ]
     assert not warning_calls, f"clean start must not emit pipeline.warning; got: {warning_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Bug X6: status-transition coverage using the shared mocked-API fixture.
+# These tests exercise the _db_update path that the legacy tests above
+# short-circuit by leaving _api_server unset. Pre-X6, a regression that
+# stopped writing status='error' on a failure (or wrote it on the happy
+# path) would slip through the suite — these tests close that gap.
+# ---------------------------------------------------------------------------
+
+
+def test_happy_path_writes_status_complete(app_with_mocked_api, audio_file):
+    """Full pipeline must write status='complete' (with transcript_json
+    and summary_markdown) and must not write status='error'."""
+    app = app_with_mocked_api
+    app._transcriber.transcribe.return_value = _make_transcript()
+    app._summariser.summarise.return_value = _make_summary()
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    statuses = _statuses_written(app)
+    assert "complete" in statuses, f"happy path must mark meeting 'complete'; got {statuses}"
+    assert "error" not in statuses, f"happy path must not mark meeting 'error'; got {statuses}"
+
+    complete_calls = [
+        call for call in app._db_update.call_args_list if call.kwargs.get("status") == "complete"
+    ]
+    assert any("transcript_json" in c.kwargs for c in complete_calls), (
+        "complete write must persist the transcript_json"
+    )
+    assert any("summary_markdown" in c.kwargs for c in complete_calls), (
+        "complete write must persist the summary_markdown"
+    )
+
+
+def test_transcription_failure_writes_status_error(app_with_mocked_api, audio_file):
+    """Transcriber raises → meeting row must be moved to status='error'.
+    Previously test_transcription_failure_does_not_crash_pipeline only
+    asserted no-crash; it did not verify the row was actually marked
+    errored on the way out."""
+    app = app_with_mocked_api
+    app._transcriber.transcribe.side_effect = RuntimeError("MLX exploded")
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    statuses = _statuses_written(app)
+    assert "error" in statuses, f"transcription failure must mark meeting 'error'; got {statuses}"
+    assert "complete" not in statuses, (
+        f"transcription failure must not mark meeting 'complete'; got {statuses}"
+    )
+
+
+def test_summarisation_failure_writes_status_error(app_with_mocked_api, audio_file):
+    """Summariser raises → meeting row must be moved to status='error'.
+    Previously test_summarisation_failure_does_not_crash_pipeline only
+    asserted no-crash; the row could silently stay in 'transcribing'
+    forever if the orchestrator stopped calling _db_update."""
+    app = app_with_mocked_api
+    app._transcriber.transcribe.return_value = _make_transcript()
+    app._summariser.summarise.side_effect = RuntimeError("Ollama timeout")
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    statuses = _statuses_written(app)
+    assert "error" in statuses, f"summarisation failure must mark meeting 'error'; got {statuses}"
+    assert "complete" not in statuses, (
+        f"summarisation failure must not mark meeting 'complete'; got {statuses}"
+    )
+
+
+def test_empty_transcript_writes_status_error_via_api_path(app_with_mocked_api, audio_file):
+    """An empty transcript (no segments) must mark the row 'error'. This
+    is the API-path counterpart of test_empty_transcript_still_marks_meeting_errored
+    above — exercised through the fixture so the failure mode would be
+    caught even if _db_update wiring changed."""
+    app = app_with_mocked_api
+    app._transcriber.transcribe.return_value = Transcript(
+        segments=[], language="en", language_probability=0.0, duration_seconds=0.0
+    )
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    statuses = _statuses_written(app)
+    assert "error" in statuses
+    assert "complete" not in statuses
+    app._summariser.summarise.assert_not_called()
+
+
+def test_short_transcript_writes_status_complete_via_api_path(app_with_mocked_api, audio_file):
+    """Short-but-non-empty transcript (Bug B1) must mark 'complete' and
+    persist transcript_json — and must NOT call the summariser. This
+    locks in the B1 contract on the API path."""
+    app = app_with_mocked_api
+    app._transcriber.transcribe.return_value = Transcript(
+        segments=[TranscriptSegment(start=0.0, end=2.0, text="hi bye")],
+        language="en",
+        language_probability=0.99,
+        duration_seconds=2.0,
+    )
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    statuses = _statuses_written(app)
+    assert "complete" in statuses
+    assert "error" not in statuses
+
+    complete_calls = [
+        call for call in app._db_update.call_args_list if call.kwargs.get("status") == "complete"
+    ]
+    assert any("transcript_json" in c.kwargs for c in complete_calls)
+    # Summarisation must be skipped for short transcripts so Ollama doesn't
+    # generate garbage from 2 words.
+    app._summariser.summarise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
