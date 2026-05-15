@@ -45,12 +45,36 @@ def _patch_auth():
     auth_mod._auth_token = original
 
 
-@pytest.fixture(autouse=True)
-def _reset_in_flight():
-    """Each test starts with a clean _in_flight set."""
-    reprocess_routes._in_flight.clear()
-    yield
-    reprocess_routes._in_flight.clear()
+class _InFlightTracker:
+    """Stand-in for the DB-backed reprocess_jobs table used by tests.
+
+    The endpoint persists in-flight state via repo.add_reprocess_job /
+    is_reprocess_in_flight / complete_reprocess_job. Tests need a small
+    helper to mirror that shape without spinning up a real DB.
+    """
+
+    def __init__(self) -> None:
+        self._set: set[str] = set()
+
+    def install(self, repo) -> None:
+        async def _add(mid: str) -> None:
+            self._set.add(mid)
+
+        async def _complete(mid: str) -> None:
+            self._set.discard(mid)
+
+        async def _is_in_flight(mid: str) -> bool:
+            return mid in self._set
+
+        repo.add_reprocess_job = AsyncMock(side_effect=_add)
+        repo.complete_reprocess_job = AsyncMock(side_effect=_complete)
+        repo.is_reprocess_in_flight = AsyncMock(side_effect=_is_in_flight)
+
+    def __contains__(self, item: str) -> bool:
+        return item in self._set
+
+    def add(self, mid: str) -> None:
+        self._set.add(mid)
 
 
 def _make_meeting(meeting_id="m1", audio_path="/tmp/x.wav"):
@@ -59,6 +83,21 @@ def _make_meeting(meeting_id="m1", audio_path="/tmp/x.wav"):
     m.audio_path = audio_path
     m.started_at = 1000.0
     return m
+
+
+def _make_repo(meeting=None):
+    """Create a MagicMock repo with the reprocess_jobs methods wired up."""
+    repo = MagicMock()
+    if meeting is not None:
+        repo.get_meeting = AsyncMock(return_value=meeting)
+    else:
+        repo.get_meeting = AsyncMock(return_value=None)
+    repo.update_meeting = AsyncMock()
+    repo.update_fts = AsyncMock()
+    tracker = _InFlightTracker()
+    tracker.install(repo)
+    repo._in_flight = tracker  # convenience handle for tests
+    return repo
 
 
 def _make_transcript():
@@ -100,10 +139,7 @@ def test_reprocess_returns_202_immediately_even_for_slow_pipelines(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
-    repo.update_fts = AsyncMock()
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
 
     # Make the pipeline "slow" so the test would hang for 5s if the old
     # blocking behaviour were still in place.
@@ -139,11 +175,8 @@ def test_reprocess_409_when_already_in_flight(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
-
-    reprocess_routes._in_flight.add("m1")
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
+    repo._in_flight.add("m1")
 
     app = _make_app(repo)
     with TestClient(app) as c:
@@ -152,8 +185,7 @@ def test_reprocess_409_when_already_in_flight(tmp_path):
 
 
 def test_reprocess_404_when_meeting_missing():
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=None)
+    repo = _make_repo(meeting=None)
 
     app = _make_app(repo)
     with TestClient(app) as c:
@@ -163,8 +195,7 @@ def test_reprocess_404_when_meeting_missing():
 
 def test_reprocess_400_when_no_audio_file(tmp_path):
     """Audio path on the row but the file no longer exists on disk."""
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path="/no/such/file.wav"))
+    repo = _make_repo(meeting=_make_meeting(audio_path="/no/such/file.wav"))
 
     app = _make_app(repo)
     with TestClient(app) as c:
@@ -178,10 +209,7 @@ def test_background_task_eventually_marks_meeting_complete(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
-    repo.update_fts = AsyncMock()
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
 
     app = _make_app(repo)
     with TestClient(app) as c:
@@ -198,9 +226,9 @@ def test_background_task_eventually_marks_meeting_complete(tmp_path):
 
                 # Drain pending tasks. The TestClient's event loop has already
                 # run the background task to completion by the time the request
-                # returned, but we also need _in_flight to drain.
+                # returned, but we also need the in-flight marker to drain.
                 deadline = time.monotonic() + 2.0
-                while "m1" in reprocess_routes._in_flight and time.monotonic() < deadline:
+                while "m1" in repo._in_flight and time.monotonic() < deadline:
                     time.sleep(0.05)
 
     # The endpoint marks the row 'transcribing' synchronously, then the
@@ -213,7 +241,8 @@ def test_background_task_eventually_marks_meeting_complete(tmp_path):
     assert "complete" in statuses, (
         f"expected status='complete' from background task; got status sequence {statuses}"
     )
-    assert "m1" not in reprocess_routes._in_flight, "_in_flight must be cleared on completion"
+    assert "m1" not in repo._in_flight, "in-flight marker must be cleared on completion"
+    repo.complete_reprocess_job.assert_awaited_with("m1")
 
 
 def test_background_task_marks_meeting_error_on_pipeline_failure(tmp_path):
@@ -223,9 +252,7 @@ def test_background_task_marks_meeting_error_on_pipeline_failure(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
 
     app = _make_app(repo)
     with TestClient(app) as c:
@@ -241,7 +268,7 @@ def test_background_task_marks_meeting_error_on_pipeline_failure(tmp_path):
                 assert resp.status_code == 202
 
                 deadline = time.monotonic() + 2.0
-                while "m1" in reprocess_routes._in_flight and time.monotonic() < deadline:
+                while "m1" in repo._in_flight and time.monotonic() < deadline:
                     time.sleep(0.05)
 
     statuses = [
@@ -250,7 +277,7 @@ def test_background_task_marks_meeting_error_on_pipeline_failure(tmp_path):
         if "status" in call.kwargs
     ]
     assert "error" in statuses, f"pipeline failure must mark the meeting 'error'; got {statuses}"
-    assert "m1" not in reprocess_routes._in_flight
+    assert "m1" not in repo._in_flight
 
 
 # ---------------------------------------------------------------------------
@@ -271,10 +298,7 @@ def test_short_transcript_marks_meeting_complete_not_error(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
-    repo.update_fts = AsyncMock()
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
 
     mock_transcriber = MagicMock()
     mock_transcriber.transcribe.return_value = _make_short_transcript()
@@ -290,7 +314,7 @@ def test_short_transcript_marks_meeting_complete_not_error(tmp_path):
                 assert resp.status_code == 202
 
                 deadline = time.monotonic() + 2.0
-                while "m1" in reprocess_routes._in_flight and time.monotonic() < deadline:
+                while "m1" in repo._in_flight and time.monotonic() < deadline:
                     time.sleep(0.05)
 
     statuses = [
@@ -328,10 +352,7 @@ def test_short_transcript_emits_pipeline_complete_not_error(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
-    repo.update_fts = AsyncMock()
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
 
     mock_transcriber = MagicMock()
     mock_transcriber.transcribe.return_value = _make_short_transcript()
@@ -349,7 +370,7 @@ def test_short_transcript_emits_pipeline_complete_not_error(tmp_path):
                 assert resp.status_code == 202
 
                 deadline = time.monotonic() + 2.0
-                while "m1" in reprocess_routes._in_flight and time.monotonic() < deadline:
+                while "m1" in repo._in_flight and time.monotonic() < deadline:
                     time.sleep(0.05)
 
     emitted_types = [
@@ -373,9 +394,7 @@ def test_empty_transcript_still_marks_meeting_error(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
 
     mock_transcriber = MagicMock()
     mock_transcriber.transcribe.return_value = _make_empty_transcript()
@@ -391,7 +410,7 @@ def test_empty_transcript_still_marks_meeting_error(tmp_path):
                 assert resp.status_code == 202
 
                 deadline = time.monotonic() + 2.0
-                while "m1" in reprocess_routes._in_flight and time.monotonic() < deadline:
+                while "m1" in repo._in_flight and time.monotonic() < deadline:
                     time.sleep(0.05)
 
     statuses = [
@@ -409,10 +428,7 @@ def test_background_task_emits_pipeline_complete_event(tmp_path):
     audio_file = tmp_path / "x.wav"
     audio_file.write_bytes(b"\x00" * 100)
 
-    repo = MagicMock()
-    repo.get_meeting = AsyncMock(return_value=_make_meeting(audio_path=str(audio_file)))
-    repo.update_meeting = AsyncMock()
-    repo.update_fts = AsyncMock()
+    repo = _make_repo(meeting=_make_meeting(audio_path=str(audio_file)))
 
     event_bus = MagicMock()
 
@@ -430,7 +446,7 @@ def test_background_task_emits_pipeline_complete_event(tmp_path):
                 assert resp.status_code == 202
 
                 deadline = time.monotonic() + 2.0
-                while "m1" in reprocess_routes._in_flight and time.monotonic() < deadline:
+                while "m1" in repo._in_flight and time.monotonic() < deadline:
                     time.sleep(0.05)
 
     emitted_types = [

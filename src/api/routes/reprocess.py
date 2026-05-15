@@ -38,7 +38,6 @@ router = APIRouter()
 
 _repo = None
 _event_bus = None
-_in_flight: set[str] = set()
 
 
 def init(repo, event_bus=None) -> None:
@@ -202,7 +201,14 @@ async def _do_reprocess(
         logger.info("Reprocessing complete: '%s'", title)
         _emit({"type": "pipeline.complete", "meeting_id": meeting_id, "title": title})
     finally:
-        _in_flight.discard(meeting_id)
+        try:
+            await _repo.complete_reprocess_job(meeting_id)
+        except Exception:
+            logger.warning(
+                "Failed to clear reprocess job row for %s",
+                meeting_id,
+                exc_info=True,
+            )
 
 
 @router.post(
@@ -213,7 +219,7 @@ async def reprocess_meeting(meeting_id: str):
     if not _repo:
         raise HTTPException(status_code=503, detail="Repository not available")
 
-    if meeting_id in _in_flight:
+    if await _repo.is_reprocess_in_flight(meeting_id):
         raise HTTPException(status_code=409, detail="Reprocessing already in progress")
 
     meeting = await _repo.get_meeting(meeting_id)
@@ -235,7 +241,9 @@ async def reprocess_meeting(meeting_id: str):
     # of the meeting returns the in-flight status.
     await _repo.update_meeting(meeting_id, status="transcribing")
 
-    _in_flight.add(meeting_id)
+    # Persist the in-flight marker BEFORE returning 202 so a restart
+    # between now and pipeline completion can recover this row.
+    await _repo.add_reprocess_job(meeting_id)
     asyncio.create_task(
         _do_reprocess(meeting_id, audio_path, meeting.started_at, trans_config, summ_config)
     )

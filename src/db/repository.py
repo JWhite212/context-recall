@@ -435,6 +435,85 @@ class MeetingRepository:
 
         return {"audio_deleted": audio_deleted, "records_deleted": records_deleted}
 
+    # ------------------------------------------------------------------
+    # Reprocess job tracking (v10)
+    # ------------------------------------------------------------------
+    #
+    # Reprocess jobs were previously tracked in a process-local
+    # ``set[str]`` in ``src/api/routes/reprocess.py``. That set was lost
+    # whenever the daemon restarted, so a meeting whose reprocess was
+    # interrupted stayed in ``transcribing`` forever with no UI affordance
+    # to retry. These methods persist the in-flight set to the
+    # ``reprocess_jobs`` table so startup recovery can flip stuck rows
+    # to ``error`` (see ``reset_stale_reprocess_jobs``).
+
+    async def add_reprocess_job(self, meeting_id: str) -> None:
+        """Record that a reprocess is in flight for *meeting_id*."""
+        await self._db.conn.execute(
+            """INSERT INTO reprocess_jobs (meeting_id, started_at, status)
+               VALUES (?, ?, 'in_flight')
+               ON CONFLICT(meeting_id) DO UPDATE SET
+                   started_at = excluded.started_at,
+                   status = 'in_flight'""",
+            (meeting_id, time.time()),
+        )
+        await self._db.conn.commit()
+
+    async def complete_reprocess_job(self, meeting_id: str) -> None:
+        """Clear the in-flight marker for *meeting_id*."""
+        await self._db.conn.execute(
+            "DELETE FROM reprocess_jobs WHERE meeting_id = ?", (meeting_id,)
+        )
+        await self._db.conn.commit()
+
+    async def is_reprocess_in_flight(self, meeting_id: str) -> bool:
+        """Return True iff a reprocess job is recorded as in-flight."""
+        cursor = await self._db.conn.execute(
+            "SELECT 1 FROM reprocess_jobs WHERE meeting_id = ? AND status = 'in_flight'",
+            (meeting_id,),
+        )
+        row = await cursor.fetchone()
+        return row is not None
+
+    async def list_stale_reprocess_jobs(self, older_than_seconds: float = 600) -> list[str]:
+        """Return meeting IDs of in-flight reprocess jobs older than the cutoff."""
+        cutoff = time.time() - older_than_seconds
+        cursor = await self._db.conn.execute(
+            "SELECT meeting_id FROM reprocess_jobs WHERE status = 'in_flight' AND started_at < ?",
+            (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        return [row["meeting_id"] for row in rows]
+
+    async def reset_stale_reprocess_jobs(self, max_age_seconds: float = 600) -> int:
+        """Mark stale in-flight reprocess jobs as errored and clear their rows.
+
+        Called on daemon startup. For each reprocess job that has been
+        in-flight longer than *max_age_seconds* the corresponding meeting
+        row is flipped to status='error' (with the implicit reason
+        "daemon restart" captured in logs) and the reprocess_jobs row is
+        deleted. Returns the number of jobs reset.
+        """
+        stale_ids = await self.list_stale_reprocess_jobs(max_age_seconds)
+        if not stale_ids:
+            return 0
+        placeholders = ",".join("?" * len(stale_ids))
+        await self._db.conn.execute(
+            f"UPDATE meetings SET status = 'error', updated_at = ? WHERE id IN ({placeholders})",
+            (time.time(), *stale_ids),
+        )
+        await self._db.conn.execute(
+            f"DELETE FROM reprocess_jobs WHERE meeting_id IN ({placeholders})",
+            stale_ids,
+        )
+        await self._db.conn.commit()
+        logger.info(
+            "Reset %d stale reprocess job(s) on startup (reason: daemon restart): %s",
+            len(stale_ids),
+            stale_ids,
+        )
+        return len(stale_ids)
+
     async def reset_stale_inflight_meetings(self) -> int:
         """Flip any meeting still in a transient pipeline status to 'error'.
 

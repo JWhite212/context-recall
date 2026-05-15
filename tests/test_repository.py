@@ -494,3 +494,92 @@ async def test_get_meetings_by_ids_single(repo: MeetingRepository):
     await repo.update_meeting(mid, title="Batched")
     [m] = await repo.get_meetings_by_ids([mid])
     assert m.title == "Batched"
+
+
+# ------------------------------------------------------------------
+# Reprocess job durability (v10)
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_add_and_is_reprocess_in_flight(repo: MeetingRepository):
+    """Adding a job marks it in-flight; absence is reported as not in-flight."""
+    mid = await repo.create_meeting(started_at=time.time(), status="transcribing")
+    assert await repo.is_reprocess_in_flight(mid) is False
+    await repo.add_reprocess_job(mid)
+    assert await repo.is_reprocess_in_flight(mid) is True
+
+
+@pytest.mark.asyncio
+async def test_complete_reprocess_job_clears_inflight(repo: MeetingRepository):
+    mid = await repo.create_meeting(started_at=time.time(), status="transcribing")
+    await repo.add_reprocess_job(mid)
+    await repo.complete_reprocess_job(mid)
+    assert await repo.is_reprocess_in_flight(mid) is False
+
+
+@pytest.mark.asyncio
+async def test_add_reprocess_job_is_idempotent(repo: MeetingRepository):
+    """Calling add twice for the same meeting must not raise — the second
+    call simply refreshes started_at. This matters if a user double-clicks
+    Retry within the same daemon run."""
+    mid = await repo.create_meeting(started_at=time.time(), status="transcribing")
+    await repo.add_reprocess_job(mid)
+    await repo.add_reprocess_job(mid)  # must not raise
+    assert await repo.is_reprocess_in_flight(mid) is True
+
+
+@pytest.mark.asyncio
+async def test_list_stale_reprocess_jobs_respects_cutoff(repo: MeetingRepository):
+    """Only jobs older than the cutoff appear in the stale list."""
+    fresh_id = await repo.create_meeting(started_at=time.time(), status="transcribing")
+    stale_id = await repo.create_meeting(started_at=time.time(), status="transcribing")
+
+    await repo.add_reprocess_job(fresh_id)
+    await repo.add_reprocess_job(stale_id)
+    # Backdate stale_id 30 minutes.
+    await repo._db.conn.execute(
+        "UPDATE reprocess_jobs SET started_at = ? WHERE meeting_id = ?",
+        (time.time() - 1800, stale_id),
+    )
+    await repo._db.conn.commit()
+
+    stale = await repo.list_stale_reprocess_jobs(older_than_seconds=600)
+    assert stale == [stale_id]
+
+
+@pytest.mark.asyncio
+async def test_reset_stale_reprocess_jobs_flips_meeting_and_clears_row(
+    repo: MeetingRepository,
+):
+    """A stale job must result in the meeting being flagged 'error' and
+    the reprocess_jobs row deleted so the UI can offer a Retry button."""
+    mid = await repo.create_meeting(started_at=time.time(), status="transcribing")
+    await repo.add_reprocess_job(mid)
+    await repo._db.conn.execute(
+        "UPDATE reprocess_jobs SET started_at = ? WHERE meeting_id = ?",
+        (time.time() - 3600, mid),
+    )
+    await repo._db.conn.commit()
+
+    reset = await repo.reset_stale_reprocess_jobs(max_age_seconds=600)
+
+    assert reset == 1
+    assert (await repo.get_meeting(mid)).status == "error"
+    assert await repo.is_reprocess_in_flight(mid) is False
+
+
+@pytest.mark.asyncio
+async def test_reset_stale_reprocess_jobs_leaves_fresh_jobs_alone(
+    repo: MeetingRepository,
+):
+    """A reprocess that's only been running for a few seconds must NOT be
+    reset — it belongs to the live pipeline, not a dead daemon."""
+    mid = await repo.create_meeting(started_at=time.time(), status="transcribing")
+    await repo.add_reprocess_job(mid)
+
+    reset = await repo.reset_stale_reprocess_jobs(max_age_seconds=600)
+
+    assert reset == 0
+    assert (await repo.get_meeting(mid)).status == "transcribing"
+    assert await repo.is_reprocess_in_flight(mid) is True

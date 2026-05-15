@@ -303,6 +303,17 @@ class ApiServer:
         except Exception:
             logger.warning("Stale-status recovery failed", exc_info=True)
 
+        # Recover reprocess jobs whose owning daemon died mid-pipeline.
+        # A row in reprocess_jobs older than 10 minutes is necessarily
+        # orphaned — its only owner was a previous process that no longer
+        # exists — so flip the meeting to 'error' and clear the marker.
+        try:
+            reset = await self.repo.reset_stale_reprocess_jobs(max_age_seconds=600)
+            if reset:
+                logger.info("Recovered %d stale reprocess job(s) on startup", reset)
+        except Exception:
+            logger.warning("Stale reprocess-job recovery failed", exc_info=True)
+
         # Run data retention cleanup on startup.
         try:
             app_config = load_config()

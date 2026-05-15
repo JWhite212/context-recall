@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 _vec_available = False
 
@@ -220,6 +220,14 @@ CREATE INDEX IF NOT EXISTS idx_prep_briefings_series ON prep_briefings(series_id
 CREATE INDEX IF NOT EXISTS idx_prep_briefings_expires ON prep_briefings(expires_at);
 """
 
+REPROCESS_JOBS_SQL = """
+CREATE TABLE IF NOT EXISTS reprocess_jobs (
+    meeting_id TEXT PRIMARY KEY,
+    started_at REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'in_flight'
+);
+"""
+
 
 _ALLOWED_TABLES = frozenset(
     {
@@ -231,6 +239,7 @@ _ALLOWED_TABLES = frozenset(
         "meeting_analytics",
         "notifications",
         "prep_briefings",
+        "reprocess_jobs",
     }
 )
 _ALLOWED_COL_TYPES = frozenset({"TEXT", "REAL", "INTEGER", "BLOB"})
@@ -400,6 +409,8 @@ class Database:
             await self.conn.executescript(NOTIFICATIONS_SQL)
             await self.conn.executescript(PREP_BRIEFINGS_SQL)
             await _safe_add_column(self.conn, "meetings", "series_id", "TEXT", "NULL")
+            # Reprocess job durability (v10).
+            await self.conn.executescript(REPROCESS_JOBS_SQL)
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -481,8 +492,18 @@ class Database:
             await self.conn.executescript(NOTIFICATIONS_SQL)
             await self.conn.executescript(PREP_BRIEFINGS_SQL)
             await _safe_add_column(self.conn, "meetings", "series_id", "TEXT", "NULL")
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 9")
             await self.conn.commit()
             logger.info("Database migrated to version 9 (meeting intelligence)")
+            current_version = 9
+        if current_version < 10:
+            # Reprocess-job durability: track in-flight reprocess jobs in the
+            # DB so a daemon restart can detect and recover stuck rows that
+            # were left in 'transcribing' by a previous process.
+            await self.conn.executescript(REPROCESS_JOBS_SQL)
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 10 (reprocess jobs)")
+            current_version = 10
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

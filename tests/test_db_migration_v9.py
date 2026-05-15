@@ -14,12 +14,14 @@ async def test_migration_creates_new_tables(tmp_path):
     db = Database(db_path=tmp_path / "fresh_v9.db")
     await db.connect()
     try:
-        assert SCHEMA_VERSION == 9
+        # SCHEMA_VERSION advances over time; this test guards v9-introduced
+        # tables, not the current head. v10+ migrations add their own tests.
+        assert SCHEMA_VERSION >= 9
 
-        # Check that user_version is set to 9.
+        # Check that user_version is set to the current head.
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 9
+        assert row[0] == SCHEMA_VERSION
 
         # Verify all new tables exist by querying sqlite_master.
         cursor = await db.conn.execute(
@@ -206,10 +208,11 @@ async def test_migration_from_v8(tmp_path):
     db = Database(db_path=db_path)
     await db.connect()
     try:
-        # Verify version bumped to 9.
+        # Verify version bumped at least to 9 (later migrations may carry forward).
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 9
+        assert row[0] >= 9
+        assert row[0] == SCHEMA_VERSION
 
         # Verify old data is preserved.
         cursor = await db.conn.execute("SELECT * FROM meetings WHERE id = ?", ("test-meeting-1",))
