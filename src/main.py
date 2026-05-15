@@ -215,11 +215,26 @@ class ContextRecall:
 
         self._capture.on_audio_level = _on_level
 
+    def _wire_capture_error_callbacks(self) -> None:
+        """Install on_capture_error and on_stream_status so the orchestrator
+        surfaces capture-thread failures and stream-status flags as
+        pipeline.error / pipeline.warning events the moment they happen,
+        rather than discovering them after wait_for_merge times out."""
+        self._capture.on_capture_error = lambda err: self._emit(
+            "pipeline.error", stage="capture", error=str(err)
+        )
+        self._capture.on_stream_status = lambda source, status: self._emit(
+            "pipeline.warning",
+            source=source,
+            message=f"Audio stream status: {status}",
+        )
+
     def _on_meeting_start(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting begins."""
         logger.info("Starting audio capture...")
 
         self._wire_audio_level_callback()
+        self._wire_capture_error_callbacks()
 
         try:
             self._capture.start()
@@ -805,6 +820,7 @@ class ContextRecall:
         Raises AudioCaptureError if the audio device cannot be opened.
         """
         self._wire_audio_level_callback()
+        self._wire_capture_error_callbacks()
 
         try:
             self._capture.start()

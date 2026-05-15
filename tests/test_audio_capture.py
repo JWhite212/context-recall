@@ -1,5 +1,6 @@
 """Tests for the audio capture module."""
 
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -562,3 +563,286 @@ class TestStreamOpenFailureSignaling:
         # orchestrator can switch on it and surface a real message to the UI.
         assert capture.last_error is not None
         assert isinstance(capture.last_error, AudioCaptureError)
+
+
+# ---------------------------------------------------------------------------
+# Unit 1: on_capture_error / on_stream_status callbacks + dual-source schema
+# validation. These give the orchestrator immediate visibility into capture
+# failures and mid-stream device-disconnect symptoms, and stop a downstream
+# merge from silently producing garbled audio when the two source files
+# disagree on sample rate or channel count.
+# ---------------------------------------------------------------------------
+
+
+class TestCaptureErrorCallback:
+    """on_capture_error must fire from the capture thread the moment an
+    unrecoverable failure is observed — and must fire BEFORE
+    _merge_complete is set, so the orchestrator sees the error before
+    wait_for_merge unblocks."""
+
+    @pytest.fixture
+    def capture(self, tmp_path) -> AudioCapture:
+        return AudioCapture(AudioConfig(temp_audio_dir=str(tmp_path)))
+
+    def test_on_capture_error_attribute_defaults_to_none(self, capture):
+        assert capture.on_capture_error is None
+
+    @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
+    @patch("src.audio_capture.sd.InputStream")
+    def test_on_capture_error_invoked_with_audio_capture_error(
+        self, mock_input_stream, mock_qd, mock_default, capture
+    ):
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.start.side_effect = Exception("device disconnected")
+        mock_input_stream.return_value = mock_stream_instance
+
+        received: list[AudioCaptureError] = []
+        capture.on_capture_error = lambda err: received.append(err)
+
+        capture.start()
+        if capture._thread:
+            capture._thread.join(timeout=5)
+
+        assert len(received) == 1
+        assert isinstance(received[0], AudioCaptureError)
+        assert "device disconnected" in str(received[0])
+
+    @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
+    @patch("src.audio_capture.sd.InputStream")
+    def test_on_capture_error_fires_before_merge_complete(
+        self, mock_input_stream, mock_qd, mock_default, capture
+    ):
+        """The callback must run BEFORE _merge_complete is set so callers
+        waiting on wait_for_merge don't race ahead of the error signal."""
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.start.side_effect = Exception("kapow")
+        mock_input_stream.return_value = mock_stream_instance
+
+        merge_set_when_called: list[bool] = []
+        capture.on_capture_error = lambda err: merge_set_when_called.append(
+            capture._merge_complete.is_set()
+        )
+
+        capture.start()
+        if capture._thread:
+            capture._thread.join(timeout=5)
+
+        assert merge_set_when_called == [False], (
+            "on_capture_error must be invoked before _merge_complete is set"
+        )
+
+    @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
+    @patch("src.audio_capture.sd.InputStream")
+    def test_on_capture_error_callback_exception_is_swallowed(
+        self, mock_input_stream, mock_qd, mock_default, capture
+    ):
+        """A misbehaving callback must not poison the capture thread —
+        _merge_complete must still be set so wait_for_merge can return."""
+        mock_stream_instance = MagicMock()
+        mock_stream_instance.start.side_effect = Exception("kapow")
+        mock_input_stream.return_value = mock_stream_instance
+
+        capture.on_capture_error = MagicMock(side_effect=RuntimeError("callback broke"))
+
+        capture.start()
+        if capture._thread:
+            capture._thread.join(timeout=5)
+
+        assert capture.wait_for_merge(timeout=1.0) is True
+        assert capture.last_error is not None
+
+
+class TestStreamStatusCallback:
+    """on_stream_status fires whenever a sounddevice CallbackFlags value
+    is truthy on either source — the UI uses this to warn the user that
+    the device is xrun-ing or has disconnected mid-stream."""
+
+    @pytest.fixture
+    def capture(self, tmp_path) -> AudioCapture:
+        return AudioCapture(AudioConfig(temp_audio_dir=str(tmp_path)))
+
+    def test_on_stream_status_attribute_defaults_to_none(self, capture):
+        assert capture.on_stream_status is None
+
+    def test_system_callback_invokes_on_stream_status_when_status_truthy(self, capture, tmp_path):
+        """Drive the inner system_callback synthesised inside _record_loop
+        by mocking InputStream so we can capture the callback function and
+        invoke it with a non-empty status flag."""
+        received: list[tuple[str, str]] = []
+        capture.on_stream_status = lambda source, status: received.append((source, status))
+
+        captured_callbacks: dict[str, object] = {}
+
+        def fake_input_stream(*args, **kwargs):
+            stream = MagicMock()
+            # The first InputStream constructed is the system stream.
+            if "system" not in captured_callbacks:
+                captured_callbacks["system"] = kwargs["callback"]
+            else:
+                captured_callbacks["mic"] = kwargs["callback"]
+            return stream
+
+        with (
+            patch.object(AudioCapture, "_find_device", return_value=0),
+            patch.object(AudioCapture, "_find_default_input_device", return_value=1),
+            patch(
+                "src.audio_capture.sd.query_devices",
+                side_effect=lambda *a, **k: (
+                    MOCK_DEVICES if not a else {"name": "MacBook Pro Mic", "max_input_channels": 1}
+                ),
+            ),
+            patch("src.audio_capture.sd.InputStream", side_effect=fake_input_stream),
+        ):
+            capture._config.mic_enabled = True
+            capture.start()
+            # Give the record loop a beat to install the callbacks.
+            for _ in range(50):
+                if "system" in captured_callbacks and "mic" in captured_callbacks:
+                    break
+                time.sleep(0.02)
+
+            try:
+                system_cb = captured_callbacks["system"]
+                mic_cb = captured_callbacks["mic"]
+
+                indata = np.zeros((1024, 2), dtype=np.float32)
+                system_cb(indata, 1024, None, "input overflow")
+
+                mic_indata = np.zeros((1024, 1), dtype=np.float32)
+                mic_cb(mic_indata, 1024, None, "input underflow")
+            finally:
+                capture._recording = False
+                if capture._thread and capture._thread.is_alive():
+                    capture._thread.join(timeout=2)
+
+        sources = {s for s, _ in received}
+        assert sources == {"system", "mic"}
+        # Status strings should be propagated as-is (stringified).
+        joined = " ".join(status for _, status in received)
+        assert "overflow" in joined
+        assert "underflow" in joined
+
+    def test_on_stream_status_not_called_when_status_falsy(self, capture, tmp_path):
+        """A clean callback (status=None or empty CallbackFlags) must not
+        trigger the warning callback — otherwise it would fire continuously."""
+        received: list[tuple[str, str]] = []
+        capture.on_stream_status = lambda source, status: received.append((source, status))
+
+        captured_callbacks: dict[str, object] = {}
+
+        def fake_input_stream(*args, **kwargs):
+            stream = MagicMock()
+            if "system" not in captured_callbacks:
+                captured_callbacks["system"] = kwargs["callback"]
+            else:
+                captured_callbacks["mic"] = kwargs["callback"]
+            return stream
+
+        with (
+            patch.object(AudioCapture, "_find_device", return_value=0),
+            patch.object(AudioCapture, "_find_default_input_device", return_value=None),
+            patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES),
+            patch("src.audio_capture.sd.InputStream", side_effect=fake_input_stream),
+        ):
+            capture._config.mic_enabled = False
+            capture.start()
+            for _ in range(50):
+                if "system" in captured_callbacks:
+                    break
+                time.sleep(0.02)
+
+            try:
+                system_cb = captured_callbacks["system"]
+                indata = np.zeros((1024, 2), dtype=np.float32)
+                # status=None == "no flags raised by PortAudio".
+                system_cb(indata, 1024, None, None)
+            finally:
+                capture._recording = False
+                if capture._thread and capture._thread.is_alive():
+                    capture._thread.join(timeout=2)
+
+        assert received == []
+
+
+class TestMergeSchemaValidation:
+    """_merge_dual_source must refuse to mix sources that disagree on
+    sample rate or channel count — silently doing so would emit garbled
+    output that's only diagnosable by listening to the result."""
+
+    def _write_wav(self, path: Path, *, sample_rate: int, channels: int) -> None:
+        samples = 1600
+        shape = (samples,) if channels == 1 else (samples, channels)
+        signal = np.full(shape, 0.3, dtype=np.float32)
+        sf.write(str(path), signal, sample_rate, subtype="PCM_16")
+
+    def test_sample_rate_mismatch_raises_audio_capture_error(self, tmp_path):
+        capture = AudioCapture(
+            AudioConfig(
+                temp_audio_dir=str(tmp_path),
+                sample_rate=16000,
+                keep_source_files=True,
+            )
+        )
+        system_path = tmp_path / "system.wav"
+        mic_path = tmp_path / "mic.wav"
+        self._write_wav(system_path, sample_rate=16000, channels=1)
+        self._write_wav(mic_path, sample_rate=48000, channels=1)
+
+        capture._system_path = system_path
+        capture._mic_path = mic_path
+        capture._output_path = tmp_path / "output.wav"
+
+        with pytest.raises(AudioCaptureError) as exc_info:
+            capture._merge_dual_source()
+
+        message = str(exc_info.value)
+        assert "16000" in message
+        assert "48000" in message
+
+    def test_channel_count_mismatch_raises_audio_capture_error(self, tmp_path):
+        capture = AudioCapture(
+            AudioConfig(
+                temp_audio_dir=str(tmp_path),
+                sample_rate=16000,
+                keep_source_files=True,
+            )
+        )
+        system_path = tmp_path / "system.wav"
+        mic_path = tmp_path / "mic.wav"
+        self._write_wav(system_path, sample_rate=16000, channels=1)
+        self._write_wav(mic_path, sample_rate=16000, channels=2)
+
+        capture._system_path = system_path
+        capture._mic_path = mic_path
+        capture._output_path = tmp_path / "output.wav"
+
+        with pytest.raises(AudioCaptureError):
+            capture._merge_dual_source()
+
+    def test_matching_schema_does_not_raise(self, tmp_path):
+        """Sanity check: when the two source files agree, the merge
+        proceeds without raising the new validation error."""
+        capture = AudioCapture(
+            AudioConfig(
+                temp_audio_dir=str(tmp_path),
+                sample_rate=16000,
+                keep_source_files=True,
+            )
+        )
+        system_path = tmp_path / "system.wav"
+        mic_path = tmp_path / "mic.wav"
+        output_path = tmp_path / "output.wav"
+        self._write_wav(system_path, sample_rate=16000, channels=1)
+        self._write_wav(mic_path, sample_rate=16000, channels=1)
+
+        capture._system_path = system_path
+        capture._mic_path = mic_path
+        capture._output_path = output_path
+        capture._config.mic_enabled = True
+        capture._mic_idx = 0
+
+        capture._merge_dual_source()
+        assert output_path.exists()

@@ -643,6 +643,98 @@ def test_api_start_recording_no_warning_emitted_on_clean_start(
 
 
 # ---------------------------------------------------------------------------
+# Unit 1: orchestrator must wire on_capture_error and on_stream_status
+# BEFORE calling _capture.start(), and the callbacks must translate to
+# pipeline.error / pipeline.warning events on the WebSocket bus.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_api_start_recording_wires_capture_error_callback_before_start(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """The orchestrator must assign on_capture_error on the capture object
+    BEFORE start() is invoked, otherwise a fast-failing start could fire
+    its error callback into a None and the UI would never learn."""
+    from src.audio_capture import AudioCaptureError
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+
+    callback_at_start_call: dict[str, object] = {}
+
+    def fake_start():
+        callback_at_start_call["on_capture_error"] = app._capture.on_capture_error
+        callback_at_start_call["on_stream_status"] = app._capture.on_stream_status
+
+    app._capture.last_warning = None
+    app._capture.start = fake_start
+
+    app._emit = MagicMock()
+    app.api_start_recording()
+
+    assert callable(callback_at_start_call.get("on_capture_error"))
+    assert callable(callback_at_start_call.get("on_stream_status"))
+
+    # Invoke the callback and verify it lands on the event bus as pipeline.error.
+    app._emit.reset_mock()
+    callback_at_start_call["on_capture_error"](AudioCaptureError("disconnect"))
+    error_calls = [c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.error"]
+    assert error_calls, "on_capture_error must emit pipeline.error"
+    assert error_calls[0].kwargs.get("stage") == "capture"
+    assert "disconnect" in error_calls[0].kwargs.get("error", "")
+
+    # And on_stream_status must surface as pipeline.warning with source.
+    app._emit.reset_mock()
+    callback_at_start_call["on_stream_status"]("system", "input overflow")
+    warning_calls = [
+        c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.warning"
+    ]
+    assert warning_calls, "on_stream_status must emit pipeline.warning"
+    assert warning_calls[0].kwargs.get("source") == "system"
+    assert "input overflow" in warning_calls[0].kwargs.get("message", "")
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_start_wires_capture_error_callback_before_start(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Same wiring guarantee on the detector-driven entry point."""
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+
+    callback_at_start_call: dict[str, object] = {}
+
+    def fake_start():
+        callback_at_start_call["on_capture_error"] = app._capture.on_capture_error
+        callback_at_start_call["on_stream_status"] = app._capture.on_stream_status
+
+    app._capture.last_warning = None
+    app._capture.start = fake_start
+
+    app._on_meeting_start(MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0))
+
+    assert callable(callback_at_start_call.get("on_capture_error"))
+    assert callable(callback_at_start_call.get("on_stream_status"))
+
+
+# ---------------------------------------------------------------------------
 # Bug X6: status-transition coverage using the shared mocked-API fixture.
 # These tests exercise the _db_update path that the legacy tests above
 # short-circuit by leaving _api_server unset. Pre-X6, a regression that

@@ -63,6 +63,17 @@ class AudioCapture:
         self.on_audio_level: Callable[[float, float], None] | None = None
         # Audio data callback: called with mono float32 audio for live transcription.
         self.on_audio_data: Callable[[np.ndarray], None] | None = None
+        # Capture-error callback: invoked from the capture thread with a typed
+        # AudioCaptureError the moment an unrecoverable failure is observed,
+        # so the orchestrator can emit pipeline.error immediately instead of
+        # waiting for the 120s merge-timeout to elapse.
+        self.on_capture_error: Callable[[AudioCaptureError], None] | None = None
+        # Stream-status callback: invoked from the PortAudio callback thread
+        # with (source, status_str) whenever sounddevice surfaces a non-empty
+        # CallbackFlags value (overflow / xrun / inputUnderflow). The
+        # orchestrator turns these into pipeline.warning events so the UI
+        # learns about mid-stream device-disconnect symptoms.
+        self.on_stream_status: Callable[[str, str], None] | None = None
         self._last_level_time: float = 0.0
 
         # Lifecycle events for non-blocking stop.
@@ -175,6 +186,11 @@ class AudioCapture:
             def system_callback(indata, frames, time_info, status):
                 if status:
                     logger.warning("System audio status: %s", status)
+                    if self.on_stream_status is not None:
+                        try:
+                            self.on_stream_status("system", str(status))
+                        except Exception:
+                            pass
                 if self._recording:
                     mono = self._to_mono(indata)
                     system_file.write(mono)
@@ -189,6 +205,11 @@ class AudioCapture:
             def mic_callback(indata, frames, time_info, status):
                 if status:
                     logger.warning("Mic audio status: %s", status)
+                    if self.on_stream_status is not None:
+                        try:
+                            self.on_stream_status("mic", str(status))
+                        except Exception:
+                            pass
                 if self._recording:
                     mono = self._to_mono(indata)
                     mic_file.write(mono)
@@ -243,6 +264,14 @@ class AudioCapture:
             self._last_error = AudioCaptureError(f"Failed to capture audio: {e}")
             self._output_path = None
             self._recording = False
+            # Notify the orchestrator BEFORE signalling merge-complete so the
+            # UI sees pipeline.error the moment the failure is observed,
+            # rather than after wait_for_merge eventually returns.
+            if self.on_capture_error is not None:
+                try:
+                    self.on_capture_error(self._last_error)
+                except Exception:
+                    logger.exception("on_capture_error callback raised")
             # Signal merge-complete on the failure path so callers waiting
             # on wait_for_merge unblock immediately rather than after the
             # 120s timeout. There is no merged file to consume — callers
@@ -379,7 +408,24 @@ class AudioCapture:
         )
 
     def _merge_dual_source(self) -> None:
-        """Mix system + mic audio via chunked streaming with RMS normalisation."""
+        """Mix system + mic audio via chunked streaming with RMS normalisation.
+
+        Validates that the two source files share the same sample rate and
+        channel count before mixing. A mismatch produces samples that drift
+        out of sync and channels that misalign — symptoms that are very hard
+        to debug downstream — so we fail fast with an explicit error.
+        """
+        with (
+            sf.SoundFile(str(self._system_path), mode="r") as sys_f,
+            sf.SoundFile(str(self._mic_path), mode="r") as mic_f,
+        ):
+            if sys_f.samplerate != mic_f.samplerate or sys_f.channels != mic_f.channels:
+                raise AudioCaptureError(
+                    "System and mic source files do not match — refusing to merge. "
+                    f"system={sys_f.samplerate}Hz/{sys_f.channels}ch, "
+                    f"mic={mic_f.samplerate}Hz/{mic_f.channels}ch"
+                )
+
         system_rms = self._streaming_rms(self._system_path)
         mic_rms = self._streaming_rms(self._mic_path)
 
