@@ -26,6 +26,7 @@ import os
 import shutil
 import signal
 import sys
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -287,13 +288,27 @@ class ContextRecall:
         logger.info("Stopping audio capture and processing...")
 
         # Stop live transcriber before batch processing to free GPU.
+        # live_transcriber.stop() joins its worker thread with a 30s timeout;
+        # running that synchronously here would block the detector callback
+        # thread and cause back-to-back meetings to be missed (X4). Dispatch
+        # to a daemon thread and clear references synchronously so a fresh
+        # meeting can't observe stale state.
         if self._live_transcriber:
-            try:
-                self._live_transcriber.stop()
-            except Exception:
-                pass
+            lt = self._live_transcriber
             self._live_transcriber = None
             self._capture.on_audio_data = None
+
+            def _stop_live_transcriber() -> None:
+                try:
+                    lt.stop()
+                except Exception:
+                    logger.exception("Background live_transcriber.stop() failed")
+
+            threading.Thread(
+                target=_stop_live_transcriber,
+                name="live-transcriber-stop",
+                daemon=True,
+            ).start()
 
         self._emit(
             "meeting.ended",

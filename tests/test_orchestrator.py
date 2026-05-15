@@ -572,3 +572,91 @@ def test_api_start_recording_no_warning_emitted_on_clean_start(
         c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.warning"
     ]
     assert not warning_calls, f"clean start must not emit pipeline.warning; got: {warning_calls}"
+
+
+# ---------------------------------------------------------------------------
+# Bug X4: _on_meeting_end must not block the detector callback thread on
+# live_transcriber.stop() — which can join its worker thread for up to 30s.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_end_returns_quickly_when_live_transcriber_stop_is_slow(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Bug X4: live_transcriber.stop() joins its worker thread with up to a
+    30s timeout. _on_meeting_end runs on the detector callback thread, so
+    while that join is in flight the detector can't poll for new meetings.
+    A back-to-back meeting (e.g. one ends and another starts within 30s)
+    can be silently missed.
+
+    The fix: dispatch the join to a daemon thread so _on_meeting_end returns
+    immediately. The live transcriber's worker is already a daemon, so the
+    background join is safe to outlive the callback.
+    """
+    import threading
+    import time
+
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+
+    # Live transcriber whose stop() blocks long enough that a synchronous
+    # call would be obviously slow.
+    slow_lt = MagicMock()
+    stop_entered = threading.Event()
+    stop_completed = threading.Event()
+
+    def _slow_stop():
+        stop_entered.set()
+        time.sleep(1.0)
+        stop_completed.set()
+
+    slow_lt.stop.side_effect = _slow_stop
+    app._live_transcriber = slow_lt
+
+    # _capture.stop must return None so _on_meeting_end early-exits and
+    # the timing we measure is only the live-transcriber-stop overhead.
+    app._capture.stop = MagicMock(return_value=None)
+
+    event = MeetingEvent(
+        state=MeetingState.IDLE,
+        started_at=1000.0,
+        ended_at=1060.0,
+        duration_seconds=60.0,
+    )
+
+    t0 = time.monotonic()
+    app._on_meeting_end(event)
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.3, (
+        f"_on_meeting_end blocked the detector thread for {elapsed:.2f}s; "
+        "it must return quickly so back-to-back meetings aren't missed "
+        "while live_transcriber.stop() joins its worker thread"
+    )
+
+    # The slow stop must still have been invoked (just off the detector
+    # thread). Without this assertion the test could pass by skipping
+    # the cleanup entirely.
+    assert stop_entered.wait(timeout=2.0), (
+        "live_transcriber.stop() must still be invoked — just on a "
+        "background daemon thread, not the detector callback thread"
+    )
+
+    # References must be cleared synchronously so a fresh meeting doesn't
+    # see stale state if it starts before the background join finishes.
+    assert app._live_transcriber is None
+    assert app._capture.on_audio_data is None
+
+    # Wait for the background stop to actually finish so the test doesn't
+    # leak a sleeping thread into the next test.
+    assert stop_completed.wait(timeout=3.0)
