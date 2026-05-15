@@ -841,3 +841,124 @@ def test_on_meeting_end_returns_quickly_when_live_transcriber_stop_is_slow(
     # Wait for the background stop to actually finish so the test doesn't
     # leak a sleeping thread into the next test.
     assert stop_completed.wait(timeout=3.0)
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight integration: _on_meeting_start should call run_preflight first.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_start_runs_preflight_before_capture(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """The pre-flight check must run BEFORE capture.start() so missing
+    BlackHole / mic permission is surfaced as a pipeline event instead
+    of producing an empty recording."""
+    from src.audio_preflight import PreflightReport
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    emitted: list[dict] = []
+    app._emit = lambda event_type, **kwargs: emitted.append({"type": event_type, **kwargs})
+
+    clean_report = PreflightReport(
+        blackhole_present=True,
+        blackhole_input_candidates=["BlackHole 2ch"],
+        mic_openable=True,
+        microphone_permission_likely=True,
+        default_input_index=0,
+    )
+
+    with patch("src.main.run_preflight", return_value=clean_report) as mock_pf:
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+        mock_pf.assert_called_once_with(app._config.audio)
+        app._capture.start.assert_called_once()
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_start_aborts_when_preflight_reports_error(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """If the pre-flight reports errors (e.g. BlackHole missing), the
+    orchestrator must abort the start: no capture, no live transcriber,
+    but the pipeline.error must be visible to the UI."""
+    from src.audio_preflight import PreflightReport
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    emitted: list[dict] = []
+    app._emit = lambda event_type, **kwargs: emitted.append({"type": event_type, **kwargs})
+
+    bad_report = PreflightReport(
+        blackhole_present=False,
+        errors=["BlackHole virtual audio driver is not installed."],
+    )
+
+    with patch("src.main.run_preflight", return_value=bad_report):
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+
+    app._capture.start.assert_not_called()
+    error_events = [e for e in emitted if e["type"] == "pipeline.error"]
+    assert error_events, "preflight errors must be emitted as pipeline.error"
+    assert any("BlackHole" in str(e.get("error", "")) for e in error_events)
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_start_emits_preflight_warnings_but_continues(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Preflight warnings (mic permission denied, mic mismatch) should
+    surface as pipeline.warning events but must NOT block capture —
+    system audio recording can still proceed without the mic."""
+    from src.audio_preflight import PreflightReport
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    emitted: list[dict] = []
+    app._emit = lambda event_type, **kwargs: emitted.append({"type": event_type, **kwargs})
+
+    report = PreflightReport(
+        blackhole_present=True,
+        blackhole_input_candidates=["BlackHole 2ch"],
+        mic_openable=False,
+        microphone_permission_likely=False,
+        warnings=["Microphone permission likely denied."],
+    )
+
+    with patch("src.main.run_preflight", return_value=report):
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+
+    app._capture.start.assert_called_once()
+    warning_events = [e for e in emitted if e["type"] == "pipeline.warning"]
+    assert any("Microphone permission" in str(w.get("message", "")) for w in warning_events)

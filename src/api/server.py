@@ -23,6 +23,7 @@ from src.api.routes import diagnostics as diagnostics_routes
 from src.api.routes import export as export_routes
 from src.api.routes import meetings as meetings_routes
 from src.api.routes import models as models_routes
+from src.api.routes import preflight as preflight_routes
 from src.api.routes import recording as recording_routes
 from src.api.routes import reprocess as reprocess_routes
 from src.api.routes import resummarise as resummarise_routes
@@ -145,6 +146,7 @@ class ApiServer:
         app.include_router(config_routes.router, dependencies=auth_deps)
         app.include_router(recording_routes.router, dependencies=auth_deps)
         app.include_router(devices_routes.router, dependencies=auth_deps)
+        app.include_router(preflight_routes.router, dependencies=auth_deps)
         app.include_router(diagnostics_routes.router, dependencies=auth_deps)
         app.include_router(support_bundle_routes.router, dependencies=auth_deps)
         app.include_router(export_routes.router, dependencies=auth_deps)

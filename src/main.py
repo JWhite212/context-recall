@@ -32,6 +32,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from src.audio_capture import AudioCapture, AudioCaptureError
+from src.audio_preflight import run_preflight
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
 from src.diariser import EnergyDiariser, create_diariser
 from src.output.markdown_writer import MarkdownWriter
@@ -218,6 +219,25 @@ class ContextRecall:
     def _on_meeting_start(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting begins."""
         logger.info("Starting audio capture...")
+
+        # Pre-flight audio environment check. Surfaces missing BlackHole,
+        # mic permission denial, etc. before we open any streams so the
+        # user gets an actionable error instead of an empty recording.
+        try:
+            preflight = run_preflight(self._config.audio)
+        except Exception as e:
+            logger.warning("Audio pre-flight check failed: %s", e, exc_info=True)
+        else:
+            for warning in preflight.warnings:
+                self._emit("pipeline.warning", source="preflight", message=warning)
+            for err in preflight.errors:
+                self._emit("pipeline.error", stage="preflight", error=err)
+            if preflight.errors:
+                logger.error(
+                    "Aborting meeting start — pre-flight reported %d error(s).",
+                    len(preflight.errors),
+                )
+                return
 
         self._wire_audio_level_callback()
 
