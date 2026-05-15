@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -116,6 +117,11 @@ fn set_start_at_login(app: tauri::AppHandle, enabled: bool) -> Result<(), String
 }
 
 /// Read the shared auth token so the frontend can authenticate with the API.
+///
+/// Refuses to return the token unless the file's POSIX mode is exactly
+/// `0o600` (owner read/write only). If another user-readable bit is set,
+/// the secret is treated as compromised and an error is returned instead
+/// of leaking the value to the frontend.
 #[tauri::command]
 fn read_auth_token() -> Result<String, String> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
@@ -125,9 +131,21 @@ fn read_auth_token() -> Result<String, String> {
         .join("Context Recall")
         .join("auth_token");
 
-    fs::read_to_string(&path)
-        .map(|s| s.trim().to_string())
-        .map_err(|e| format!("Failed to read auth token at {}: {}", path.display(), e))
+    let contents = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read auth token at {}: {}", path.display(), e))?;
+
+    let metadata = fs::metadata(&path)
+        .map_err(|e| format!("Failed to stat auth token at {}: {}", path.display(), e))?;
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode != 0o600 {
+        return Err(format!(
+            "Auth token at {} has insecure mode {:o}; expected 600",
+            path.display(),
+            mode
+        ));
+    }
+
+    Ok(contents.trim().to_string())
 }
 
 /// Check for app updates and return version info if available.
