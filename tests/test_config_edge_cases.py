@@ -3,7 +3,7 @@
 import pytest
 import yaml
 
-from src.utils.config import DetectionConfig, _expand_path, load_config
+from src.utils.config import AudioConfig, DetectionConfig, _expand_path, load_config
 
 
 def test_malformed_yaml_does_not_crash(tmp_path):
@@ -73,3 +73,18 @@ def test_yaml_list_instead_of_dict(tmp_path):
 
     with pytest.raises(AttributeError):
         load_config(config_path)
+
+
+@pytest.mark.parametrize("bad_value", [0.0, 1e-9, 1e-8, 1e-1, 1.0, -1e-5])
+def test_audio_config_rejects_silence_alert_threshold_out_of_range(bad_value):
+    """silence_alert_threshold must sit inside 1e-7..1e-2 so the detector
+    does not either suppress legitimate audio or chase interface dither."""
+    with pytest.raises(ValueError, match="silence_alert_threshold"):
+        AudioConfig(silence_alert_threshold=bad_value)
+
+
+@pytest.mark.parametrize("good_value", [1e-7, 1e-5, 1e-4, 1e-3, 1e-2])
+def test_audio_config_accepts_silence_alert_threshold_in_range(good_value):
+    """Values inside the supported band must construct cleanly."""
+    config = AudioConfig(silence_alert_threshold=good_value)
+    assert config.silence_alert_threshold == good_value

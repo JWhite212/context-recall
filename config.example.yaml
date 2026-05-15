@@ -60,6 +60,12 @@ audio:
   # Required for speaker diarisation. If false, temp files are deleted.
   keep_source_files: false
 
+  # Base RMS threshold below which the system audio source counts as
+  # silent. The detector raises this at runtime if its initial 2-second
+  # calibration window observes a higher noise floor, so this is a
+  # floor not a hard cap. Must be between 1e-7 and 1e-2.
+  silence_alert_threshold: 1.0e-5
+
 # --- Transcription (MLX Whisper — Apple Silicon GPU acceleration) ---
 transcription:
   # MLX Whisper model. Specify a HuggingFace repo from mlx-community.

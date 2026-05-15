@@ -103,7 +103,9 @@ class ContextRecall:
         # opens fine but delivers only silence. Surfaces a one-shot warning
         # so the user can fix routing while the meeting is still in flight,
         # rather than discovering it from an empty transcript at the end.
-        self._silent_input_detector = SilentInputDetector()
+        self._silent_input_detector = SilentInputDetector(
+            silence_threshold=self._config.audio.silence_alert_threshold,
+        )
 
         # Calendar integration (optional).
         self._calendar_matcher: CalendarMatcher | None = None

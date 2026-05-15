@@ -85,6 +85,20 @@ class AudioConfig:
     channels: int = 1
     temp_audio_dir: str = "~/Library/Caches/Context Recall"
     keep_source_files: bool = False  # Keep separate source WAVs (for diarisation).
+    # Base RMS threshold below which the system audio source counts as
+    # silent. The SilentInputDetector raises this at runtime if the
+    # noise-floor calibration window observes higher RMS. Outside the
+    # 1e-7..1e-2 range either drops below typical interface dithering or
+    # would suppress legitimate quiet audio, so we reject those values
+    # at config-load time.
+    silence_alert_threshold: float = 1e-5
+
+    def __post_init__(self) -> None:
+        if not (1e-7 <= self.silence_alert_threshold <= 1e-2):
+            raise ValueError(
+                "silence_alert_threshold must be between 1e-7 and 1e-2, "
+                f"got {self.silence_alert_threshold!r}"
+            )
 
 
 @dataclass
