@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import src.api.auth as auth_mod
 from src.api.auth import verify_token
 from src.api.routes import diagnostics as diagnostics_routes
-from src.utils.config import AppConfig, SummarisationConfig
+from src.utils.config import AppConfig, AudioConfig, SummarisationConfig
 
 TEST_TOKEN = "test-token-for-diagnostics-tests"
 
@@ -18,6 +18,9 @@ EXPECTED_KEYS = {
     "platform",
     "apple_silicon",
     "blackhole_found",
+    "blackhole_candidates",
+    "configured_blackhole_device",
+    "configured_blackhole_available",
     "microphone_available",
     "audio_output_devices",
     "ollama_reachable",
@@ -235,3 +238,192 @@ async def test_helper_returns_false_on_network_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_helper_returns_false_on_empty_model_name():
     assert await diagnostics_routes._selected_ollama_model_available("") is False
+
+
+# ---------------------------------------------------------------------------
+# Bug A3: surface BlackHole candidates so the user can fix a misconfig
+# ---------------------------------------------------------------------------
+
+
+def _make_config_with_audio(blackhole_name: str) -> AppConfig:
+    cfg = AppConfig()
+    cfg.audio = AudioConfig(blackhole_device_name=blackhole_name)
+    cfg.summarisation = SummarisationConfig()
+    return cfg
+
+
+def _devices_with(*names_with_input_channels: tuple[str, int]) -> list[dict]:
+    """Build a sounddevice-style device list: (name, max_input_channels).
+
+    Devices with 0 input channels are output-only and must not appear in
+    blackhole_candidates (the audio capture path needs INPUT)."""
+    return [
+        {
+            "name": name,
+            "max_input_channels": ch,
+            "max_output_channels": 2,
+            "default_samplerate": 48000.0,
+        }
+        for name, ch in names_with_input_channels
+    ]
+
+
+def test_blackhole_candidates_lists_input_devices_only():
+    """When multiple BlackHole inputs are installed, list all of them.
+    Output-only entries with 'blackhole' in the name must be excluded —
+    they aren't valid choices for blackhole_device_name."""
+    devices = _devices_with(
+        ("BlackHole 2ch", 2),
+        ("BlackHole 16ch", 16),
+        ("BlackHole 64ch (Output Only Renamed)", 0),  # output-only — exclude
+        ("MacBook Pro Microphone", 1),
+    )
+    app = _make_app()
+    with TestClient(app) as c:
+        with (
+            patch.object(
+                diagnostics_routes,
+                "_ollama_reachable",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "_selected_ollama_model_available",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "load_config",
+                return_value=_make_config_with_audio("BlackHole 2ch"),
+            ),
+            patch.object(
+                diagnostics_routes.sd,
+                "query_devices",
+                return_value=devices,
+            ),
+        ):
+            resp = c.get("/api/diagnostics", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    data = resp.json()
+    candidates = data["blackhole_candidates"]
+    assert "BlackHole 2ch" in candidates
+    assert "BlackHole 16ch" in candidates
+    assert "BlackHole 64ch (Output Only Renamed)" not in candidates
+    assert "MacBook Pro Microphone" not in candidates
+
+
+def test_configured_blackhole_available_true_when_match_present():
+    devices = _devices_with(
+        ("BlackHole 2ch", 2),
+        ("BlackHole 16ch", 16),
+    )
+    app = _make_app()
+    with TestClient(app) as c:
+        with (
+            patch.object(
+                diagnostics_routes,
+                "_ollama_reachable",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "_selected_ollama_model_available",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "load_config",
+                return_value=_make_config_with_audio("BlackHole 2ch"),
+            ),
+            patch.object(
+                diagnostics_routes.sd,
+                "query_devices",
+                return_value=devices,
+            ),
+        ):
+            resp = c.get("/api/diagnostics", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["configured_blackhole_device"] == "BlackHole 2ch"
+    assert data["configured_blackhole_available"] is True
+
+
+def test_configured_blackhole_available_false_when_only_other_variant_installed():
+    """The user installed BlackHole 16ch but config still says BlackHole 2ch
+    — the UI needs to know both that a candidate exists AND that the
+    configured name doesn't match it."""
+    devices = _devices_with(
+        ("BlackHole 16ch", 16),
+        ("MacBook Pro Microphone", 1),
+    )
+    app = _make_app()
+    with TestClient(app) as c:
+        with (
+            patch.object(
+                diagnostics_routes,
+                "_ollama_reachable",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "_selected_ollama_model_available",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "load_config",
+                return_value=_make_config_with_audio("BlackHole 2ch"),
+            ),
+            patch.object(
+                diagnostics_routes.sd,
+                "query_devices",
+                return_value=devices,
+            ),
+        ):
+            resp = c.get("/api/diagnostics", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["configured_blackhole_device"] == "BlackHole 2ch"
+    assert data["configured_blackhole_available"] is False
+    assert data["blackhole_candidates"] == ["BlackHole 16ch"]
+
+
+def test_blackhole_fields_robust_to_query_devices_failure():
+    """If sd.query_devices raises, the endpoint must still return the new
+    fields with safe defaults rather than 500-ing."""
+    app = _make_app()
+    with TestClient(app, raise_server_exceptions=False) as c:
+        with (
+            patch.object(
+                diagnostics_routes,
+                "_ollama_reachable",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "_selected_ollama_model_available",
+                new=AsyncMock(return_value=False),
+            ),
+            patch.object(
+                diagnostics_routes,
+                "load_config",
+                return_value=_make_config_with_audio("BlackHole 2ch"),
+            ),
+            patch.object(
+                diagnostics_routes.sd,
+                "query_devices",
+                side_effect=RuntimeError("PortAudio not initialised"),
+            ),
+        ):
+            resp = c.get("/api/diagnostics", headers=_auth_headers())
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["blackhole_candidates"] == []
+    assert data["configured_blackhole_available"] is False
+    # configured name still echoes from config even when devices can't
+    # be queried — so the UI can always tell the user what THEY have set.
+    assert data["configured_blackhole_device"] == "BlackHole 2ch"

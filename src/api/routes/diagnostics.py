@@ -17,6 +17,7 @@ import sys
 from typing import Any
 
 import httpx
+import sounddevice as sd
 from fastapi import APIRouter
 
 from src.utils import paths
@@ -39,8 +40,6 @@ def _blackhole_present() -> bool:
     if not _is_macos():
         return False
     try:
-        import sounddevice as sd
-
         for device in sd.query_devices():  # type: ignore[attr-defined]
             name = str(device.get("name", "")).lower()
             if "blackhole" in name:
@@ -50,10 +49,36 @@ def _blackhole_present() -> bool:
     return False
 
 
+def _blackhole_input_candidates() -> list[str]:
+    """Return names of input devices matching 'blackhole' (case-insensitive).
+
+    The audio capture path uses substring matching on input devices to
+    pick the BlackHole interface, so this is exactly the set of valid
+    values for AudioConfig.blackhole_device_name (Bug A3). Output-only
+    entries with 'blackhole' in their name are excluded — they can't be
+    used as a capture source.
+    """
+    try:
+        return [
+            str(d.get("name", ""))
+            for d in sd.query_devices()  # type: ignore[attr-defined]
+            if d.get("max_input_channels", 0) > 0 and "blackhole" in str(d.get("name", "")).lower()
+        ]
+    except Exception:
+        return []
+
+
+def _configured_blackhole_available(configured_name: str, candidates: list[str]) -> bool:
+    """Mirror audio_capture._find_device's substring match: configured_name
+    matches if it appears (case-insensitive) within any candidate name."""
+    if not configured_name:
+        return False
+    needle = configured_name.lower()
+    return any(needle in name.lower() for name in candidates)
+
+
 def _audio_output_devices() -> list[str]:
     try:
-        import sounddevice as sd
-
         names: list[str] = []
         for device in sd.query_devices():  # type: ignore[attr-defined]
             if device.get("max_output_channels", 0) > 0:
@@ -65,8 +90,6 @@ def _audio_output_devices() -> list[str]:
 
 def _microphone_available() -> bool:
     try:
-        import sounddevice as sd
-
         for device in sd.query_devices():  # type: ignore[attr-defined]
             if device.get("max_input_channels", 0) > 0:
                 return True
@@ -153,8 +176,10 @@ async def diagnostics() -> dict[str, Any]:
     ollama_reachable = await _ollama_reachable()
 
     selected_ollama_model_available = False
+    configured_blackhole_device = ""
     try:
         config = load_config()
+        configured_blackhole_device = config.audio.blackhole_device_name
         if ollama_reachable and config.summarisation.backend == "ollama":
             selected_ollama_model_available = await _selected_ollama_model_available(
                 config.summarisation.ollama_model
@@ -162,10 +187,18 @@ async def diagnostics() -> dict[str, Any]:
     except Exception:
         selected_ollama_model_available = False
 
+    blackhole_candidates = _blackhole_input_candidates()
+    configured_blackhole_available = _configured_blackhole_available(
+        configured_blackhole_device, blackhole_candidates
+    )
+
     return {
         "platform": "macos" if _is_macos() else sys.platform,
         "apple_silicon": _is_apple_silicon(),
         "blackhole_found": _blackhole_present(),
+        "blackhole_candidates": blackhole_candidates,
+        "configured_blackhole_device": configured_blackhole_device,
+        "configured_blackhole_available": configured_blackhole_available,
         "microphone_available": _microphone_available(),
         "audio_output_devices": _audio_output_devices(),
         "ollama_reachable": ollama_reachable,
