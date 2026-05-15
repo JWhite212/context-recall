@@ -11,6 +11,11 @@ interface ModelProgress {
   error?: string;
 }
 
+interface PipelineWarning {
+  source: string;
+  message: string;
+}
+
 interface AppState {
   /** WebSocket connection status. */
   wsConnected: boolean;
@@ -18,6 +23,10 @@ interface AppState {
 
   /** Current pipeline stage for the active meeting. */
   pipelineStage: string | null;
+
+  /** Latest non-fatal pipeline warning (e.g. silent system audio). One
+   *  per active recording session; cleared on session boundaries. */
+  pipelineWarning: PipelineWarning | null;
 
   /** Live transcript segments for the active meeting. */
   liveSegments: TranscriptSegment[];
@@ -45,6 +54,7 @@ export const useAppStore = create<AppState>((set) => ({
   setWsConnected: (connected) => set({ wsConnected: connected }),
 
   pipelineStage: null,
+  pipelineWarning: null,
   liveSegments: [],
   audioLevels: { system: 0, mic: 0 },
   modelProgress: {},
@@ -56,18 +66,35 @@ export const useAppStore = create<AppState>((set) => ({
 
   handleEvent: (event) => {
     switch (event.type) {
+      case "meeting.started":
+        // New session — clear any warning left over from a previous run.
+        set({ pipelineWarning: null });
+        break;
       case "pipeline.stage":
         set({ pipelineStage: event.stage });
+        break;
+      case "pipeline.warning":
+        set({
+          pipelineWarning: {
+            source: event.source,
+            message: event.message,
+          },
+        });
         break;
       case "pipeline.complete":
         set({
           pipelineStage: null,
+          pipelineWarning: null,
           liveSegments: [],
           audioLevels: { system: 0, mic: 0 },
         });
         break;
       case "pipeline.error":
-        set({ pipelineStage: null, audioLevels: { system: 0, mic: 0 } });
+        set({
+          pipelineStage: null,
+          pipelineWarning: null,
+          audioLevels: { system: 0, mic: 0 },
+        });
         break;
       case "transcript.segment":
         if (!event.segment?.text?.trim()) break;
@@ -106,6 +133,7 @@ export const useAppStore = create<AppState>((set) => ({
   resetLive: () =>
     set({
       pipelineStage: null,
+      pipelineWarning: null,
       liveSegments: [],
       audioLevels: { system: 0, mic: 0 },
     }),

@@ -297,6 +297,12 @@ export type WSEvent =
       error: string;
     }
   | {
+      type: "pipeline.warning";
+      source: string;
+      message: string;
+      meeting_id?: string | null;
+    }
+  | {
       type: "transcript.segment";
       meeting_id: string | null;
       segment: TranscriptSegment;
