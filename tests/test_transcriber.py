@@ -307,6 +307,87 @@ class TestTranscriber:
 # ------------------------------------------------------------------
 
 
+class TestDroppedSegmentsExposed:
+    """Bug B1: hallucination filters were silently dropping segments. The
+    user only saw the result downstream (empty transcript → meeting marked
+    'error'). Filtered segments must be retained on the Transcript so the
+    UI can show "X segments filtered" and the user can debug whether the
+    filtering was correct."""
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_filtered_segments_are_kept_in_dropped_segments(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig()
+        transcriber = Transcriber(config)
+        # 1 normal + 1 repetition hallucination + 1 normal
+        mock_transcribe.return_value = {
+            "segments": [
+                {"id": 0, "start": 0.0, "end": 3.0, "text": "Normal speech here."},
+                {
+                    "id": 1,
+                    "start": 3.0,
+                    "end": 6.0,
+                    "text": "Dios Dios Dios Dios Dios Dios",
+                },
+                {"id": 2, "start": 6.0, "end": 9.0, "text": "Back to normal."},
+            ],
+            "language": "en",
+        }
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+        result = transcriber.transcribe(audio_file)
+
+        # Kept segments work as before.
+        assert len(result.segments) == 2
+
+        # The filtered segment is no longer thrown away — it's preserved
+        # on dropped_segments so callers can surface it.
+        assert len(result.dropped_segments) == 1
+        assert "Dios" in result.dropped_segments[0].text
+        # Round-trip the same dataclass type, not raw MLX dicts.
+        assert isinstance(result.dropped_segments[0], TranscriptSegment)
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_dropped_segments_empty_when_nothing_filtered(self, mock_transcribe, tmp_path):
+        config = TranscriptionConfig()
+        transcriber = Transcriber(config)
+        mock_transcribe.return_value = _make_mlx_result()  # no hallucinations
+
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+        result = transcriber.transcribe(audio_file)
+
+        assert result.dropped_segments == []
+
+    @patch("src.transcriber.mlx_whisper.transcribe")
+    def test_dropped_segments_round_trip_via_to_dict(self, mock_transcribe, tmp_path):
+        """to_dict() must include dropped_segments so the orchestrator can
+        persist them in transcript_json and the UI can render the count."""
+        config = TranscriptionConfig()
+        transcriber = Transcriber(config)
+        mock_transcribe.return_value = {
+            "segments": [
+                {"id": 0, "start": 0.0, "end": 3.0, "text": "Normal."},
+                {
+                    "id": 1,
+                    "start": 3.0,
+                    "end": 6.0,
+                    "text": "ha ha ha ha ha ha ha",
+                },
+            ],
+            "language": "en",
+        }
+        audio_file = tmp_path / "test.wav"
+        audio_file.write_bytes(b"\x00" * 100)
+
+        result = transcriber.transcribe(audio_file)
+        d = result.to_dict()
+
+        assert "dropped_segments" in d
+        assert len(d["dropped_segments"]) == 1
+        assert "ha" in d["dropped_segments"][0]["text"]
+
+
 class TestRepetitionHallucination:
     """Verify _is_repetition_hallucination static method."""
 

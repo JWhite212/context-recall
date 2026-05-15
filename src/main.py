@@ -449,16 +449,43 @@ class ContextRecall:
             self._db_update(meeting_id, status="error")
             return
 
-        if transcript.word_count < 5:
-            logger.warning(
-                "Transcript too short (%d words). Skipping summarisation.",
-                transcript.word_count,
+        # If we got nothing usable from transcription, that's a real failure
+        # (silent capture, MLX returned nothing). Mark as error.
+        if not transcript.segments:
+            logger.warning("Transcript is empty — marking meeting as error.")
+            self._emit(
+                "pipeline.error",
+                meeting_id=meeting_id,
+                stage="transcribing",
+                error="Transcript is empty. The audio may be silent or corrupted.",
             )
             self._db_update(meeting_id, status="error")
             return
 
         if duration_seconds == 0.0:
             duration_seconds = transcript.duration_seconds
+
+        # If the transcript is real but very short, summarisation would just
+        # generate garbage. Persist what we got with status='complete' so
+        # the user can at least see the captured content (Bug B1) — no more
+        # losing real "hi bye" meetings to a < 5 word threshold.
+        if transcript.word_count < 5:
+            logger.warning(
+                "Transcript too short (%d words). Persisting without summarisation.",
+                transcript.word_count,
+            )
+            self._db_update(
+                meeting_id,
+                title="Untitled Meeting (short)",
+                ended_at=started_at + duration_seconds,
+                duration_seconds=duration_seconds,
+                status="complete",
+                transcript_json=json.dumps(transcript.to_dict()),
+                language=transcript.language,
+                word_count=transcript.word_count,
+            )
+            self._emit("pipeline.complete", meeting_id=meeting_id, title="Untitled Meeting (short)")
+            return
 
         # Step 2: Diarise (if enabled).
         if self._diariser:

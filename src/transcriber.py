@@ -48,6 +48,10 @@ class Transcript:
     language: str = ""
     language_probability: float = 0.0
     duration_seconds: float = 0.0
+    # Segments that the hallucination filters dropped, preserved so the
+    # caller can surface "X segments filtered" to the user instead of
+    # silently throwing them away (Bug B1).
+    dropped_segments: list[TranscriptSegment] = field(default_factory=list)
 
     @property
     def full_text(self) -> str:
@@ -76,6 +80,7 @@ class Transcript:
             "language": self.language,
             "language_probability": self.language_probability,
             "duration_seconds": self.duration_seconds,
+            "dropped_segments": [asdict(s) for s in self.dropped_segments],
         }
 
 
@@ -154,6 +159,7 @@ class Transcriber:
         )
 
         segments: list[TranscriptSegment] = []
+        dropped: list[TranscriptSegment] = []
         last_end = -1.0
         for seg_dict in result.get("segments", []):
             text = seg_dict["text"].strip()
@@ -162,6 +168,7 @@ class Transcriber:
 
             start = seg_dict["start"]
             end = seg_dict["end"]
+            ts = TranscriptSegment(start=start, end=end, text=text)
 
             # Timestamp monotonicity: skip segments that jump backwards.
             if start < last_end - 0.1:
@@ -171,6 +178,7 @@ class Transcriber:
                     end,
                     text[:80],
                 )
+                dropped.append(ts)
                 continue
 
             # Repetition hallucination filter.
@@ -181,6 +189,7 @@ class Transcriber:
                     end,
                     text[:80],
                 )
+                dropped.append(ts)
                 continue
 
             # High compression ratio filter (very repetitive character patterns).
@@ -191,9 +200,9 @@ class Transcriber:
                     end,
                     text[:80],
                 )
+                dropped.append(ts)
                 continue
 
-            ts = TranscriptSegment(start=start, end=end, text=text)
             segments.append(ts)
             last_end = end
             if on_segment:
@@ -211,6 +220,7 @@ class Transcriber:
             language=result.get("language", ""),
             language_probability=0.0,  # MLX Whisper doesn't provide this.
             duration_seconds=duration,
+            dropped_segments=dropped,
         )
 
         rtf = elapsed / duration if duration > 0 else 0

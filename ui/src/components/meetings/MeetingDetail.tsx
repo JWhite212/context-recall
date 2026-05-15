@@ -156,11 +156,15 @@ function TranscriptView({
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   let segments: TranscriptSegment[] = [];
+  let droppedCount = 0;
   try {
     const data = JSON.parse(json);
     segments = (data.segments ?? []).filter((s: TranscriptSegment) =>
       s.text?.trim(),
     );
+    droppedCount = Array.isArray(data.dropped_segments)
+      ? data.dropped_segments.length
+      : 0;
   } catch {
     return (
       <p className="text-sm text-text-muted">Unable to parse transcript.</p>
@@ -198,6 +202,16 @@ function TranscriptView({
           </span>
         )}
       </div>
+
+      {/* Filtered segments hint (Bug B1): when MLX hallucinates the
+          transcriber drops the bad segments. Show the count so the user
+          knows filtering happened and can judge whether it was correct. */}
+      {droppedCount > 0 && (
+        <p className="text-xs text-text-muted italic">
+          {droppedCount} segment{droppedCount === 1 ? "" : "s"} filtered as
+          likely hallucinations.
+        </p>
+      )}
 
       {/* Segments */}
       <div className="flex flex-col gap-0.5">

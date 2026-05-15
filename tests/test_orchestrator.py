@@ -412,3 +412,89 @@ def test_db_update_silent_when_no_api_server(
 
     error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert not error_records, "no api_server is a legitimate runtime mode and must not log an error"
+
+
+# ---------------------------------------------------------------------------
+# Bug B1: short-but-non-empty transcripts must not be marked errored
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_short_transcript_persists_as_complete_not_error(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+    audio_file,
+):
+    """Bug B1: a real but very short transcript ("hi bye thanks") was
+    being marked 'error' just because it had < 5 words. That conflated
+    "no audio at all" with "very short conversation" — losing the
+    transcript the user actually got. The fix preserves the transcript
+    and skips summarisation, but does NOT mark the meeting errored."""
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._transcriber.transcribe.return_value = _make_short_transcript()  # 2 words
+
+    # Replace _persist_audio so we don't need a real DB; return a known id.
+    app._persist_audio = MagicMock(return_value=(audio_file, "meet-short"))
+    # Spy on _db_update so we can introspect every status write.
+    app._db_update = MagicMock()
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    # Summariser must NOT be called for trivial transcripts (Ollama would
+    # generate garbage from 2 words).
+    app._summariser.summarise.assert_not_called()
+
+    # The meeting must NOT be marked 'error' just for being short.
+    error_calls = [c for c in app._db_update.call_args_list if c.kwargs.get("status") == "error"]
+    assert not error_calls, (
+        f"short-but-non-empty transcripts must not be flagged as failed; got: {error_calls}"
+    )
+
+    # The transcript must be persisted so the user can see what they got.
+    transcript_calls = [c for c in app._db_update.call_args_list if "transcript_json" in c.kwargs]
+    assert transcript_calls, (
+        "transcript_json must be persisted for short transcripts so the "
+        "user can review the captured content"
+    )
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_empty_transcript_still_marks_meeting_errored(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+    audio_file,
+):
+    """Counterpart: a truly empty transcript (no segments at all) is a
+    legitimate failure and must still be flagged 'error'. Capture really
+    did fail to produce usable audio."""
+    from src.main import ContextRecall
+    from src.transcriber import Transcript
+
+    app = ContextRecall(config_path=tmp_config)
+    app._transcriber.transcribe.return_value = Transcript(
+        segments=[], language="en", language_probability=0.0, duration_seconds=0.0
+    )
+
+    app._persist_audio = MagicMock(return_value=(audio_file, "meet-empty"))
+    app._db_update = MagicMock()
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    app._summariser.summarise.assert_not_called()
+
+    error_calls = [c for c in app._db_update.call_args_list if c.kwargs.get("status") == "error"]
+    assert error_calls, "empty transcript must be flagged as error"
