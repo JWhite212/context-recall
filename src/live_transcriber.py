@@ -10,9 +10,12 @@ stored transcript comes from a full batch run after recording stops,
 which has higher accuracy due to full-context processing.
 """
 
+import concurrent.futures
 import logging
 import queue
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,6 +23,16 @@ import numpy as np
 from src.transcriber import TranscriptSegment
 
 logger = logging.getLogger("contextrecall.live")
+
+# Window over which dropped-chunk counts accumulate before being flushed as
+# a single pipeline.warning. Avoids spamming the UI when the audio thread
+# bursts faster than the transcriber can drain.
+_DROP_WARN_WINDOW_SECONDS = 5.0
+
+# Hard cap on a single MLX transcribe call. Bad input has been observed to
+# wedge the kernel indefinitely; without a bound, LiveTranscriber.stop()
+# would hang on the worker join.
+_MLX_TRANSCRIBE_TIMEOUT_SECONDS = 60.0
 
 
 @dataclass
@@ -45,12 +58,14 @@ class LiveTranscriber:
         on_segment=None,
         sample_rate: int = 16000,
         config: LiveTranscriptionConfig | None = None,
+        on_warning: Callable[[dict], None] | None = None,
     ):
         self._model_size = model_size
         self._language = None if language == "auto" else language
         self._on_segment = on_segment
         self._sample_rate = sample_rate
         self._config = config or LiveTranscriptionConfig()
+        self.on_warning: Callable[[dict], None] | None = on_warning
 
         self._audio_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=500)
         self._running = False
@@ -59,12 +74,24 @@ class LiveTranscriber:
         self._previous_text = ""
         self._total_offset_samples = 0
 
+        # Dropped-chunk counter + monotonic window anchor. The audio
+        # callback thread bumps these; the worker (or stop()) flushes.
+        self._dropped_chunks = 0
+        self._dropped_window_started_at: float | None = None
+        self._drop_lock = threading.Lock()
+
     def feed(self, audio_chunk: np.ndarray) -> None:
         """Feed audio samples. Thread-safe, non-blocking. Called from PortAudio callback."""
         try:
             self._audio_queue.put_nowait(audio_chunk.copy())
         except queue.Full:
-            pass  # Drop chunk rather than block the audio thread.
+            # Drop rather than block the audio thread; record the drop so
+            # _maybe_flush_drop_warning can surface it as a pipeline.warning.
+            now = time.monotonic()
+            with self._drop_lock:
+                self._dropped_chunks += 1
+                if self._dropped_window_started_at is None:
+                    self._dropped_window_started_at = now
 
     def start(self) -> None:
         """Start the transcription worker thread."""
@@ -91,6 +118,9 @@ class LiveTranscriber:
         if self._thread:
             self._thread.join(timeout=30)
             self._thread = None
+        # Flush any final drop-counter activity so a burst right at
+        # shutdown isn't silently lost.
+        self._maybe_flush_drop_warning(force=True)
         logger.info("Live transcriber stopped")
 
     def _worker_loop(self) -> None:
@@ -103,6 +133,7 @@ class LiveTranscriber:
             if not self._running:
                 break
             buffer = self._drain_queue(buffer)
+            self._maybe_flush_drop_warning()
 
             duration = len(buffer) / self._sample_rate
             if duration < self._config.min_chunk_seconds:
@@ -128,6 +159,47 @@ class LiveTranscriber:
         if len(buffer) / self._sample_rate >= self._config.min_chunk_seconds:
             self._transcribe_chunk(buffer)
 
+    def _maybe_flush_drop_warning(self, force: bool = False) -> None:
+        """If the drop window has elapsed (or force=True), emit a warning.
+
+        Resets the counter and window anchor afterwards. Safe to call from
+        the worker thread; takes the lock briefly to read+reset the shared
+        counter incremented by feed().
+        """
+        with self._drop_lock:
+            count = self._dropped_chunks
+            window_start = self._dropped_window_started_at
+            if count == 0 or window_start is None:
+                return
+            elapsed = time.monotonic() - window_start
+            if not force and elapsed < _DROP_WARN_WINDOW_SECONDS:
+                return
+            # Snapshot + reset under the lock so concurrent feed() drops
+            # always belong to either this window or the next, never both.
+            self._dropped_chunks = 0
+            self._dropped_window_started_at = None
+
+        logger.warning(
+            "Live transcriber dropped %d audio chunk(s) in %.1fs — "
+            "transcribe is falling behind audio capture.",
+            count,
+            elapsed,
+        )
+        callback = self.on_warning
+        if callback is None:
+            return
+        try:
+            callback(
+                {
+                    "type": "live_chunk_drop",
+                    "count": count,
+                    "window_seconds": round(elapsed, 2),
+                }
+            )
+        except Exception:
+            # Never let an event-bus failure break the live transcriber.
+            logger.exception("on_warning callback raised; ignoring")
+
     def _drain_queue(self, buffer: np.ndarray) -> np.ndarray:
         """Drain all pending audio chunks from the queue into the buffer."""
         chunks = [buffer] if len(buffer) > 0 else []
@@ -142,19 +214,42 @@ class LiveTranscriber:
         return np.concatenate(chunks)
 
     def _transcribe_chunk(self, audio: np.ndarray) -> None:
-        """Transcribe an audio buffer and emit new segments."""
+        """Transcribe an audio buffer and emit new segments.
+
+        The MLX call is dispatched to a single-shot ThreadPoolExecutor with
+        a hard deadline so a wedged kernel can't block this worker — which
+        would in turn block stop()'s join and stall meeting teardown. On
+        timeout the executor is shut down with wait=False; the orphan
+        thread is unavoidable (Python has no thread kill) but unblocking
+        the pipeline matters more.
+        """
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="live-mlx"
+        )
         try:
             import mlx_whisper
 
-            result = mlx_whisper.transcribe(
+            future = executor.submit(
+                mlx_whisper.transcribe,
                 audio,
                 path_or_hf_repo=self._model_size,
                 language=self._language,
                 word_timestamps=False,
             )
+            try:
+                result = future.result(timeout=_MLX_TRANSCRIBE_TIMEOUT_SECONDS)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                logger.warning(
+                    "Live transcription chunk timed out after %.0fs — skipping",
+                    _MLX_TRANSCRIBE_TIMEOUT_SECONDS,
+                )
+                return
         except Exception as e:
             logger.warning("Live transcription chunk failed: %s", e)
             return
+        finally:
+            executor.shutdown(wait=False)
 
         segments = result.get("segments", [])
         if not segments:

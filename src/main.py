@@ -270,12 +270,19 @@ class ContextRecall:
                         segment=asdict(seg),
                     )
 
+                def _on_live_warning(payload: dict) -> None:
+                    # Forward structured live-transcriber warnings (e.g.
+                    # type=live_chunk_drop) onto the pipeline.warning bus
+                    # so the UI can surface backpressure to the user.
+                    self._emit("pipeline.warning", **payload)
+
                 self._live_transcriber = LiveTranscriber(
                     model_size=self._config.transcription.model_size,
                     language=self._config.transcription.language,
                     on_segment=_on_live_segment,
                     sample_rate=self._config.audio.sample_rate,
                     config=live_config,
+                    on_warning=_on_live_warning,
                 )
                 self._capture.on_audio_data = self._live_transcriber.feed
                 self._live_transcriber.start()
