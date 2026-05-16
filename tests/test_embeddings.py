@@ -87,3 +87,56 @@ def test_lazy_loading():
 
     mock_load.assert_called_once()
     assert embedder._model is mock_model
+
+
+@pytest.mark.asyncio
+async def test_bruteforce_cosine_fallback_runs_when_vec_unavailable(repo, monkeypatch):
+    """search_embeddings must transparently use the brute-force cosine path
+    when sqlite-vec is not loaded (`_vec_available = False`).
+
+    This guards regressions where the vec0 query was the only path and
+    silently returned nothing on systems without the sqlite-vec extension.
+    """
+    import time as _time
+
+    import src.db.database as db_mod
+    import src.db.repository as repo_mod
+
+    # Force the fallback regardless of whether vec0 actually loaded.
+    monkeypatch.setattr(db_mod, "_vec_available", False)
+
+    mid = await repo.create_meeting(started_at=_time.time())
+    embeddings = [
+        {
+            "segment_index": 0,
+            "embedding": [1.0, 0.0, 0.0],
+            "text": "first segment",
+            "speaker": "Me",
+            "start_time": 0.0,
+        },
+        {
+            "segment_index": 1,
+            "embedding": [0.0, 1.0, 0.0],
+            "text": "second segment",
+            "speaker": "Remote",
+            "start_time": 5.0,
+        },
+    ]
+    await repo.store_embeddings(mid, embeddings)
+
+    # Spy on the brute-force method to prove it was the one invoked.
+    called = {"n": 0}
+    original_bf = repo_mod.MeetingRepository._search_embeddings_bruteforce
+
+    async def spy_bf(self, *args, **kwargs):
+        called["n"] += 1
+        return await original_bf(self, *args, **kwargs)
+
+    monkeypatch.setattr(repo_mod.MeetingRepository, "_search_embeddings_bruteforce", spy_bf)
+
+    # Query closest to the first vector — it should rank first.
+    results = await repo.search_embeddings([1.0, 0.0, 0.0], limit=2)
+    assert called["n"] == 1, "Brute-force path must run when _vec_available is False"
+    assert len(results) == 2
+    assert results[0]["text"] == "first segment"
+    assert results[0]["distance"] < results[1]["distance"]

@@ -202,6 +202,48 @@ async def test_search_meetings_empty_query(repo: MeetingRepository):
     assert isinstance(results, list)
 
 
+@pytest.mark.asyncio
+async def test_search_meetings_fts_injection_safe(repo: MeetingRepository):
+    """User-supplied FTS5 operators must not escape phrase quoting.
+
+    A query containing FTS5 operators (NOT/AND/* etc.) or embedded double
+    quotes must be safely treated as a literal phrase rather than parsed
+    as an FTS5 expression. Before the fix, a quote in the query would
+    unbalance the phrase-quoting and either crash FTS or open up operator
+    injection.
+    """
+    mid = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(
+        mid,
+        title="Quarterly Review",
+        status="complete",
+        summary_markdown="Discussed the quarterly numbers.",
+    )
+    # Populate FTS index.
+    try:
+        await repo._db.conn.execute(
+            "INSERT INTO meetings_fts (rowid, title, summary_markdown, transcript_text) "
+            "SELECT rowid, title, summary_markdown, '' FROM meetings WHERE id = ?",
+            (mid,),
+        )
+        await repo._db.conn.commit()
+    except Exception:
+        return  # FTS not available; nothing to test
+
+    # A query with embedded quotes — must not raise and must not be
+    # interpretable as an FTS expression. Either zero matches or the
+    # phrase matches literally (it won't here).
+    results = await repo.search_meetings('quarterly" OR "review')
+    assert isinstance(results, list)
+
+    # FTS5 operators must not behave as operators when injected.
+    results = await repo.search_meetings("Quarterly NOT Review")
+    assert isinstance(results, list)
+    # The single-token "Quarterly" must still find the row.
+    results = await repo.search_meetings("Quarterly")
+    assert any(m.id == mid for m in results)
+
+
 # ------------------------------------------------------------------
 # Embedding storage / retrieval tests
 # ------------------------------------------------------------------

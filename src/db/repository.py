@@ -276,9 +276,11 @@ class MeetingRepository:
 
     async def search_meetings(self, query: str, limit: int = 20) -> list[MeetingRecord]:
         """Full-text search across meeting title, summary, and transcript."""
-        # Wrap the query in double-quotes to treat it as a phrase search and
-        # prevent FTS5 operator abuse (AND/OR/NOT/* etc).
-        safe_query = '"' + query.replace('"', "") + '"'
+        # FTS5 injection hardening: pass the query as a bound parameter and
+        # double-up any embedded quotes per FTS5 escaping rules, then wrap in
+        # double-quotes so the whole thing is treated as a phrase match (no
+        # operator abuse: AND/OR/NOT/* etc).
+        match_param = '"' + query.replace('"', '""') + '"'
         try:
             cursor = await self._db.conn.execute(
                 """
@@ -288,7 +290,7 @@ class MeetingRepository:
                 ORDER BY rank
                 LIMIT ?
                 """,
-                (safe_query, limit),
+                (match_param, limit),
             )
             rows = await cursor.fetchall()
             return [MeetingRecord.from_row(r) for r in rows]
@@ -727,7 +729,8 @@ class MeetingRepository:
         # 2. FTS5 keyword search
         fts_results: list[dict] = []
         try:
-            safe_query = '"' + query_text.replace('"', "") + '"'
+            # FTS5 injection hardening: bound parameter + doubled quotes.
+            match_param = '"' + query_text.replace('"', '""') + '"'
             sql = """
                 SELECT m.id as meeting_id, m.title, m.started_at,
                        rank as fts_rank
@@ -735,7 +738,7 @@ class MeetingRepository:
                 JOIN meetings m ON m.rowid = meetings_fts.rowid
                 WHERE meetings_fts MATCH ?
             """
-            params: list = [safe_query]
+            params: list = [match_param]
             if date_from is not None:
                 sql += " AND m.started_at >= ?"
                 params.append(date_from)

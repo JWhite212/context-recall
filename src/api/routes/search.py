@@ -5,13 +5,17 @@ POST /api/search         — search across all meeting transcripts
 POST /api/search/reindex — re-index all existing meetings
 """
 
+import asyncio
 import json
 import logging
 import time
+from collections import defaultdict
+from threading import Lock
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from src.db.repository import MeetingRecord
 from src.utils.temporal import parse_temporal
 
 logger = logging.getLogger("contextrecall.api.search")
@@ -22,11 +26,51 @@ _repo = None
 _embedder = None
 _last_reindex: float = 0.0
 
+# Per-IP token bucket rate limit for POST /api/search.
+# 10 tokens per second, capacity 10, refilled continuously based on elapsed time.
+_RATE_LIMIT_RPS = 10.0
+_RATE_LIMIT_CAPACITY = 10.0
+# Soft cap to prevent unbounded memory growth from churning IPs; full state
+# for each entry is two floats so 4096 buckets is trivial.
+_RATE_BUCKETS_MAX = 4096
+_rate_buckets: dict[str, list[float]] = defaultdict(lambda: [_RATE_LIMIT_CAPACITY, 0.0])
+_rate_lock = Lock()
+
 
 def init(repo, embedder) -> None:
     global _repo, _embedder
     _repo = repo
     _embedder = embedder
+
+
+def _rate_limit_dep(request: Request) -> None:
+    """Per-IP token-bucket rate limit (10 req/s) for POST /api/search.
+
+    Raises HTTP 429 if the bucket is empty. Designed to be cheap (O(1) under
+    a short critical section) so it can sit on a hot path.
+    """
+    client = request.client
+    ip = client.host if client else "unknown"
+    now = time.monotonic()
+    with _rate_lock:
+        if ip not in _rate_buckets and len(_rate_buckets) >= _RATE_BUCKETS_MAX:
+            # Cap reached: evict the bucket with the oldest last-touch time.
+            oldest_ip = min(_rate_buckets, key=lambda k: _rate_buckets[k][1])
+            del _rate_buckets[oldest_ip]
+        bucket = _rate_buckets[ip]
+        tokens, last = bucket[0], bucket[1]
+        # Refill since last request.
+        elapsed = now - last if last else 0.0
+        tokens = min(_RATE_LIMIT_CAPACITY, tokens + elapsed * _RATE_LIMIT_RPS)
+        if tokens < 1.0:
+            # Update last so refill continues from now.
+            bucket[1] = now
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Try again shortly.",
+            )
+        bucket[0] = tokens - 1.0
+        bucket[1] = now
 
 
 class SearchRequest(BaseModel):
@@ -59,7 +103,33 @@ class ReindexResponse(BaseModel):
     segments_indexed: int
 
 
-@router.post("/api/search", response_model=SearchResponse)
+async def _fetch_meetings_by_ids(meeting_ids: list[str]) -> dict:
+    """Batch-fetch meetings by IDs. Returns {id: MeetingRecord}.
+
+    Note: duplicates logic Unit 8 introduces as
+    `MeetingRepository.get_meetings_by_ids`. When Unit 8 merges, swap this
+    helper for `_repo.get_meetings_by_ids(meeting_ids)` and delete this fn.
+    """
+    if not meeting_ids:
+        return {}
+    if hasattr(_repo, "get_meetings_by_ids"):
+        rows = await _repo.get_meetings_by_ids(meeting_ids)
+        return {m.id: m for m in rows}
+    # Fallback: single batched query against the meetings table.
+    placeholders = ",".join("?" * len(meeting_ids))
+    cursor = await _repo._db.conn.execute(
+        f"SELECT * FROM meetings WHERE id IN ({placeholders})",
+        meeting_ids,
+    )
+    rows = await cursor.fetchall()
+    return {row["id"]: MeetingRecord.from_row(row) for row in rows}
+
+
+@router.post(
+    "/api/search",
+    response_model=SearchResponse,
+    dependencies=[Depends(_rate_limit_dep)],
+)
 async def search_transcripts(body: SearchRequest):
     if not _repo or not _embedder:
         raise HTTPException(status_code=503, detail="Search not available")
@@ -109,13 +179,9 @@ async def search_transcripts(body: SearchRequest):
             date_to=date_to,
         )
 
-    # Batch-fetch meeting titles.
+    # Batch-fetch meeting titles (was O(N) sequential awaits — now one query).
     meeting_ids = list({r["meeting_id"] for r in raw_results})
-    meetings_map: dict = {}
-    for mid in meeting_ids:
-        m = await _repo.get_meeting(mid)
-        if m:
-            meetings_map[mid] = m
+    meetings_map = await _fetch_meetings_by_ids(meeting_ids)
 
     results = []
     for r in raw_results:
@@ -155,41 +221,49 @@ async def reindex_all():
     meetings = await _repo.list_meetings(limit=10000)
     total_meetings = 0
     total_segments = 0
+    batch_size = 100
 
-    for meeting in meetings:
-        if not meeting.transcript_json:
-            continue
-
-        try:
-            data = json.loads(meeting.transcript_json)
-            segments = data.get("segments", [])
-            if not segments:
+    for batch_start in range(0, len(meetings), batch_size):
+        batch = meetings[batch_start : batch_start + batch_size]
+        for meeting in batch:
+            if not meeting.transcript_json:
                 continue
 
-            texts = [s.get("text", "") for s in segments]
-            texts = [t for t in texts if t.strip()]
-            if not texts:
+            try:
+                data = json.loads(meeting.transcript_json)
+                segments = data.get("segments", [])
+                if not segments:
+                    continue
+
+                texts = [s.get("text", "") for s in segments]
+                texts = [t for t in texts if t.strip()]
+                if not texts:
+                    continue
+
+                vectors = _embedder.embed(texts)
+
+                emb_records = []
+                for i, (seg, vec) in enumerate(zip(segments, vectors)):
+                    emb_records.append(
+                        {
+                            "segment_index": i,
+                            "embedding": vec,
+                            "text": seg.get("text", ""),
+                            "speaker": seg.get("speaker", ""),
+                            "start_time": seg.get("start", 0.0),
+                        }
+                    )
+
+                await _repo.store_embeddings(meeting.id, emb_records)
+                total_meetings += 1
+                total_segments += len(emb_records)
+            except (json.JSONDecodeError, Exception) as e:
+                # One corrupt row must not kill the whole reindex.
+                logger.warning("Failed to index meeting %s: %s", meeting.id, e)
                 continue
-
-            vectors = _embedder.embed(texts)
-
-            emb_records = []
-            for i, (seg, vec) in enumerate(zip(segments, vectors)):
-                emb_records.append(
-                    {
-                        "segment_index": i,
-                        "embedding": vec,
-                        "text": seg.get("text", ""),
-                        "speaker": seg.get("speaker", ""),
-                        "start_time": seg.get("start", 0.0),
-                    }
-                )
-
-            await _repo.store_embeddings(meeting.id, emb_records)
-            total_meetings += 1
-            total_segments += len(emb_records)
-        except Exception as e:
-            logger.warning("Failed to index meeting %s: %s", meeting.id, e)
+        # Yield to the event loop between batches so we don't starve other
+        # requests during a long reindex.
+        await asyncio.sleep(0)
 
     logger.info("Reindex complete: %d meetings, %d segments", total_meetings, total_segments)
     return ReindexResponse(

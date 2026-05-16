@@ -34,10 +34,13 @@ def _reset_search():
     orig_repo = search_routes._repo
     orig_emb = search_routes._embedder
     orig_last_reindex = search_routes._last_reindex
+    # Clear the rate-limit bucket so per-test caps are independent.
+    search_routes._rate_buckets.clear()
     yield
     search_routes._repo = orig_repo
     search_routes._embedder = orig_emb
     search_routes._last_reindex = orig_last_reindex
+    search_routes._rate_buckets.clear()
 
 
 @pytest.fixture
@@ -202,3 +205,113 @@ def test_reindex_no_embedder():
             assert resp.status_code == 503
     finally:
         auth_mod._auth_token = original
+
+
+@pytest.mark.asyncio
+async def test_search_rate_limit_429(client):
+    """Per-IP rate limit returns 429 once the token bucket is exhausted."""
+    c, _repo, _emb = client
+    # First 10 requests should pass (capacity 10), the 11th in the same
+    # millisecond should be rejected.
+    success = 0
+    rejected = 0
+    for _ in range(15):
+        resp = c.post("/api/search", json={"query": "test"}, headers=_auth_headers())
+        if resp.status_code == 200:
+            success += 1
+        elif resp.status_code == 429:
+            rejected += 1
+    assert success >= 1, "Expected at least one success before bucket drains"
+    assert rejected >= 1, "Expected at least one 429 after exceeding capacity"
+
+
+@pytest.mark.asyncio
+async def test_search_batches_meeting_metadata_fetch(client, monkeypatch):
+    """Search must fetch meeting metadata in a single batch, not N+1.
+
+    Counts how many times the per-id `get_meeting` is invoked when results
+    span multiple meetings — should be 0 (the batched path handles it).
+    """
+    c, repo, mock_embedder = client
+
+    # Two distinct meetings with one segment each so raw_results has two
+    # different meeting_ids and the N+1 path would call get_meeting twice.
+    mid_a = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(mid_a, title="Alpha", status="complete")
+    mid_b = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(mid_b, title="Beta", status="complete")
+
+    await repo.store_embeddings(
+        mid_a,
+        [
+            {
+                "segment_index": 0,
+                "embedding": [0.1, 0.2, 0.3],
+                "text": "alpha line",
+                "speaker": "Me",
+                "start_time": 0.0,
+            }
+        ],
+    )
+    await repo.store_embeddings(
+        mid_b,
+        [
+            {
+                "segment_index": 0,
+                "embedding": [0.4, 0.5, 0.6],
+                "text": "beta line",
+                "speaker": "Me",
+                "start_time": 0.0,
+            }
+        ],
+    )
+
+    # Count direct per-id get_meeting calls.
+    original_get_meeting = repo.get_meeting
+    call_count = {"n": 0}
+
+    async def counting_get_meeting(mid):
+        call_count["n"] += 1
+        return await original_get_meeting(mid)
+
+    monkeypatch.setattr(repo, "get_meeting", counting_get_meeting)
+
+    resp = c.post(
+        "/api/search",
+        json={"query": "line", "limit": 5, "mode": "semantic"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    # Both meetings should show with titles populated via the batch fetch.
+    titles = {r["meeting_title"] for r in data["results"]}
+    assert titles == {"Alpha", "Beta"}
+    # No N+1: the route should not call get_meeting per result.
+    assert call_count["n"] == 0, (
+        f"Expected batched metadata fetch (0 get_meeting calls) but saw {call_count['n']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reindex_skips_corrupt_transcript(client):
+    """Corrupt transcript_json in one meeting must not abort the whole reindex."""
+    c, repo, mock_embedder = client
+
+    good_data = {
+        "segments": [
+            {"start": 0, "end": 5, "text": "Hello.", "speaker": "Me"},
+        ],
+    }
+    good_id = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(good_id, transcript_json=json.dumps(good_data), status="complete")
+
+    bad_id = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(bad_id, transcript_json="{this is not valid json", status="complete")
+
+    mock_embedder.embed.return_value = [[0.1, 0.2, 0.3]]
+    resp = c.post("/api/search/reindex", headers=_auth_headers())
+    assert resp.status_code == 200
+    data = resp.json()
+    # The good meeting still gets indexed; the corrupt one is skipped.
+    assert data["meetings_indexed"] == 1
+    assert data["segments_indexed"] == 1
