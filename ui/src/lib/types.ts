@@ -277,6 +277,18 @@ export interface ReindexResponse {
   segments_indexed: number;
 }
 
+/** Unresolved pipeline warning surfaced in the live diagnostics banner. */
+export interface WarningEvent {
+  /** Stable id (typically `source::message`) used for dismissal. */
+  id: string;
+  /** Source of the warning, e.g. "system", "mic", "audio.xrun", "capture". */
+  source: string;
+  /** Human-readable hint shown to the user. */
+  message: string;
+  /** Timestamp (ms since epoch) the UI first saw this warning. */
+  createdAt: number;
+}
+
 /** WebSocket event types pushed from the daemon. */
 export type WSEvent =
   | { type: "meeting.detecting"; consecutive: number; required: number }

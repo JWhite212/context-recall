@@ -205,6 +205,33 @@ fn open_app_support_dir(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Open a specific macOS System Settings pane. Targets are limited to an
+/// explicit allowlist so callers cannot pass arbitrary `x-apple.*` URLs
+/// (which would let the frontend deep-link to anywhere on the system).
+#[tauri::command]
+fn open_macos_settings(app: tauri::AppHandle, target: &str) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    // Allowlist of supported deep-links. Each entry maps a logical name to
+    // either an `x-apple.systempreferences:` URL or, for Audio MIDI Setup
+    // (a separate utility, not a Settings pane), the bundled app's URL.
+    let url = match target {
+        "audio-midi-setup" => "file:///System/Applications/Utilities/Audio%20MIDI%20Setup.app",
+        "privacy-microphone" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+        }
+        "privacy-screen-recording" => {
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        }
+        "sound" => "x-apple.systempreferences:com.apple.preference.sound",
+        _ => return Err(format!("Unsupported settings target: {target}")),
+    };
+
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Download and install the pending update found by check_for_updates.
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
@@ -238,6 +265,7 @@ pub fn run() {
             daemon_binary_path,
             open_logs_dir,
             open_app_support_dir,
+            open_macos_settings,
             is_start_at_login_enabled,
             set_start_at_login,
         ])

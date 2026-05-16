@@ -1,9 +1,40 @@
 import { useState, useEffect, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { startRecording, stopRecording } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useAppStore } from "../../stores/appStore";
 import { useToast } from "../common/Toast";
+import type { WarningEvent } from "../../lib/types";
+
+/** RMS threshold (peak system audio) at which the meter shows clipping. */
+const CLIPPING_THRESHOLD = 0.25;
+
+/** CTA configuration for a warning. `target` matches the Rust allowlist. */
+interface WarningCta {
+  label: string;
+  target: string;
+}
+
+/**
+ * Map a warning to a contextual recovery CTA. Returns null when the warning
+ * is purely informational. Keep the keyword list aligned with the daemon's
+ * `pipeline.warning` source/message strings.
+ */
+function ctaForWarning(w: WarningEvent): WarningCta | null {
+  const haystack = `${w.source} ${w.message}`.toLowerCase();
+  if (haystack.includes("blackhole") || haystack.includes("system audio")) {
+    return { label: "Open Audio MIDI Setup", target: "audio-midi-setup" };
+  }
+  if (
+    haystack.includes("microphone") ||
+    haystack.includes("mic permission") ||
+    haystack.includes("mic ")
+  ) {
+    return { label: "Open Microphone Privacy", target: "privacy-microphone" };
+  }
+  return null;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Pipeline stage labels                                             */
@@ -60,11 +91,13 @@ function useElapsedTimer(startedAt: number | null): number {
 export function LiveView() {
   const { daemonRunning, state, activeMeeting } = useDaemonStatus();
   const pipelineStage = useAppStore((s) => s.pipelineStage);
-  const pipelineWarning = useAppStore((s) => s.pipelineWarning);
+  const warnings = useAppStore((s) => s.warnings);
+  const dismissWarning = useAppStore((s) => s.dismissWarning);
   const liveSegments = useAppStore((s) => s.liveSegments);
   const audioLevels = useAppStore((s) => s.audioLevels);
   const queryClient = useQueryClient();
   const segmentsEndRef = useRef<HTMLDivElement>(null);
+  const isClipping = audioLevels.system > CLIPPING_THRESHOLD;
 
   const isRecording = state === "recording";
   const isProcessing = pipelineStage !== null && !isRecording;
@@ -114,32 +147,20 @@ export function LiveView() {
     <div className="flex flex-col gap-6 p-6 max-w-3xl">
       <h1 className="text-lg font-semibold text-text-primary">Live</h1>
 
-      {/* Daemon-emitted warning (e.g. silent system audio source). */}
-      {pipelineWarning && (
-        <div
-          role="alert"
-          className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 flex items-start gap-3"
+      {/* Pinned diagnostics banner: all unresolved pipeline.warning events. */}
+      {warnings.length > 0 && (
+        <section
+          aria-label="Recording diagnostics"
+          className="flex flex-col gap-2"
         >
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="text-amber-400 shrink-0 mt-0.5"
-            aria-hidden="true"
-          >
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <p className="text-sm text-amber-200 leading-relaxed">
-            {pipelineWarning.message}
-          </p>
-        </div>
+          {warnings.map((w) => (
+            <WarningBanner
+              key={w.id}
+              warning={w}
+              onDismiss={() => dismissWarning(w.id)}
+            />
+          ))}
+        </section>
       )}
 
       {/* Status + timer */}
@@ -240,15 +261,46 @@ export function LiveView() {
 
       {/* Audio level meters */}
       {isRecording && (
-        <div className="rounded-xl bg-surface-raised border border-border p-5">
-          <h2 className="text-sm font-medium text-text-primary mb-3">
-            Audio Levels
-          </h2>
+        <div
+          className={`rounded-xl bg-surface-raised p-5 transition-colors ${
+            isClipping ? "border-2 border-status-error" : "border border-border"
+          }`}
+          data-testid="audio-meters"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-medium text-text-primary">
+              Audio Levels
+            </h2>
+            {isClipping && (
+              <span
+                role="status"
+                aria-label="System audio clipping"
+                className="inline-flex items-center gap-1 text-xs font-medium text-status-error"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                Clipping
+              </span>
+            )}
+          </div>
           <div className="flex flex-col gap-3">
             <LevelMeter
               label="System"
               value={audioLevels.system}
-              color="bg-status-idle"
+              color={isClipping ? "bg-status-error" : "bg-status-idle"}
             />
             <LevelMeter label="Mic" value={audioLevels.mic} color="bg-accent" />
           </div>
@@ -377,7 +429,7 @@ function LevelMeter({
   color: string;
 }) {
   // RMS values are typically 0–0.3 for speech; scale to fill the bar.
-  const pct = Math.min(100, Math.round(value * 400));
+  const pct = Math.round(Math.min(value * 400, 100));
   return (
     <div className="flex items-center gap-3">
       <span className="text-xs text-text-muted w-12 text-right shrink-0">
@@ -407,4 +459,78 @@ function formatTimestamp(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function WarningBanner({
+  warning,
+  onDismiss,
+}: {
+  warning: WarningEvent;
+  onDismiss: () => void;
+}) {
+  const cta = ctaForWarning(warning);
+  const [ctaError, setCtaError] = useState<string | null>(null);
+
+  const handleCta = async () => {
+    if (!cta) return;
+    setCtaError(null);
+    try {
+      await invoke("open_macos_settings", { target: cta.target });
+    } catch (e) {
+      setCtaError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div
+      role="alert"
+      className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-4 flex items-start gap-3"
+    >
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="text-amber-400 shrink-0 mt-0.5"
+        aria-hidden="true"
+      >
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm text-amber-200 leading-relaxed">
+          {warning.message}
+        </p>
+        {ctaError && (
+          <p className="mt-1 text-xs text-status-error">
+            Could not open system settings: {ctaError}
+          </p>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {cta && (
+          <button
+            type="button"
+            onClick={handleCta}
+            className="rounded-lg bg-amber-400/20 px-2.5 py-1 text-xs font-medium text-amber-100 hover:bg-amber-400/30 transition-colors"
+          >
+            {cta.label}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss warning"
+          className="rounded-lg px-2 py-1 text-xs text-amber-200/70 hover:text-amber-100 transition-colors"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
 }

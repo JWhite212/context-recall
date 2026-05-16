@@ -3,6 +3,36 @@ import {
   useDiagnostics,
   type DiagnosticsData,
 } from "../../hooks/useDiagnostics";
+import { usePreflight, type PreflightData } from "../../hooks/usePreflight";
+import { useAppStore } from "../../stores/appStore";
+
+/**
+ * Recovery hints keyed by substring match against the latest pipeline.error
+ * message. The first matching keyword wins; matches are case-insensitive.
+ */
+const ERROR_HINTS: { keyword: string; hint: string }[] = [
+  {
+    keyword: "microphone",
+    hint: "Open System Settings → Privacy & Security → Microphone and ensure Context Recall is enabled.",
+  },
+  {
+    keyword: "blackhole",
+    hint: "Open Audio MIDI Setup and confirm the BlackHole 2ch device exists and is part of your Multi-Output Device.",
+  },
+  {
+    keyword: "daemon",
+    hint: "The recording daemon is unresponsive. Try restarting via the tray menu, then re-run the pipeline.",
+  },
+];
+
+function recoveryHintFor(error: string | null): string | null {
+  if (!error) return null;
+  const lower = error.toLowerCase();
+  for (const { keyword, hint } of ERROR_HINTS) {
+    if (lower.includes(keyword)) return hint;
+  }
+  return null;
+}
 
 /**
  * Each known diagnostics field has a friendly label and a copy used for the
@@ -168,6 +198,13 @@ function FieldValue({ name, value }: { name: string; value: unknown }) {
 
 export function DiagnosticsPanel() {
   const { data, isLoading, error, refetch } = useDiagnostics();
+  const {
+    data: preflight,
+    isLoading: preflightLoading,
+    notImplemented: preflightNotImplemented,
+  } = usePreflight();
+  const lastPipelineError = useAppStore((s) => s.lastPipelineError);
+  const recoveryHint = recoveryHintFor(lastPipelineError);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
   );
@@ -254,6 +291,23 @@ export function DiagnosticsPanel() {
         <p className="mt-4 text-xs text-text-secondary">Running checks...</p>
       )}
 
+      {lastPipelineError && (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-status-error/40 bg-status-error/10 p-3"
+        >
+          <p className="text-xs font-medium text-status-error">
+            Last pipeline error
+          </p>
+          <p className="mt-1 text-xs text-text-primary">{lastPipelineError}</p>
+          {recoveryHint && (
+            <p className="mt-2 text-xs text-text-secondary">
+              <span className="font-medium">Suggested fix:</span> {recoveryHint}
+            </p>
+          )}
+        </div>
+      )}
+
       {data && (
         <ul className="mt-4 divide-y divide-border">
           {rows.map((row) => (
@@ -266,6 +320,66 @@ export function DiagnosticsPanel() {
             </li>
           ))}
         </ul>
+      )}
+
+      {!preflightNotImplemented && (preflight || preflightLoading) && (
+        <PreflightSection
+          data={preflight}
+          isLoading={preflightLoading && !preflight}
+        />
+      )}
+    </div>
+  );
+}
+
+function PreflightSection({
+  data,
+  isLoading,
+}: {
+  data: PreflightData | null;
+  isLoading: boolean;
+}) {
+  return (
+    <div className="mt-6 border-t border-border pt-4">
+      <h3 className="text-sm font-semibold text-text-primary">Preflight</h3>
+      <p className="mt-1 text-xs text-text-secondary">
+        Pre-recording readiness checks.
+      </p>
+      {isLoading && (
+        <p className="mt-2 text-xs text-text-secondary">Running preflight...</p>
+      )}
+      {data?.checks && data.checks.length > 0 && (
+        <ul className="mt-3 divide-y divide-border">
+          {data.checks.map((c, i) => (
+            <li
+              key={`${c.name}-${i}`}
+              className="flex items-start justify-between gap-4 py-2"
+            >
+              <div className="min-w-0">
+                <p className="text-sm text-text-primary">{c.name}</p>
+                {c.message && (
+                  <p className="mt-0.5 text-xs text-text-secondary">
+                    {c.message}
+                  </p>
+                )}
+              </div>
+              <StatusPill
+                tone={
+                  c.status === "pass"
+                    ? "ok"
+                    : c.status === "fail"
+                      ? "fail"
+                      : "info"
+                }
+              >
+                {c.status.toUpperCase()}
+              </StatusPill>
+            </li>
+          ))}
+        </ul>
+      )}
+      {data && !data.checks?.length && !isLoading && (
+        <p className="mt-2 text-xs text-text-secondary">No checks reported.</p>
       )}
     </div>
   );

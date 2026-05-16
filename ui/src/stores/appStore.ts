@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { WSEvent, TranscriptSegment } from "../lib/types";
+import type { WSEvent, TranscriptSegment, WarningEvent } from "../lib/types";
 
 interface AudioLevels {
   system: number;
@@ -16,6 +16,15 @@ interface PipelineWarning {
   message: string;
 }
 
+/**
+ * Generate a stable id for a warning. Uses source + message so a duplicate
+ * warning from the daemon (e.g. periodic silent-source re-emission) does
+ * not stack visually.
+ */
+function warningId(source: string, message: string): string {
+  return `${source}::${message}`;
+}
+
 interface AppState {
   /** WebSocket connection status. */
   wsConnected: boolean;
@@ -27,6 +36,16 @@ interface AppState {
   /** Latest non-fatal pipeline warning (e.g. silent system audio). One
    *  per active recording session; cleared on session boundaries. */
   pipelineWarning: PipelineWarning | null;
+
+  /** Unresolved warnings shown as a pinned diagnostics banner.
+   *  De-duplicated by `source::message`; users can dismiss individually. */
+  warnings: WarningEvent[];
+  pushWarning: (w: WarningEvent) => void;
+  dismissWarning: (id: string) => void;
+
+  /** Latest pipeline.error message, used to surface contextual recovery
+   *  hints in the diagnostics panel. */
+  lastPipelineError: string | null;
 
   /** Live transcript segments for the active meeting. */
   liveSegments: TranscriptSegment[];
@@ -55,9 +74,20 @@ export const useAppStore = create<AppState>((set) => ({
 
   pipelineStage: null,
   pipelineWarning: null,
+  warnings: [],
+  lastPipelineError: null,
   liveSegments: [],
   audioLevels: { system: 0, mic: 0 },
   modelProgress: {},
+
+  pushWarning: (w) =>
+    set((state) => {
+      // De-dupe by id: replace existing entry rather than appending.
+      const filtered = state.warnings.filter((x) => x.id !== w.id);
+      return { warnings: [...filtered, w] };
+    }),
+  dismissWarning: (id) =>
+    set((state) => ({ warnings: state.warnings.filter((w) => w.id !== id) })),
 
   unreadNotifications: 0,
   incrementNotifications: () =>
@@ -68,23 +98,41 @@ export const useAppStore = create<AppState>((set) => ({
     switch (event.type) {
       case "meeting.started":
         // New session — clear any warning left over from a previous run.
-        set({ pipelineWarning: null });
+        set({ pipelineWarning: null, warnings: [], lastPipelineError: null });
         break;
       case "pipeline.stage":
         set({ pipelineStage: event.stage });
         break;
-      case "pipeline.warning":
-        set({
-          pipelineWarning: {
-            source: event.source,
-            message: event.message,
-          },
+      case "pipeline.warning": {
+        const id = warningId(event.source, event.message);
+        set((state) => {
+          // Duplicate emission: keep the existing entry (and its createdAt)
+          // so the banner doesn't re-render or jump in order.
+          const existing = state.warnings.find((w) => w.id === id);
+          const nextWarnings = existing
+            ? state.warnings
+            : [
+                ...state.warnings,
+                {
+                  id,
+                  source: event.source,
+                  message: event.message,
+                  createdAt: Date.now(),
+                },
+              ];
+          return {
+            pipelineWarning: { source: event.source, message: event.message },
+            warnings: nextWarnings,
+          };
         });
         break;
+      }
       case "pipeline.complete":
         set({
           pipelineStage: null,
           pipelineWarning: null,
+          warnings: [],
+          lastPipelineError: null,
           liveSegments: [],
           audioLevels: { system: 0, mic: 0 },
         });
@@ -93,6 +141,8 @@ export const useAppStore = create<AppState>((set) => ({
         set({
           pipelineStage: null,
           pipelineWarning: null,
+          warnings: [],
+          lastPipelineError: event.error,
           audioLevels: { system: 0, mic: 0 },
         });
         break;
@@ -134,6 +184,8 @@ export const useAppStore = create<AppState>((set) => ({
     set({
       pipelineStage: null,
       pipelineWarning: null,
+      warnings: [],
+      lastPipelineError: null,
       liveSegments: [],
       audioLevels: { system: 0, mic: 0 },
     }),
