@@ -1,5 +1,7 @@
 /** API client for communicating with the Context Recall daemon. */
 
+import { invoke } from "@tauri-apps/api/core";
+
 import type {
   ActionItem,
   ActionItemsResponse,
@@ -73,37 +75,172 @@ export function subscribeAuthToken(
   };
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(options?.headers as Record<string, string>),
-  };
+/** Default per-request timeout (ms). Callers may override via RequestOptions. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
+/**
+ * Structured error thrown by `request<T>` (and the export/prep helpers that
+ * share its contract). The UI catches this via `toastApiError` to surface a
+ * consistent toast message.
+ *
+ * - `status` is 0 for network / abort failures, otherwise the HTTP status.
+ * - `detail` is the server-supplied detail / error / message, or a generic
+ *   description for non-HTTP failures.
+ * - `retried` is true when the request was retried once after a 401 with a
+ *   refreshed token (still ended up failing).
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+  readonly retried: boolean;
+
+  constructor(status: number, detail: string, retried = false) {
+    super(`API ${status}: ${detail}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+    this.retried = retried;
+  }
+}
+
+export interface RequestOptions extends RequestInit {
+  /** Override the default 30s timeout. Set to 0 to disable. */
+  timeoutMs?: number;
+}
+
+/** Extract a human-readable detail string from a fetch Response. */
+async function extractDetail(res: Response): Promise<string> {
+  let detail = res.statusText;
+  try {
+    const body = await res.json();
+    if (Array.isArray(body.detail)) {
+      detail = body.detail
+        .map((e: { msg?: string }) => e.msg ?? JSON.stringify(e))
+        .join("; ");
+    } else {
+      detail = body.detail || body.error || body.message || detail;
+    }
+  } catch {
+    // Body was empty or not JSON — keep the statusText fallback.
+  }
+  return detail;
+}
+
+/**
+ * Core fetch helper: applies auth, timeout/abort, and the once-only 401
+ * retry, then returns the raw `Response`. Throws `ApiError` on non-OK
+ * statuses and on abort/timeout/network failure.
+ *
+ * - 30s default timeout via `AbortSignal.timeout`; per-call override via
+ *   `timeoutMs`, or 0 to disable.
+ * - Caller-supplied `signal` is composed with the timeout via
+ *   `AbortSignal.any` when available.
+ * - On 401, re-reads the token via the `read_auth_token` Tauri command
+ *   and retries once. A second 401 surfaces as `ApiError` with
+ *   `retried: true`.
+ */
+async function fetchWithContract(
+  path: string,
+  options: RequestOptions | undefined,
+  extraHeaders: Record<string, string>,
+  retried: boolean,
+): Promise<Response> {
+  const { timeoutMs, signal: callerSignal, ...rest } = options ?? {};
+
+  const headers: Record<string, string> = {
+    ...extraHeaders,
+    ...(rest.headers as Record<string, string>),
+  };
   if (authToken) {
     headers["Authorization"] = `Bearer ${authToken}`;
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  const effectiveTimeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const signal = buildSignal(callerSignal, effectiveTimeout);
 
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      if (Array.isArray(body.detail)) {
-        detail = body.detail
-          .map((e: { msg?: string }) => e.msg ?? JSON.stringify(e))
-          .join("; ");
-      } else {
-        detail = body.detail || body.error || body.message || detail;
-      }
-    } catch {}
-    throw new Error(`API ${res.status}: ${detail}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...rest, headers, signal });
+  } catch (e) {
+    const name = (e as { name?: string })?.name;
+    if (name === "AbortError" || name === "TimeoutError") {
+      throw new ApiError(
+        0,
+        `Request timed out after ${effectiveTimeout}ms`,
+        retried,
+      );
+    }
+    const message = e instanceof Error ? e.message : String(e);
+    throw new ApiError(0, message, retried);
   }
 
+  if (res.status === 401 && !retried) {
+    try {
+      const fresh = (await invoke("read_auth_token")) as string | null;
+      if (fresh && fresh.length > 0 && fresh !== authToken) {
+        authToken = fresh;
+      }
+    } catch {
+      // Fall through and retry even if the Tauri command fails so a
+      // transient 401 isn't masked.
+    }
+    return fetchWithContract(path, options, extraHeaders, true);
+  }
+
+  if (!res.ok) {
+    throw new ApiError(res.status, await extractDetail(res), retried);
+  }
+
+  return res;
+}
+
+/**
+ * Perform an authenticated JSON request against the daemon API and parse
+ * the response body as `T`. See `fetchWithContract` for the timeout/abort/
+ * 401-retry/error contract.
+ */
+async function request<T>(path: string, options?: RequestOptions): Promise<T> {
+  const res = await fetchWithContract(
+    path,
+    options,
+    { "Content-Type": "application/json" },
+    false,
+  );
   return res.json() as Promise<T>;
+}
+
+/**
+ * Low-level variant of `request<T>` that returns the raw `Response`. Used
+ * by helpers that need the body as text (exports) or need to distinguish
+ * 204 No Content from a JSON body (prep briefings).
+ */
+async function requestRaw(
+  path: string,
+  options?: RequestOptions,
+): Promise<Response> {
+  return fetchWithContract(path, options, {}, false);
+}
+
+/**
+ * Compose the caller's AbortSignal (if any) with a timeout signal so the
+ * fetch aborts on whichever fires first. Falls back gracefully when
+ * `AbortSignal.any` isn't available.
+ */
+function buildSignal(
+  caller: AbortSignal | null | undefined,
+  timeoutMs: number,
+): AbortSignal | undefined {
+  if (timeoutMs <= 0) return caller ?? undefined;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!caller) return timeoutSignal;
+  // AbortSignal.any landed in Node 20.3 / modern browsers. Fall back to the
+  // caller signal if it isn't present so we still honour the caller's intent.
+  const any = (
+    AbortSignal as unknown as {
+      any?: (signals: AbortSignal[]) => AbortSignal;
+    }
+  ).any;
+  return any ? any([caller, timeoutSignal]) : caller;
 }
 
 export async function getHealth(): Promise<HealthResponse> {
@@ -216,15 +353,10 @@ export async function exportMeeting(
   id: string,
   format: "markdown" | "json" = "markdown",
 ): Promise<string> {
-  const headers: Record<string, string> = {};
-  if (authToken) {
-    headers["Authorization"] = `Bearer ${authToken}`;
-  }
-  const res = await fetch(
-    `${API_BASE}/api/export/${encodeURIComponent(id)}?format=${format}`,
-    { method: "POST", headers },
+  const res = await requestRaw(
+    `/api/export/${encodeURIComponent(id)}?format=${format}`,
+    { method: "POST" },
   );
-  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
   return res.text();
 }
 
@@ -467,13 +599,8 @@ export async function dismissNotification(id: string): Promise<void> {
 // --- Prep Briefings ---
 
 export async function getUpcomingPrep(): Promise<PrepBriefing | null> {
-  const headers: Record<string, string> = {};
-  if (authToken) {
-    headers["Authorization"] = `Bearer ${authToken}`;
-  }
-  const res = await fetch(`${API_BASE}/api/prep/upcoming`, { headers });
+  const res = await requestRaw("/api/prep/upcoming");
   if (res.status === 204) return null;
-  if (!res.ok) throw new Error(`API ${res.status}`);
   return res.json() as Promise<PrepBriefing>;
 }
 
