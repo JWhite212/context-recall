@@ -34,6 +34,7 @@ datas += collect_data_files("ctranslate2")
 # MLX and MLX Whisper: Apple Silicon ML framework.
 try:
     binaries += collect_dynamic_libs("mlx")
+    binaries += collect_dynamic_libs("mlx_metal")
     datas += collect_data_files("mlx")
     datas += collect_data_files("mlx_whisper")
 except Exception:
@@ -88,48 +89,15 @@ a = Analysis(
         "notion_client",
         "slugify",
         "yaml",
-        # Config and utilities
+        # The full src.* tree (pipeline, API routes, intelligence modules,
+        # platform adapters, utilities) is enumerated by
+        # collect_submodules("src") below — this picks up lazy imports like
+        # src.action_items.* and src.api.routes.* without needing to list
+        # every module by hand.
         "src",
         "src.main",
-        "src.detector",
-        "src.audio_capture",
-        "src.transcriber",
-        "src.diariser",
-        "src.summariser",
-        "src.platform",
-        "src.platform.detector",
-        "src.platform.macos",
-        "src.api",
-        "src.api.server",
-        "src.api.events",
-        "src.api.auth",
-        "src.api.websocket",
-        "src.api.routes",
-        "src.api.routes.status",
-        "src.api.routes.meetings",
-        "src.api.routes.config",
-        "src.api.routes.recording",
-        "src.api.routes.devices",
-        "src.api.routes.models",
-        "src.api.routes.export",
-        "src.api.routes.resummarise",
-        "src.api.routes.reprocess",
-        "src.api.routes.search",
-        "src.api.routes.speakers",
-        "src.api.routes.templates",
-        "src.api.schemas",
-        "src.templates",
-        "src.embeddings",
-        "src.pyannote_diariser",
-        "src.db",
-        "src.db.database",
-        "src.db.repository",
-        "src.output",
-        "src.output.markdown_writer",
-        "src.output.notion_writer",
-        "src.utils",
-        "src.utils.config",
     ]
+    + collect_submodules("src")
     + collect_submodules("uvicorn")
     + collect_submodules("starlette")
     + collect_submodules("mlx")
