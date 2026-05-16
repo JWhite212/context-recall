@@ -8,6 +8,7 @@ and summaries for the UI to query.
 Location: ~/Library/Application Support/Context Recall/meetings.db
 """
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -92,6 +93,8 @@ CREATE TABLE IF NOT EXISTS segment_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_segment_embeddings_meeting
     ON segment_embeddings(meeting_id);
+CREATE INDEX IF NOT EXISTS idx_segment_embeddings_meeting_segidx
+    ON segment_embeddings(meeting_id, segment_index);
 """
 
 VEC_SQL = """
@@ -158,6 +161,8 @@ CREATE INDEX IF NOT EXISTS idx_action_items_meeting ON action_items(meeting_id);
 CREATE INDEX IF NOT EXISTS idx_action_items_status ON action_items(status);
 CREATE INDEX IF NOT EXISTS idx_action_items_assignee ON action_items(assignee);
 CREATE INDEX IF NOT EXISTS idx_action_items_due_date ON action_items(due_date);
+CREATE INDEX IF NOT EXISTS idx_action_items_due_status
+    ON action_items(due_date, status);
 """
 
 MEETING_ANALYTICS_SQL = """
@@ -252,10 +257,21 @@ class Database:
     def __init__(self, db_path: Path | None = None) -> None:
         self._db_path = db_path or DEFAULT_DB_PATH
         self._connection: aiosqlite.Connection | None = None
+        # Serialises multi-statement writes so concurrent coroutines
+        # cannot interleave their statements + commits on the shared
+        # connection (the aiosqlite worker thread executes them strictly
+        # in submission order, but pieces of two transactions can still
+        # interleave without an explicit lock).
+        self._write_lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def path(self) -> Path:
         return self._db_path
+
+    @property
+    def write_lock(self) -> asyncio.Lock:
+        """Lock guarding multi-statement writes against WAL."""
+        return self._write_lock
 
     async def connect(self) -> None:
         """Open the database and ensure schema is up to date."""
@@ -264,12 +280,79 @@ class Database:
         self._connection.row_factory = aiosqlite.Row
         await self._connection.execute("PRAGMA journal_mode=WAL")
         await self._connection.execute("PRAGMA foreign_keys=ON")
+        await self._verify_pragmas()
         # Load sqlite-vec extension (must happen before migration to create vec0 tables).
         # aiosqlite wraps a real sqlite3 connection — access it for extension loading.
         raw_conn = self._connection._conn  # Access underlying sqlite3.Connection
         _load_vec_extension(raw_conn)
         await self._migrate()
+        await self._ensure_idempotent_indexes()
         logger.info("Database connected: %s", self._db_path)
+
+    async def _verify_pragmas(self) -> None:
+        """Verify journal_mode=WAL and foreign_keys=ON took effect.
+
+        Logs an error (not a warning) if either PRAGMA failed to apply —
+        running on the rollback journal or with FK enforcement off would
+        break our durability + cascade-delete assumptions.
+        """
+        cursor = await self._connection.execute("PRAGMA journal_mode")
+        row = await cursor.fetchone()
+        mode = (row[0] or "").lower() if row else ""
+        if mode != "wal":
+            logger.error(
+                "PRAGMA journal_mode is %r, expected 'wal' (db=%s)",
+                mode,
+                self._db_path,
+            )
+
+        cursor = await self._connection.execute("PRAGMA foreign_keys")
+        row = await cursor.fetchone()
+        fk = row[0] if row else 0
+        if fk != 1:
+            logger.error(
+                "PRAGMA foreign_keys is %r, expected 1 (db=%s)",
+                fk,
+                self._db_path,
+            )
+
+    async def _ensure_idempotent_indexes(self) -> None:
+        """Create indexes that don't require a schema-version bump.
+
+        These run every connect() and are no-ops once present. They live
+        outside the numbered migration ladder so adding a new index doesn't
+        force a fresh user_version.
+        """
+        idempotent_indexes = (
+            "CREATE INDEX IF NOT EXISTS idx_segment_embeddings_meeting_segidx "
+            "ON segment_embeddings(meeting_id, segment_index)",
+            "CREATE INDEX IF NOT EXISTS idx_action_items_due_status "
+            "ON action_items(due_date, status)",
+        )
+        for stmt in idempotent_indexes:
+            try:
+                await self.conn.execute(stmt)
+            except Exception as e:
+                # Table may not exist on extremely old DBs that failed
+                # migration; log and continue rather than crash.
+                logger.debug("Idempotent index skipped: %s (%s)", stmt, e)
+        await self.conn.commit()
+
+    async def execute_in_transaction(self, stmts: list[tuple[str, tuple]]) -> None:
+        """Run a sequence of statements in a single BEGIN IMMEDIATE / COMMIT.
+
+        Acquires ``write_lock`` so no other writer can interleave, and
+        rolls back on any exception.
+        """
+        async with self._write_lock:
+            await self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                for sql, params in stmts:
+                    await self.conn.execute(sql, params)
+            except Exception:
+                await self.conn.execute("ROLLBACK")
+                raise
+            await self.conn.execute("COMMIT")
 
     async def close(self) -> None:
         if self._connection:

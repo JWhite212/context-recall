@@ -56,32 +56,33 @@ class ActionItemRepository:
         item_id = str(uuid.uuid4())
         now = time.time()
         completed_at = now if status == "done" else None
-        await self._db.conn.execute(
-            """
-            INSERT INTO action_items
-                (id, meeting_id, title, description, assignee, status, priority,
-                 due_date, reminder_at, source, extracted_text,
-                 created_at, updated_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                item_id,
-                meeting_id,
-                title,
-                description,
-                assignee,
-                status,
-                priority,
-                due_date,
-                reminder_at,
-                source,
-                extracted_text,
-                now,
-                now,
-                completed_at,
-            ),
-        )
-        await self._db.conn.commit()
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                """
+                INSERT INTO action_items
+                    (id, meeting_id, title, description, assignee, status, priority,
+                     due_date, reminder_at, source, extracted_text,
+                     created_at, updated_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item_id,
+                    meeting_id,
+                    title,
+                    description,
+                    assignee,
+                    status,
+                    priority,
+                    due_date,
+                    reminder_at,
+                    source,
+                    extracted_text,
+                    now,
+                    now,
+                    completed_at,
+                ),
+            )
+            await self._db.conn.commit()
         logger.debug("Created action item %s for meeting %s", item_id, meeting_id)
         return item_id
 
@@ -122,16 +123,18 @@ class ActionItemRepository:
         set_clause = ", ".join(f"{k} = ?" for k, _ in pairs)
         values = [v for _, v in pairs] + [item_id]
 
-        await self._db.conn.execute(
-            f"UPDATE action_items SET {set_clause} WHERE id = ?",
-            values,
-        )
-        await self._db.conn.commit()
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                f"UPDATE action_items SET {set_clause} WHERE id = ?",
+                values,
+            )
+            await self._db.conn.commit()
 
     async def delete(self, item_id: str) -> None:
         """Delete an action item by ID."""
-        await self._db.conn.execute("DELETE FROM action_items WHERE id = ?", (item_id,))
-        await self._db.conn.commit()
+        async with self._db.write_lock:
+            await self._db.conn.execute("DELETE FROM action_items WHERE id = ?", (item_id,))
+            await self._db.conn.commit()
 
     async def list_items(
         self,

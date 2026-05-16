@@ -429,3 +429,26 @@ async def test_reset_stale_inflight_meetings_handles_mixed_set(
     assert (await repo.get_meeting(transcribing_id)).status == "error"
     assert (await repo.get_meeting(recording_id)).status == "error"
     assert (await repo.get_meeting(complete_id)).status == "complete"
+
+
+# ------------------------------------------------------------------
+# Batched fetch
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_meetings_by_ids_preserves_order(repo: MeetingRepository):
+    """The result list preserves the order of the requested ids."""
+    now = time.time()
+    ids = [await repo.create_meeting(started_at=now + i) for i in range(3)]
+    out = await repo.get_meetings_by_ids(list(reversed(ids)))
+    assert [m.id for m in out] == list(reversed(ids))
+
+
+@pytest.mark.asyncio
+async def test_get_meetings_by_ids_single(repo: MeetingRepository):
+    """A single-id batch fetch matches get_meeting()."""
+    mid = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(mid, title="Batched")
+    [m] = await repo.get_meetings_by_ids([mid])
+    assert m.title == "Batched"
