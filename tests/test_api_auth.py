@@ -124,3 +124,49 @@ def test_valid_token_accepted():
     with TestClient(app) as c:
         resp = c.get("/api/status", headers=_auth_headers())
         assert resp.status_code == 200
+
+
+def test_token_length_mismatch_returns_403():
+    """A token of the wrong length is rejected before the constant-time compare.
+
+    This guards against length-leak timing attacks: the verifier must
+    short-circuit on len() before invoking hmac.compare_digest.
+    """
+    app = _make_auth_app()
+    with TestClient(app) as c:
+        too_short = c.get("/api/status", headers=_auth_headers("x"))
+        too_long = c.get(
+            "/api/status",
+            headers=_auth_headers(TEST_TOKEN + "extra-suffix-bytes"),
+        )
+        assert too_short.status_code == 403
+        assert too_long.status_code == 403
+
+
+def test_get_token_thread_safe_lazy_init(tmp_path, monkeypatch):
+    """Concurrent _get_token() calls must converge on a single value.
+
+    Without a lock around the lazy init, two threads could both observe
+    ``_auth_token is None`` and generate competing tokens.
+    """
+    import threading
+
+    monkeypatch.setattr(auth_mod, "TOKEN_DIR", tmp_path)
+    monkeypatch.setattr(auth_mod, "TOKEN_PATH", tmp_path / "auth_token")
+    monkeypatch.setattr(auth_mod, "_auth_token", None)
+
+    seen: list[str] = []
+    barrier = threading.Barrier(8)
+
+    def worker() -> None:
+        barrier.wait()
+        seen.append(auth_mod._get_token())
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(set(seen)) == 1, f"Race condition produced multiple tokens: {set(seen)}"
+    assert (tmp_path / "auth_token").read_text().strip() == seen[0]

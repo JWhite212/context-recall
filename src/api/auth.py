@@ -8,7 +8,9 @@ this prevents other local applications from controlling the daemon.
 
 import hmac
 import logging
+import os
 import secrets
+import threading
 
 from fastapi import HTTPException, Request
 
@@ -30,22 +32,67 @@ def get_or_create_token() -> str:
             return token
 
     token = secrets.token_urlsafe(32)
-    TOKEN_PATH.write_text(token)
-    # Restrict to owner-only read/write.
-    TOKEN_PATH.chmod(0o600)
+    _write_token_atomic(token)
     logger.info("Generated new auth token at %s", TOKEN_PATH)
     return token
 
 
+def _write_token_atomic(token: str) -> None:
+    """Write the token to disk atomically with mode 0o600.
+
+    Writes to a sibling ``.tmp`` file (created with restrictive
+    permissions), then ``os.replace`` to the final path so a partial
+    write can never leave a half-written token file in place. ``chmod``
+    is applied explicitly because the caller's umask may strip bits
+    from the ``os.open`` mode argument.
+    """
+    TOKEN_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = TOKEN_PATH.with_suffix(TOKEN_PATH.suffix + ".tmp")
+    fd = os.open(
+        str(tmp_path),
+        os.O_CREAT | os.O_WRONLY | os.O_TRUNC,
+        0o600,
+    )
+    with os.fdopen(fd, "w") as f:
+        f.write(token)
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, TOKEN_PATH)
+
+
 # Module-level token loaded once at import.
 _auth_token: str | None = None
+_auth_token_lock = threading.Lock()
 
 
 def _get_token() -> str:
+    """Return the cached auth token, lazily initialising under a lock.
+
+    The double-checked pattern keeps the hot path lock-free once the
+    token has been loaded, while still preventing two requests from
+    racing to read/generate the on-disk token concurrently.
+    """
     global _auth_token
     if _auth_token is None:
-        _auth_token = get_or_create_token()
+        with _auth_token_lock:
+            if _auth_token is None:
+                _auth_token = get_or_create_token()
     return _auth_token
+
+
+def rotate_token() -> str:
+    """Generate a new auth token, persist it atomically, update the cache.
+
+    Returns the new token value. The on-disk file is written via a
+    ``.tmp`` + ``os.replace`` sequence so a crash mid-write cannot leave
+    the daemon with an unreadable token file.
+    """
+    global _auth_token
+    new_token = secrets.token_urlsafe(32)
+    _write_token_atomic(new_token)
+    with _auth_token_lock:
+        _auth_token = new_token
+    logger.info("Rotated auth token")
+    return new_token
 
 
 async def verify_token(request: Request) -> None:
@@ -61,5 +108,10 @@ async def verify_token(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Missing auth token")
 
     token = auth_header.removeprefix("Bearer ").strip()
-    if not hmac.compare_digest(token, _get_token()):
+    expected = _get_token()
+    # Short-circuit on length before constant-time compare to avoid
+    # leaking the length of the secret via response timing.
+    if len(token) != len(expected):
+        raise HTTPException(status_code=403, detail="Invalid auth token")
+    if not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=403, detail="Invalid auth token")

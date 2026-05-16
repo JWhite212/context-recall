@@ -7,7 +7,9 @@ providing a REST + WebSocket interface for the UI.
 
 import asyncio
 import hmac
+import json
 import logging
+import os
 import threading
 
 import uvicorn
@@ -16,7 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.auth import _get_token, verify_token
 from src.api.events import EventBus
-from src.api.middleware import BodySizeLimitMiddleware
+from src.api.middleware import BodySizeLimitMiddleware, RateLimitMiddleware
+from src.api.routes import auth as auth_routes
 from src.api.routes import calendar as calendar_routes
 from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
@@ -99,21 +102,33 @@ class ApiServer:
         # Reject oversized request bodies before they reach route handlers.
         app.add_middleware(BodySizeLimitMiddleware, max_bytes=5 * 1024 * 1024)
 
-        # CORS for Tauri dev mode (Vite at localhost:1420) and production.
+        # CORS: always allow the Tauri custom-scheme origins. Dev-server
+        # origins (Vite at :1420 / :5173) are only allowed when the
+        # daemon runs under the dev profile so a production build can't
+        # be probed from a developer's localhost web app.
+        allowed_origins = [
+            "tauri://localhost",
+            "https://tauri.localhost",
+        ]
+        if os.environ.get("CONTEXT_RECALL_PROFILE") == "dev":
+            allowed_origins.extend(
+                [
+                    "http://localhost:1420",
+                    "http://127.0.0.1:1420",
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5173",
+                ]
+            )
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=[
-                "http://localhost:1420",
-                "http://127.0.0.1:1420",
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-                "tauri://localhost",
-                "https://tauri.localhost",
-            ],
+            allow_origins=allowed_origins,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+        # Per-IP rate limit (30 req/s/IP, token-bucket).
+        app.add_middleware(RateLimitMiddleware, rate=30.0, burst=30.0)
 
         # Initialise route dependencies.
         status_routes.init(self._get_daemon_state, self._get_active_meeting)
@@ -161,6 +176,7 @@ class ApiServer:
         app.include_router(search_routes.router, dependencies=auth_deps)
         app.include_router(speakers_routes.router, dependencies=auth_deps)
         app.include_router(calendar_routes.router, dependencies=auth_deps)
+        app.include_router(auth_routes.router, dependencies=auth_deps)
 
         # Intelligence feature routes.
         from src.action_items.repository import ActionItemRepository
@@ -207,30 +223,46 @@ class ApiServer:
         async def websocket_endpoint(websocket: WebSocket):
             await websocket.accept()
 
-            # Check for legacy query-param token first.
-            legacy_token = websocket.query_params.get("token", "")
-            if legacy_token and hmac.compare_digest(legacy_token, _get_token()):
-                authenticated = True
-            else:
-                # Wait for auth message within 5 seconds.
-                authenticated = False
-                try:
-                    import json as _json
+            authenticated = False
 
+            # Check for legacy query-param token first. The constant-time
+            # compare is preceded by a length check so a wildly short or
+            # long token can't be used to time the secret's length.
+            expected_token = _get_token()
+            legacy_token = websocket.query_params.get("token", "")
+            if (
+                legacy_token
+                and len(legacy_token) == len(expected_token)
+                and hmac.compare_digest(legacy_token, expected_token)
+            ):
+                authenticated = True
+
+            if not authenticated:
+                # Auth-only receive: read at most one frame. If it isn't
+                # a well-formed auth message we close the socket without
+                # ever surfacing the frame to the broadcast pool or any
+                # other branch.
+                try:
                     msg = await asyncio.wait_for(
                         websocket.receive_text(),
                         timeout=5.0,
                     )
-                    data = _json.loads(msg)
+                except (asyncio.TimeoutError, WebSocketDisconnect, Exception):
+                    msg = None
+
+                if msg is not None:
+                    try:
+                        data = json.loads(msg)
+                    except json.JSONDecodeError:
+                        data = None
                     if (
                         isinstance(data, dict)
                         and data.get("type") == "auth"
                         and isinstance(data.get("token"), str)
-                        and hmac.compare_digest(data["token"], _get_token())
+                        and len(data["token"]) == len(expected_token)
+                        and hmac.compare_digest(data["token"], expected_token)
                     ):
                         authenticated = True
-                except (asyncio.TimeoutError, Exception):
-                    pass
 
             if not authenticated:
                 await websocket.close(code=4001, reason="Unauthorized")
