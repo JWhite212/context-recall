@@ -481,6 +481,11 @@ class Summariser:
                 json=payload,
                 timeout=http_timeout,
             ) as response:
+                if response.status_code >= 400:
+                    # Read while the stream is still open so the error
+                    # handler can include the body (e.g. Ollama's
+                    # "model not found, try pulling it").
+                    response.read()
                 response.raise_for_status()
                 content_parts: list[str] = []
                 for line in response.iter_lines():
@@ -508,9 +513,15 @@ class Summariser:
                 f"recording."
             ) from None
         except httpx.HTTPStatusError as exc:
+            # The response arrived via httpx.stream and is unread when
+            # raise_for_status fires — .text would raise ResponseNotRead.
+            try:
+                exc.response.read()
+                detail = exc.response.text[:500]
+            except Exception:
+                detail = "<body unavailable>"
             raise RuntimeError(
-                f"Ollama returned HTTP {exc.response.status_code}. "
-                f"Response: {exc.response.text[:500]}"
+                f"Ollama returned HTTP {exc.response.status_code}. Response: {detail}"
             ) from None
 
     def _summarise_chunked_ollama(

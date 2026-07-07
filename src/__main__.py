@@ -1,7 +1,16 @@
 """Entry point for both `python -m src` and PyInstaller frozen binary."""
 
+import multiprocessing
 import os
 import sys
+
+# In the frozen binary, multiprocessing helper children (e.g. the
+# resource_tracker spawned when a library creates a semaphore) re-exec
+# THIS executable with interpreter-style args; without freeze_support()
+# those args hit our argparse ("unrecognized arguments: -B -S -I -c
+# from multiprocessing.resource_tracker import main") and the helper
+# respawns in a loop.
+multiprocessing.freeze_support()
 
 # When running as a PyInstaller bundle, the PATH is minimal and may
 # not include Homebrew or MacPorts. MLX Whisper shells out to ffmpeg
@@ -13,6 +22,8 @@ if getattr(sys, "frozen", False):
     if _missing:
         os.environ["PATH"] = _current + ":" + ":".join(_missing)
 
-from src.main import main
+# freeze_support() and the PATH fix must run before src.main's heavy
+# imports, so this import is deliberately last.
+from src.main import main  # noqa: E402
 
 main()

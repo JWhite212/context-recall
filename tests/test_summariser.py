@@ -38,6 +38,7 @@ def _make_ollama_stream_mock(content: str) -> MagicMock:
 
     def _build_ctx(*_args, **_kwargs):
         resp = MagicMock()
+        resp.status_code = 200
         resp.raise_for_status = MagicMock()
         resp.iter_lines.return_value = iter(lines)
         ctx = MagicMock()
@@ -164,6 +165,50 @@ class TestPrepareTranscript:
 
 
 class TestSummariserOllama:
+    def test_ollama_http_error_with_unread_stream_reports_status(self):
+        """httpx.stream error responses are unread when raise_for_status
+        fires, so .text raises ResponseNotRead — the old handler crashed
+        on that instead of reporting the HTTP status (observed live with
+        a missing Ollama model → HTTP 404)."""
+        import httpx
+
+        config = SummarisationConfig(backend="ollama", ollama_base_url="http://localhost:11434")
+        s = Summariser(config)
+
+        class _UnreadResponse:
+            status_code = 404
+
+            def __init__(self):
+                self._read = False
+
+            def read(self):
+                self._read = True
+                return b""
+
+            @property
+            def text(self):
+                if not self._read:
+                    raise httpx.ResponseNotRead()
+                return '{"error":"model not found"}'
+
+        error_response = _UnreadResponse()
+
+        def _build_ctx(*_args, **_kwargs):
+            resp = MagicMock()
+            resp.status_code = 404
+            resp.read = error_response.read
+            resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "404", request=MagicMock(), response=error_response
+            )
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(return_value=resp)
+            ctx.__exit__ = MagicMock(return_value=False)
+            return ctx
+
+        with patch("src.summariser.httpx.stream", side_effect=_build_ctx):
+            with pytest.raises(RuntimeError, match="404.*model not found"):
+                s._ollama_chat("http://localhost:11434", "llama3.2:3b", "sys", "user")
+
     def test_validate_ollama_url_localhost_allowed(self):
         result = Summariser._validate_ollama_url("http://localhost:11434")
         assert result == "http://localhost:11434"
