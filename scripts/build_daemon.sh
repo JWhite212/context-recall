@@ -62,26 +62,28 @@ if [ -n "$LIBMLX" ] && [ -n "$METALLIB" ]; then
     echo "==> Ensured mlx.metallib sits next to libmlx.dylib"
 fi
 
-# Sign the daemon bundle with a stable identity when one is available.
-# macOS TCC stores a code-signing requirement with every permission
-# grant: an ad-hoc signature changes its cdhash on every rebuild, so the
-# user would be re-prompted for microphone access after each deploy —
-# and the 2026-07 rename already cost the daemon its grant once. A real
-# certificate plus a fixed identifier keeps grants valid across builds.
-# SHA-1 fingerprint, not the name: the login keychain holds a revoked
-# copy of "Apple Development: jamiecs@live.co.uk (34FA3W7TK5)" with the
-# same name, which makes name-based selection ambiguous.
-SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:-92B7AF44BFEBAEB58A7208FF503AFE84311F1CFB}"
+# Sign the daemon bundle AD-HOC by default. Counter-intuitive but
+# evidence-forced (2026-07-07): signing with an Apple Development
+# certificate WITHOUT an embedded provisioning profile makes tccd
+# reject the whole bundle — it cannot read the sealed
+# NSMicrophoneUsageDescription, silently zeroes every input stream, and
+# KILLS the process on an explicit permission request (OS_REASON_TCC).
+# The identical bundle signed ad-hoc prompts and records normally.
+# The cost: an ad-hoc cdhash changes per rebuild, so macOS re-prompts
+# for the microphone once after each deploy. Set
+# CONTEXT_RECALL_SIGN_IDENTITY to a PROPERLY PROVISIONED identity
+# (Developer ID, or Apple Development plus embedded.provisionprofile)
+# to make grants survive rebuilds.
+SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:--}"
 SIGN_IDENTIFIER="dev.jamiewhite.contextrecall.daemon"
-if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    echo "==> Ad-hoc signing daemon app bundle (identifier $SIGN_IDENTIFIER)"
+    codesign --force --sign - --identifier "$SIGN_IDENTIFIER" "$APP_DIR"
+else
     echo "==> Codesigning daemon app bundle with '$SIGN_IDENTITY'"
     codesign --force --sign "$SIGN_IDENTITY" --identifier "$SIGN_IDENTIFIER" --timestamp=none "$APP_DIR"
-    codesign --verify --verbose=1 "$APP_DIR"
-else
-    echo "==> WARNING: signing identity not found; ad-hoc signing the bundle"
-    echo "    (microphone permission will be re-requested after every rebuild)"
-    codesign --force --sign - --identifier "$SIGN_IDENTIFIER" "$APP_DIR"
 fi
+codesign --verify --verbose=1 "$APP_DIR"
 
 # Report size.
 SIZE=$(du -sh "$BINARY" | cut -f1)
