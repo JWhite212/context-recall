@@ -40,7 +40,7 @@ The Tauri bundle ships a PyInstaller-built daemon as a sidecar at `ui/src-tauri/
 ```bash
 # Python
 pip install -r requirements-dev.txt
-python3 -m pytest tests/ -v            # Full Python suite (~650 tests)
+python3 -m pytest tests/ -v            # Full Python suite (~690 tests)
 python3 -m pytest tests/ -x            # Stop on first failure
 ruff check src/ tests/                 # Lint check
 
@@ -82,7 +82,11 @@ TeamsDetector  ──►  AudioCapture  ──►  Transcriber  ──►  Diari
 
 **`src/audio_capture.py`** — Records BlackHole (system audio) and microphone to **separate WAV files** on independent `sd.InputStream` threads, then post-merges with RMS normalisation. This avoids clock-drift between the two devices. Source files can be kept for diarisation. `start()` exposes `last_warning` (e.g. mic fallback) and `last_error` (typed `AudioCaptureError`) so the orchestrator can surface them as `pipeline.warning` / `pipeline.error` events instead of degrading silently.
 
-**`src/audio_devices.py`** — Shared input-device resolution used by capture and pre-flight: never auto-selects a loopback/virtual device (BlackHole, Teams Audio, aggregates) as the microphone, and `refresh_input_devices()` re-initialises PortAudio so the long-running daemon sees current hardware (PortAudio otherwise freezes its device table at process start).
+**`src/audio_devices.py`** — Shared input-device resolution used by capture and pre-flight: never auto-selects a loopback/virtual device (BlackHole, Teams Audio, aggregates) as the microphone, `resolve_named_input_index()` fuzzy-matches a typoed configured device name (never onto a virtual device), and `refresh_input_devices()` re-initialises PortAudio so the long-running daemon sees current hardware (PortAudio otherwise freezes its device table at process start).
+
+**`src/mic_permission.py`** — macOS microphone TCC introspection/request via ctypes AVFoundation (no pyobjc). The daemon is a bare launchd binary, so macOS never shows the permission prompt implicitly — opening input streams just yields zeros (RMS −100 dBFS) or `PortAudioError -9986`, and grants are path-bound (the MeetingMind→Context Recall rename silently orphaned the old grant). Every recording start is gated on `ensure_microphone_access()`; the boot path requests the prompt explicitly. `build_daemon.sh` signs the binary with a stable identifier so grants survive rebuilds. Tests must never fire the real prompt — `tests/conftest.py` forces `authorized`.
+
+**`src/audio_cleanup.py`** — Temp-audio sweeper: removes 44-byte header-only stubs (any age) and `meeting_*.wav` older than `audio.temp_retention_days` from `temp_audio_dir`, sparing the in-flight capture. Runs at daemon boot and after each pipeline run.
 
 **`src/audio_routing.py`** — Automatic system-audio routing. `CoreAudioBackend` (ctypes, no extra deps) + `AudioRouter`: at recording start, if the default output doesn't feed BlackHole, it finds-or-creates a managed Multi-Output Device ("Context Recall Audio" = current output + BlackHole), switches to it, and switches back after the meeting. Gated by `audio.auto_route_system_audio` (default on). Router tests use a fake backend; `tests/conftest.py` forces the real backend unavailable so the suite never mutates host audio state.
 
@@ -136,7 +140,7 @@ These run after the core pipeline finishes (via `_run_post_processing`), each no
 
 - **macOS + Apple Silicon only**: relies on BlackHole virtual audio driver, `pgrep`, `lsof`, `osascript`, and `mlx_whisper` (MLX is Apple-Silicon only). The CI matrix marks the MLX/Tauri jobs as Apple-Silicon only (commit `554ede5`).
 - **`config.yaml` is gitignored** — contains API keys. `config.example.yaml` is the tracked template.
-- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~650 tests.
+- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~690 tests.
 - **UI tests**: vitest 4. `cd ui && npm test`. Pure UI; Tauri shell is not booted.
 - **Rust check**: `cd ui/src-tauri && cargo check` (requires the daemon-resource stub above).
 - **Linting**: ruff for Python (`ruff check src/ tests/`); tsc for TypeScript (`cd ui && npx tsc --noEmit`).
