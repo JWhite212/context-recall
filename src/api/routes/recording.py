@@ -5,6 +5,7 @@ POST /api/record/start — begin recording immediately (skips detection).
 POST /api/record/stop  — stop the active recording and trigger processing.
 """
 
+import asyncio
 import logging
 import threading
 import time
@@ -63,12 +64,16 @@ async def stop_recording(defer: bool = False):
     if defer:
         if not _stop_recording_deferred:
             raise HTTPException(status_code=503, detail="Deferred stop not available")
-    if defer and _stop_recording_deferred:
-        # Stop recording and save audio without processing.
+        # Stop recording and save audio without processing. Must run on a
+        # worker thread: the callback blocks on the audio merge and waits
+        # for DB coroutines it schedules onto THIS event loop
+        # (_persist_audio). Running it inline deadlocks the loop — the
+        # create-meeting future times out and the row is created without
+        # an audio_path, leaving the meeting permanently unprocessable.
         try:
-            meeting_id = _stop_recording_deferred()
+            meeting_id = await asyncio.to_thread(_stop_recording_deferred)
         except Exception as e:
-            logger.error("Failed to defer recording: %s", e)
+            logger.error("Failed to defer recording: %r", e)
             raise HTTPException(
                 status_code=500,
                 detail="Failed to stop recording. Check daemon logs.",
