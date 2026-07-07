@@ -1447,7 +1447,7 @@ export function Settings() {
                 <option value="mlx-community/whisper-large-v3-turbo">
                   large-v3-turbo (MLX, recommended)
                 </option>
-                <option value="mlx-community/whisper-large-v3">
+                <option value="mlx-community/whisper-large-v3-mlx">
                   large-v3 (MLX)
                 </option>
                 <option value="mlx-community/whisper-medium.en-mlx">

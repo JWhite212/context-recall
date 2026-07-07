@@ -52,16 +52,56 @@ def test_list_models_with_download_status():
     app = _make_app()
     with TestClient(app) as c:
         # Pretend one model is downloaded.
-        downloaded = {"Systran/faster-whisper-tiny.en"}
+        downloaded = {"mlx-community/whisper-tiny"}
         with patch.object(models_routes, "_downloaded_repos", return_value=downloaded):
             resp = c.get("/api/models", headers=_auth_headers())
             assert resp.status_code == 200
             data = resp.json()
             for model in data["models"]:
-                if model["name"] == "tiny.en":
+                if model["name"] == "tiny":
                     assert model["status"] == "downloaded"
                 else:
                     assert model["status"] == "not_downloaded"
+
+
+def test_every_model_is_mlx_format():
+    """The transcriber passes config.transcription.model_size straight to
+    mlx_whisper as path_or_hf_repo — CTranslate2 repos (faster-whisper)
+    can never be loaded. Production 2026-07-07: the UI downloaded the
+    2.9 GB Systran/faster-whisper-large-v3 which no code path can use."""
+    for name, info in models_routes.AVAILABLE_MODELS.items():
+        assert info["repo"].startswith("mlx-community/"), (
+            f"model {name!r} points at non-MLX repo {info['repo']!r}"
+        )
+
+
+def test_active_model_flagged_from_config(tmp_path):
+    """The model whose repo matches transcription.model_size is marked
+    active so the UI can show which download is actually in use."""
+    import yaml
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.dump({"transcription": {"model_size": "mlx-community/whisper-large-v3-turbo"}})
+    )
+    models_routes.init(event_bus=None, config_path=config_path)
+    app = _make_app_no_init()
+    with TestClient(app) as c:
+        with patch.object(models_routes, "_downloaded_repos", return_value=set()):
+            resp = c.get("/api/models", headers=_auth_headers())
+            assert resp.status_code == 200
+            by_name = {m["name"]: m for m in resp.json()["models"]}
+            assert by_name["large-v3-turbo"]["active"] is True
+            inactive = [n for n, m in by_name.items() if not m["active"]]
+            assert len(inactive) == len(by_name) - 1
+
+
+def _make_app_no_init() -> FastAPI:
+    """Router app without re-running init() (test configured it already)."""
+    app = FastAPI()
+    auth_deps = [Depends(verify_token)]
+    app.include_router(models_routes.router, dependencies=auth_deps)
+    return app
 
 
 def test_download_unknown_model_404():
@@ -75,13 +115,13 @@ def test_download_already_downloaded():
     app = _make_app()
     with TestClient(app) as c:
         with patch.object(models_routes, "_is_downloaded", return_value=True):
-            resp = c.post("/api/models/tiny.en/download", headers=_auth_headers())
+            resp = c.post("/api/models/tiny/download", headers=_auth_headers())
             assert resp.status_code == 200
             assert resp.json()["status"] == "already_downloaded"
 
 
 def test_download_already_in_progress():
-    models_routes._downloads["small.en"] = {
+    models_routes._downloads["small"] = {
         "status": "downloading",
         "error": None,
         "percent": 42,
@@ -89,7 +129,7 @@ def test_download_already_in_progress():
     app = _make_app()
     with TestClient(app) as c:
         with patch.object(models_routes, "_is_downloaded", return_value=False):
-            resp = c.post("/api/models/small.en/download", headers=_auth_headers())
+            resp = c.post("/api/models/small/download", headers=_auth_headers())
             assert resp.status_code == 200
             assert resp.json()["status"] == "already_downloading"
 
@@ -100,11 +140,13 @@ def test_download_starts_thread():
         # Mock _download_worker instead of threading.Thread — patching
         # threading.Thread globally breaks run_in_executor's thread pool,
         # causing a deadlock.
-        with patch.object(models_routes, "_downloaded_repos", return_value=set()), \
-             patch.object(models_routes, "_download_worker"):
-            resp = c.post("/api/models/base.en/download", headers=_auth_headers())
+        with (
+            patch.object(models_routes, "_downloaded_repos", return_value=set()),
+            patch.object(models_routes, "_download_worker"),
+        ):
+            resp = c.post("/api/models/base/download", headers=_auth_headers())
             assert resp.status_code == 200
             assert resp.json()["status"] == "started"
             # The download was registered in the module-level dict.
-            assert "base.en" in models_routes._downloads
-            assert models_routes._downloads["base.en"]["status"] == "downloading"
+            assert "base" in models_routes._downloads
+            assert models_routes._downloads["base"]["status"] == "downloading"

@@ -11,6 +11,7 @@ can display a real-time progress bar.
 import asyncio
 import logging
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException
@@ -26,25 +27,49 @@ router = APIRouter()
 
 # Module-level EventBus reference, set via init().
 _event_bus: "EventBus | None" = None
+_config_path: Path | None = None
 
 # Track active downloads: model_name → progress dict.
 _downloads: dict[str, dict] = {}
 _download_lock = threading.Lock()
 
-# Models we expose in the UI (subset of faster-whisper's full list).
+# Models we expose in the UI. The transcriber passes
+# config.transcription.model_size straight to mlx_whisper as
+# path_or_hf_repo, so every entry here MUST be an MLX-format repo —
+# CTranslate2 repos (Systran/faster-whisper-*) can never be loaded and
+# downloading one wastes gigabytes (observed live: a 2.9 GB
+# faster-whisper-large-v3 no code path could use).
 AVAILABLE_MODELS = {
-    "tiny.en": {"repo": "Systran/faster-whisper-tiny.en", "size_mb": 75},
-    "base.en": {"repo": "Systran/faster-whisper-base.en", "size_mb": 145},
-    "small.en": {"repo": "Systran/faster-whisper-small.en", "size_mb": 470},
-    "medium.en": {"repo": "Systran/faster-whisper-medium.en", "size_mb": 1460},
-    "large-v3": {"repo": "Systran/faster-whisper-large-v3", "size_mb": 2950},
+    "tiny": {"repo": "mlx-community/whisper-tiny", "size_mb": 75},
+    "base": {"repo": "mlx-community/whisper-base-mlx", "size_mb": 145},
+    "small": {"repo": "mlx-community/whisper-small-mlx", "size_mb": 485},
+    "medium": {"repo": "mlx-community/whisper-medium-mlx", "size_mb": 1530},
+    "large-v3": {"repo": "mlx-community/whisper-large-v3-mlx", "size_mb": 3090},
+    "large-v3-turbo": {"repo": "mlx-community/whisper-large-v3-turbo", "size_mb": 1620},
 }
 
 
-def init(event_bus: "EventBus | None" = None) -> None:
-    """Set the EventBus for download progress events."""
-    global _event_bus
+def init(event_bus: "EventBus | None" = None, config_path: Path | None = None) -> None:
+    """Set the EventBus for download progress events and the config path
+    used to resolve which model is currently active."""
+    global _event_bus, _config_path
     _event_bus = event_bus
+    _config_path = config_path
+
+
+def _active_repo() -> str:
+    """The repo id configured as transcription.model_size, or ''."""
+    if _config_path is None or not _config_path.exists():
+        return ""
+    try:
+        import yaml
+
+        with open(_config_path) as f:
+            raw = yaml.safe_load(f) or {}
+        return str((raw.get("transcription") or {}).get("model_size") or "")
+    except Exception:
+        logger.debug("Could not read active model from config", exc_info=True)
+        return ""
 
 
 def _downloaded_repos() -> set[str]:
@@ -167,6 +192,7 @@ def _download_worker(model_name: str) -> None:
 async def list_models():
     # Run the blocking cache scan in a thread pool to keep the event loop free.
     cached_repos = await asyncio.get_running_loop().run_in_executor(None, _downloaded_repos)
+    active_repo = await asyncio.get_running_loop().run_in_executor(None, _active_repo)
     models = []
     for name, info in AVAILABLE_MODELS.items():
         downloaded = info["repo"] in cached_repos
@@ -192,6 +218,7 @@ async def list_models():
                 "size_mb": info["size_mb"],
                 "status": status,
                 "percent": percent,
+                "active": info["repo"] == active_repo,
                 "error": dl["error"] if dl and dl["status"] == "error" else None,
             }
         )

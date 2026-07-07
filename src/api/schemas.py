@@ -98,6 +98,7 @@ class ModelInfo(BaseModel):
     size_mb: int
     status: str
     percent: int
+    active: bool = False
     error: str | None = None
 
 
