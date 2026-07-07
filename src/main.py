@@ -1289,6 +1289,30 @@ class ContextRecall:
                 self._api_server.stop()
 
 
+def run_mic_permission_request() -> int:
+    """One-off foreground mode: raise the microphone dialog and wait.
+
+    tccd KILLS a launchd daemon for the explicit AVCaptureDevice request
+    and silently zeroes the implicit one (no prompt, no TCC record) —
+    but the same explicit request from a normal LaunchServices launch of
+    the daemon bundle is the standard permission flow every macOS app
+    uses. `open "Context Recall Daemon.app" --args
+    --request-mic-permission` runs this; the grant lands on the bundle
+    id, which the launchd-managed instance then inherits.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    from src import mic_permission
+
+    status = mic_permission.authorization_status()
+    logger.info("microphone permission before request: %s", status)
+    if status == mic_permission.AUTHORIZED:
+        return 0
+    granted = mic_permission.request_access(timeout_seconds=240.0)
+    status = mic_permission.authorization_status()
+    logger.info("request result: granted=%s, status now: %s", granted, status)
+    return 0 if status == mic_permission.AUTHORIZED else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Context Recall: auto-detect, transcribe, and summarise Teams meetings.",
@@ -1310,8 +1334,18 @@ def main():
         default=None,
         help="Skip detection and capture. Process an existing audio file.",
     )
+    parser.add_argument(
+        "--request-mic-permission",
+        action="store_true",
+        help="Show the macOS microphone permission dialog and exit "
+        "(run via a foreground launch of the daemon bundle).",
+    )
 
     args = parser.parse_args()
+
+    if args.request_mic_permission:
+        sys.exit(run_mic_permission_request())
+
     config_path = Path(args.config) if args.config else None
 
     app = ContextRecall(config_path)

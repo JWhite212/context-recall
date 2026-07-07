@@ -175,6 +175,39 @@ class TestUsageDescriptionGuard:
         assert mic_permission.request_access(timeout_seconds=1.0) is False
 
 
+class TestRequestMicPermissionMode:
+    """--request-mic-permission: foreground helper mode for the dialog."""
+
+    def test_already_authorized_exits_zero_without_requesting(self):
+        # conftest forces authorized and forbids request_access — passing
+        # proves the early-exit path never touches the request API.
+        from src.main import run_mic_permission_request
+
+        assert run_mic_permission_request() == 0
+
+    def test_flag_runs_helper_and_never_boots_the_daemon(self, monkeypatch):
+        import src.main as main_mod
+
+        monkeypatch.setattr(sys, "argv", ["context-recall-daemon", "--request-mic-permission"])
+        monkeypatch.setattr(main_mod, "run_mic_permission_request", lambda: 0)
+
+        def _must_not_construct(*a, **kw):
+            raise AssertionError("ContextRecall must not boot in permission-request mode")
+
+        monkeypatch.setattr(main_mod, "ContextRecall", _must_not_construct)
+        with pytest.raises(SystemExit) as exc:
+            main_mod.main()
+        assert exc.value.code == 0
+
+    def test_unanswered_request_exits_nonzero(self, monkeypatch):
+        from src import mic_permission
+        from src.main import run_mic_permission_request
+
+        monkeypatch.setattr(mic_permission, "authorization_status", lambda: NOT_DETERMINED)
+        monkeypatch.setattr(mic_permission, "request_access", lambda **kw: None)
+        assert run_mic_permission_request() == 1
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="Darwin-only binding")
 class TestDarwinBinding:
     def test_status_read_returns_valid_value(self):
