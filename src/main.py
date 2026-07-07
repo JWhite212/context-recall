@@ -260,7 +260,9 @@ class ContextRecall:
         # mic permission denial, etc. before we open any streams so the
         # user gets an actionable error instead of an empty recording.
         try:
-            preflight = run_preflight(self._config.audio)
+            # refresh=True unless a stream is somehow already open —
+            # re-initialising PortAudio invalidates open streams.
+            preflight = run_preflight(self._config.audio, refresh=not self._capture.is_recording)
         except Exception as e:
             logger.warning("Audio pre-flight check failed: %s", e, exc_info=True)
         else:

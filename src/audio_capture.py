@@ -27,7 +27,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from src.audio_devices import resolve_default_mic_index
+from src.audio_devices import refresh_input_devices, resolve_default_mic_index
 from src.utils.config import AudioConfig
 
 logger = logging.getLogger(__name__)
@@ -542,6 +542,12 @@ class AudioCapture:
             if self._recording:
                 logger.warning("Already recording — ignoring start().")
                 return
+
+            # Re-scan the device table: PortAudio's snapshot is frozen at
+            # process start, so without this a long-running daemon never
+            # sees devices (or default changes) newer than its launch.
+            # Safe here: no streams are open while _recording is False.
+            refresh_input_devices()
 
             self._blackhole_idx = self._find_device(
                 self._config.blackhole_device_name, kind="BlackHole"

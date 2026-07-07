@@ -6,6 +6,8 @@ set to the loopback. The mic must never silently resolve to a virtual /
 loopback device.
 """
 
+from unittest.mock import patch
+
 from src.audio_devices import is_virtual_input, resolve_default_mic_index
 
 DEVICES = [
@@ -73,3 +75,32 @@ class TestResolveDefaultMicIndex:
     def test_no_input_devices_returns_none(self):
         devices = [{"name": "Speakers", "max_input_channels": 0}]
         assert resolve_default_mic_index(devices, default_index=None) is None
+
+
+class TestRefreshInputDevices:
+    """PortAudio freezes its device table at init; a long-running daemon
+    must re-initialise before each recording or it never sees plugged /
+    unplugged devices and stale default-input changes."""
+
+    @patch("src.audio_devices.sd")
+    def test_refresh_terminates_then_reinitialises(self, mock_sd):
+        from src.audio_devices import refresh_input_devices
+
+        refresh_input_devices()
+        mock_sd._terminate.assert_called_once()
+        mock_sd._initialize.assert_called_once()
+
+    @patch("src.audio_devices.sd")
+    def test_refresh_still_initialises_when_terminate_fails(self, mock_sd):
+        from src.audio_devices import refresh_input_devices
+
+        mock_sd._terminate.side_effect = RuntimeError("not initialised")
+        refresh_input_devices()  # Must not raise.
+        mock_sd._initialize.assert_called_once()
+
+    @patch("src.audio_devices.sd")
+    def test_refresh_swallows_initialise_failure(self, mock_sd):
+        from src.audio_devices import refresh_input_devices
+
+        mock_sd._initialize.side_effect = RuntimeError("boom")
+        refresh_input_devices()  # Must not raise.

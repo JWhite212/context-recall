@@ -877,3 +877,45 @@ class TestMergeSchemaValidation:
 
         capture._merge_dual_source()
         assert output_path.exists()
+
+
+class TestDeviceRefreshOnStart:
+    """start() must refresh the PortAudio device snapshot so a long-running
+    daemon sees devices plugged/unplugged since the process started."""
+
+    @pytest.fixture
+    def capture(self, tmp_path) -> AudioCapture:
+        return AudioCapture(AudioConfig(temp_audio_dir=str(tmp_path)))
+
+    @patch("src.audio_capture.refresh_input_devices")
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
+    @patch("src.audio_capture.sd.default", new_callable=MagicMock)
+    @patch.object(AudioCapture, "_record_loop")
+    def test_start_refreshes_device_list(
+        self, mock_record, mock_default, mock_qd, mock_refresh, capture
+    ):
+        mock_default.device = [1, 1]
+        capture.start()
+        mock_refresh.assert_called_once()
+
+        capture._recording = False
+        if capture._thread and capture._thread.is_alive():
+            capture._thread.join(timeout=2)
+
+    @patch("src.audio_capture.refresh_input_devices")
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
+    @patch("src.audio_capture.sd.default", new_callable=MagicMock)
+    @patch.object(AudioCapture, "_record_loop")
+    def test_double_start_does_not_refresh_again(
+        self, mock_record, mock_default, mock_qd, mock_refresh, capture
+    ):
+        """Refreshing PortAudio invalidates open streams — never refresh
+        while a recording is already in flight."""
+        mock_default.device = [1, 1]
+        capture.start()
+        capture.start()  # No-op: already recording.
+        mock_refresh.assert_called_once()
+
+        capture._recording = False
+        if capture._thread and capture._thread.is_alive():
+            capture._thread.join(timeout=2)

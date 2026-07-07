@@ -20,7 +20,7 @@ from typing import Sequence
 
 import sounddevice as sd
 
-from src.audio_devices import resolve_default_mic_index
+from src.audio_devices import refresh_input_devices, resolve_default_mic_index
 from src.utils.config import AudioConfig
 
 logger = logging.getLogger("contextrecall.audio_preflight")
@@ -127,14 +127,22 @@ def _probe_input_stream(
     return True, None
 
 
-def run_preflight(config: AudioConfig) -> PreflightReport:
+def run_preflight(config: AudioConfig, *, refresh: bool = False) -> PreflightReport:
     """Inspect the audio environment for the upcoming recording.
 
     See module docstring. The returned report carries both ``warnings``
     (recoverable degradations) and ``errors`` (hard stops); callers
     should refuse to start a recording when ``errors`` is non-empty.
+
+    ``refresh=True`` re-initialises PortAudio first so the check sees the
+    CURRENT device table rather than the snapshot from process start.
+    Only pass it when no audio stream is open (refreshing invalidates
+    open streams) — the orchestrator does this at meeting start.
     """
     report = PreflightReport()
+
+    if refresh:
+        refresh_input_devices()
 
     # 1. Enumerate devices.
     try:

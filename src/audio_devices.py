@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 from typing import Iterable, Sequence
 
+import sounddevice as sd
+
 logger = logging.getLogger(__name__)
 
 # Name fragments that identify loopback / virtual / composite devices
@@ -30,6 +32,25 @@ VIRTUAL_INPUT_PATTERNS = (
     "aggregate",
     "multi-output",
 )
+
+
+def refresh_input_devices() -> None:
+    """Re-initialise PortAudio so the device table reflects current hardware.
+
+    PortAudio snapshots devices at initialisation, so a long-running daemon
+    never observes devices being plugged/unplugged or default-input changes
+    (observed in production: the daemon still saw a stale default input
+    hours after the user switched devices). MUST NOT be called while any
+    stream is open — re-initialisation invalidates open streams.
+    """
+    try:
+        sd._terminate()
+    except Exception:
+        logger.warning("PortAudio terminate failed during device refresh", exc_info=True)
+    try:
+        sd._initialize()
+    except Exception:
+        logger.warning("PortAudio initialise failed during device refresh", exc_info=True)
 
 
 def is_virtual_input(name: str) -> bool:

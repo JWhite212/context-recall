@@ -326,3 +326,29 @@ def test_preflight_mic_probe_skips_loopback_default(cfg):
 
     assert report.mic_openable is True
     assert mock_stream.call_args.kwargs["device"] == 0
+
+
+def test_preflight_does_not_refresh_by_default(cfg):
+    devices = _make_devices()
+    with (
+        patch("src.audio_preflight.sd.query_devices", return_value=devices),
+        patch("src.audio_preflight.sd.default", _stub_default(0)),
+        patch("src.audio_preflight.sd.InputStream", return_value=MagicMock()),
+        patch("src.audio_preflight.time.sleep"),
+        patch("src.audio_preflight.refresh_input_devices") as mock_refresh,
+    ):
+        run_preflight(cfg)
+    mock_refresh.assert_not_called()
+
+
+def test_preflight_refresh_true_reinitialises_devices(cfg):
+    devices = _make_devices()
+    with (
+        patch("src.audio_preflight.sd.query_devices", return_value=devices),
+        patch("src.audio_preflight.sd.default", _stub_default(0)),
+        patch("src.audio_preflight.sd.InputStream", return_value=MagicMock()),
+        patch("src.audio_preflight.time.sleep"),
+        patch("src.audio_preflight.refresh_input_devices") as mock_refresh,
+    ):
+        run_preflight(cfg, refresh=True)
+    mock_refresh.assert_called_once()

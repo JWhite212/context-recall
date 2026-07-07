@@ -1055,11 +1055,14 @@ def test_on_meeting_start_runs_preflight_before_capture(
         default_input_index=0,
     )
 
+    app._capture.is_recording = False
     with patch("src.main.run_preflight", return_value=clean_report) as mock_pf:
         app._on_meeting_start(
             MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
         )
-        mock_pf.assert_called_once_with(app._config.audio)
+        # refresh=True: re-scan PortAudio's device table so a long-running
+        # daemon sees devices added/removed since the process started.
+        mock_pf.assert_called_once_with(app._config.audio, refresh=True)
         app._capture.start.assert_called_once()
 
 
