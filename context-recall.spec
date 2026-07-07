@@ -24,13 +24,6 @@ block_cipher = None
 datas = []
 binaries = []
 
-# faster-whisper: includes VAD model ONNX files.
-datas += collect_data_files("faster_whisper")
-
-# CTranslate2: native shared libraries.
-binaries += collect_dynamic_libs("ctranslate2")
-datas += collect_data_files("ctranslate2")
-
 # MLX and MLX Whisper: Apple Silicon ML framework.
 try:
     binaries += collect_dynamic_libs("mlx")
@@ -55,8 +48,6 @@ a = Analysis(
     datas=datas,
     hiddenimports=[
         # Core pipeline
-        "faster_whisper",
-        "ctranslate2",
         "huggingface_hub",
         "tokenizers",
         "numpy",
@@ -123,6 +114,18 @@ a = Analysis(
         "ruff",
         "pip",
         "setuptools",
+        # torch (~520 MB with libtorch) is only reachable through
+        # mlx_whisper.torch_whisper — the offline weight-conversion module
+        # the runtime transcription path never imports — and through
+        # sentence-transformers. Excluding the stack roughly halves the
+        # bundle. src/embeddings.py degrades gracefully (semantic search
+        # falls back to FTS5 keyword search) via is_embeddings_available().
+        "torch",
+        "torchgen",
+        "functorch",
+        "sentence_transformers",
+        "transformers",
+        "sklearn",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

@@ -43,6 +43,23 @@ if [ -f "$METALLIB" ]; then
     echo "==> Copied mlx.metallib next to libmlx.dylib"
 fi
 
+# Sign the main binary with a stable identity when one is available.
+# macOS TCC stores a code-signing requirement with every permission
+# grant: an ad-hoc signature changes its cdhash on every rebuild, so the
+# user would be re-prompted for microphone access after each deploy —
+# and the 2026-07 rename already cost the daemon its grant once. A real
+# certificate plus a fixed identifier keeps grants valid across builds.
+SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:-Apple Development: jamiecs@live.co.uk (34FA3W7TK5)}"
+SIGN_IDENTIFIER="dev.jamiewhite.contextrecall.daemon"
+if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+    echo "==> Codesigning daemon binary with '$SIGN_IDENTITY'"
+    codesign --force --sign "$SIGN_IDENTITY" --identifier "$SIGN_IDENTIFIER" --timestamp=none "$BINARY"
+    codesign --verify --verbose=1 "$BINARY"
+else
+    echo "==> WARNING: signing identity not found; leaving ad-hoc signature"
+    echo "    (microphone permission will be re-requested after every rebuild)"
+fi
+
 # Report size.
 SIZE=$(du -sh "$BINARY" | cut -f1)
 TOTAL_SIZE=$(du -sh "dist/context-recall-daemon/" | cut -f1)
