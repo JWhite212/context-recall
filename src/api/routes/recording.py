@@ -44,7 +44,10 @@ async def start_recording():
         _start_recording()
     except Exception as e:
         logger.error("Failed to start recording: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to start recording. Check daemon logs.")
+        # Surface the orchestrator's message: permission-gate errors carry
+        # the exact remediation ("enable the daemon in System Settings →
+        # … → Microphone"), which the UI shows verbatim.
+        raise HTTPException(status_code=500, detail=f"Failed to start recording: {e}")
 
     return {"status": "recording", "started_at": time.time()}
 

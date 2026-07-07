@@ -1622,3 +1622,126 @@ def test_meeting_end_restores_routing_even_without_audio(
     )
 
     app._audio_router.restore.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Microphone-permission gate: every recording start must be blocked with an
+# actionable pipeline.error when the daemon has no TCC microphone grant.
+# (2026-07-07: grant was bound to the old MeetingMind binary path, so all
+# recordings were -100 dBFS silence, then -9986 failures after a reboot.)
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_start_aborts_when_mic_permission_denied(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    emitted: list[dict] = []
+    app._emit = lambda event_type, **kwargs: emitted.append({"type": event_type, **kwargs})
+
+    with patch(
+        "src.main.ensure_microphone_access",
+        return_value=("denied", "Microphone access is denied for the Context Recall daemon."),
+    ):
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+
+    app._capture.start.assert_not_called()
+    error_events = [e for e in emitted if e["type"] == "pipeline.error"]
+    assert error_events, "permission denial must surface as pipeline.error"
+    assert any(e.get("stage") == "permission" for e in error_events)
+    assert any("denied" in str(e.get("error", "")) for e in error_events)
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_on_meeting_start_proceeds_when_mic_authorized(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._emit = MagicMock()
+    app._capture.is_recording = False
+
+    with (
+        patch("src.main.ensure_microphone_access", return_value=("authorized", None)),
+        patch("src.main.run_preflight", return_value=_clean_preflight_report()),
+    ):
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+
+    app._capture.start.assert_called_once()
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_api_start_recording_raises_when_mic_permission_denied(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """The manual path must fail the HTTP request with the actionable
+    message (the route surfaces the exception detail) and never open
+    streams that are doomed to record silence."""
+    from src.audio_capture import AudioCaptureError
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._emit = MagicMock()
+
+    problem = "Microphone access is denied for the Context Recall daemon."
+    with patch("src.main.ensure_microphone_access", return_value=("denied", problem)):
+        with pytest.raises(AudioCaptureError, match="denied"):
+            app.api_start_recording()
+
+    app._capture.start.assert_not_called()
+    error_calls = [c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.error"]
+    assert error_calls, "manual start must emit pipeline.error on permission denial"
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_api_start_recording_proceeds_when_permission_unknown(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Introspection failure (status 'unknown') must not block recording."""
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._emit = MagicMock()
+
+    with patch("src.main.ensure_microphone_access", return_value=("unknown", None)):
+        app.api_start_recording()
+
+    app._capture.start.assert_called_once()

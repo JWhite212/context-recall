@@ -20,6 +20,7 @@ from typing import Sequence
 
 import sounddevice as sd
 
+from src import mic_permission
 from src.audio_devices import refresh_input_devices, resolve_default_mic_index
 from src.utils.config import AudioConfig
 
@@ -54,6 +55,7 @@ class PreflightReport:
     blackhole_input_candidates: list[str] = field(default_factory=list)
     mic_openable: bool = False
     microphone_permission_likely: bool = False
+    microphone_authorization: str = "unknown"
     default_input_index: int | None = None
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -143,6 +145,21 @@ def run_preflight(config: AudioConfig, *, refresh: bool = False) -> PreflightRep
 
     if refresh:
         refresh_input_devices()
+
+    # 0. Microphone TCC authorization. A denied grant zeroes EVERY input
+    # stream (BlackHole included) or fails stream.start() with PortAudio
+    # -9986, so it is a hard stop. Read-only: preflight never fires the
+    # permission prompt itself — the orchestrator's gate does.
+    status = mic_permission.authorization_status()
+    report.microphone_authorization = status
+    if status in (mic_permission.DENIED, mic_permission.RESTRICTED):
+        report.errors.append(mic_permission.describe_fix(status))
+    elif status == mic_permission.NOT_DETERMINED:
+        report.warnings.append(
+            "macOS has not asked for microphone permission yet — starting "
+            "a recording will show the system dialog; click Allow when it "
+            "appears."
+        )
 
     # 1. Enumerate devices.
     try:

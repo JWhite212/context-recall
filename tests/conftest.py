@@ -32,6 +32,23 @@ def _no_real_coreaudio(monkeypatch):
     monkeypatch.setattr("src.audio_routing.CoreAudioBackend.available", lambda self: False)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_tcc_prompt(monkeypatch):
+    """The suite must never trigger a macOS microphone-permission dialog.
+
+    Every test sees the microphone as already authorized; a stray call
+    to request_access() fails loudly. Tests that exercise the permission
+    logic override these per-test (their monkeypatch wins because it is
+    applied after this autouse fixture).
+    """
+    monkeypatch.setattr("src.mic_permission.authorization_status", lambda: "authorized")
+
+    def _forbidden(**_kwargs):
+        raise AssertionError("request_access() must never run inside the test suite")
+
+    monkeypatch.setattr("src.mic_permission.request_access", _forbidden)
+
+
 class FakePlatform:
     """Controllable PlatformDetector for testing."""
 

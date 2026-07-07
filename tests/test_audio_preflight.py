@@ -352,3 +352,59 @@ def test_preflight_refresh_true_reinitialises_devices(cfg):
     ):
         run_preflight(cfg, refresh=True)
     mock_refresh.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Microphone TCC authorization (the 2026-07-07 silent-recording root cause)
+# ---------------------------------------------------------------------------
+
+
+def _run_with_devices(cfg, monkeypatch, status: str):
+    monkeypatch.setattr("src.mic_permission.authorization_status", lambda: status)
+    devices = _make_devices()
+    with (
+        patch("src.audio_preflight.sd.query_devices", return_value=devices),
+        patch("src.audio_preflight.sd.default", _stub_default(0)),
+        patch("src.audio_preflight.sd.InputStream", return_value=MagicMock()),
+        patch("src.audio_preflight.time.sleep"),
+    ):
+        return run_preflight(cfg)
+
+
+def test_preflight_reports_microphone_authorization(cfg, monkeypatch):
+    report = _run_with_devices(cfg, monkeypatch, "authorized")
+    assert report.microphone_authorization == "authorized"
+    assert report.errors == []
+    assert report.to_dict()["microphone_authorization"] == "authorized"
+
+
+def test_preflight_denied_permission_is_an_error(cfg, monkeypatch):
+    """A denied TCC grant silently zeroes BOTH input streams (or fails
+    stream.start() with PortAudio -9986), so it must hard-stop the
+    recording with an actionable message — not degrade silently."""
+    report = _run_with_devices(cfg, monkeypatch, "denied")
+    assert report.microphone_authorization == "denied"
+    assert any("Microphone" in e and "System Settings" in e for e in report.errors)
+
+
+def test_preflight_restricted_permission_is_an_error(cfg, monkeypatch):
+    report = _run_with_devices(cfg, monkeypatch, "restricted")
+    assert report.errors
+
+
+def test_preflight_not_determined_is_a_warning_not_error(cfg, monkeypatch):
+    """Preflight is side-effect free: it must not fire the TCC prompt
+    itself (the orchestrator's gate does that), so an undetermined
+    status is a warning that recording will trigger the dialog."""
+    report = _run_with_devices(cfg, monkeypatch, "not_determined")
+    assert report.microphone_authorization == "not_determined"
+    assert report.errors == []
+    assert any("permission" in w.lower() for w in report.warnings)
+
+
+def test_preflight_unknown_permission_is_silent(cfg, monkeypatch):
+    """Introspection failure must not add noise — the runtime silent-input
+    detector remains the backstop."""
+    report = _run_with_devices(cfg, monkeypatch, "unknown")
+    assert report.microphone_authorization == "unknown"
+    assert report.errors == []

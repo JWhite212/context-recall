@@ -37,6 +37,7 @@ from src.audio_preflight import run_preflight
 from src.audio_routing import AudioRouter
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
 from src.diariser import EnergyDiariser, create_diariser
+from src.mic_permission import ensure_microphone_access
 from src.output.markdown_writer import MarkdownWriter
 from src.output.notion_writer import NotionWriter
 from src.silent_input_detector import SilentInputDetector
@@ -281,9 +282,44 @@ class ContextRecall:
             message=f"Audio stream status: {status}",
         )
 
+    def _ensure_mic_permission(self) -> str | None:
+        """Gate every recording start on the macOS microphone TCC grant.
+
+        Without it CoreAudio silently records zeros from every input
+        (including the BlackHole loopback) or fails stream.start() with
+        PortAudio -9986 — both observed in production on 2026-07-07
+        after the app rename invalidated the old path-bound grant.
+        Fires the system prompt when the status is still undetermined.
+
+        Returns None when recording may proceed, else the user-facing
+        problem (already emitted as pipeline.error).
+        """
+        status, problem = ensure_microphone_access(timeout_seconds=15.0)
+        if problem is None:
+            return None
+        logger.error("Microphone permission gate blocked recording (%s): %s", status, problem)
+        self._emit("pipeline.error", stage="permission", error=problem)
+        return problem
+
+    def _request_mic_permission_at_boot(self) -> None:
+        """Fire the TCC prompt at daemon start when still undetermined.
+
+        A launchd daemon never shows the dialog implicitly by opening
+        input streams (observed in production: no prompt, no TCC record,
+        zeros on every stream), so ask explicitly and generously wait.
+        """
+        status, problem = ensure_microphone_access(timeout_seconds=300.0)
+        if problem is not None:
+            logger.error("Microphone permission at boot (%s): %s", status, problem)
+        else:
+            logger.info("Microphone permission at boot: %s", status)
+
     def _on_meeting_start(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting begins."""
         logger.info("Starting audio capture...")
+
+        if self._ensure_mic_permission() is not None:
+            return
 
         # Pre-flight audio environment check. Surfaces missing BlackHole,
         # mic permission denial, etc. before we open any streams so the
@@ -927,8 +963,13 @@ class ContextRecall:
     def api_start_recording(self) -> None:
         """Start a manual recording session via the API.
 
-        Raises AudioCaptureError if the audio device cannot be opened.
+        Raises AudioCaptureError if the microphone permission is missing
+        or the audio device cannot be opened.
         """
+        problem = self._ensure_mic_permission()
+        if problem is not None:
+            raise AudioCaptureError(problem)
+
         self._ensure_audio_routing()
         self._wire_audio_level_callback()
         self._wire_capture_error_callbacks()
@@ -1084,6 +1125,15 @@ class ContextRecall:
 
         # Start the API server for UI communication.
         self._start_api_server()
+
+        # Trigger the microphone permission dialog at boot (rather than
+        # mid-meeting) when macOS has not asked yet. Own thread: the
+        # dialog can sit unanswered for minutes.
+        threading.Thread(
+            target=self._request_mic_permission_at_boot,
+            name="mic-permission",
+            daemon=True,
+        ).start()
 
         # Wire shutdown plumbing: a tiny daemon thread waits on the event
         # flag and drives the actual teardown, so the signal handler stays
