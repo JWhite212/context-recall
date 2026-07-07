@@ -42,7 +42,7 @@ from src.silent_input_detector import SilentInputDetector
 from src.summariser import Summariser
 from src.templates import TemplateManager
 from src.transcriber import Transcriber
-from src.utils.config import load_config
+from src.utils.config import load_config, materialise_default_config
 from src.utils.paths import audio_dir as default_audio_dir
 
 try:
@@ -62,6 +62,9 @@ class ContextRecall:
     """
 
     def __init__(self, config_path: Path | None = None):
+        # First boot on a fresh install: write the defaults so the
+        # settings API has a real file to read and merge updates into.
+        materialise_default_config(config_path)
         self._config = load_config(config_path)
         self._setup_logging()
 

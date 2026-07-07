@@ -153,3 +153,58 @@ def test_default_config_path_source_uses_project_root(monkeypatch):
     assert "Application Support" not in str(resolved), (
         f"source-run config path must not point at Application Support; got {resolved}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Default-config materialisation + warn-once (installed daemon had no
+# config.yaml and logged "No config found" once per minute forever).
+# ---------------------------------------------------------------------------
+
+
+def test_materialise_default_config_creates_file(tmp_path: Path):
+    from src.utils.config import load_config, materialise_default_config
+
+    target = tmp_path / "config.yaml"
+    assert materialise_default_config(target) is True
+    assert target.exists()
+
+    # The written file must load back cleanly with default values.
+    config = load_config(target)
+    assert config.detection.poll_interval_seconds == 3
+    assert config.audio.blackhole_device_name == "BlackHole 2ch"
+    assert config.api.port == 9876
+
+
+def test_materialise_default_config_never_overwrites(tmp_path: Path):
+    from src.utils.config import materialise_default_config
+
+    target = tmp_path / "config.yaml"
+    target.write_text("detection:\n  poll_interval_seconds: 42\n")
+    assert materialise_default_config(target) is False
+    assert "42" in target.read_text()
+
+
+def test_materialise_default_config_survives_unwritable_dir(tmp_path: Path):
+    from src.utils.config import materialise_default_config
+
+    target = tmp_path / "nope" / "config.yaml"
+    tmp_path.chmod(0o500)
+    try:
+        assert materialise_default_config(target) is False
+    finally:
+        tmp_path.chmod(0o700)
+
+
+def test_missing_config_warns_only_once_per_path(tmp_path: Path, caplog):
+    import logging as _logging
+
+    from src.utils.config import load_config
+
+    missing = tmp_path / "does-not-exist.yaml"
+    with caplog.at_level(_logging.WARNING, logger="src.utils.config"):
+        load_config(missing)
+        load_config(missing)
+        load_config(missing)
+
+    warnings = [r for r in caplog.records if "No config found" in r.getMessage()]
+    assert len(warnings) == 1

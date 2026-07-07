@@ -327,6 +327,41 @@ def _build_dataclass(cls, raw: dict):
     return cls(**filtered)
 
 
+def materialise_default_config(config_path: Optional[Path] = None) -> bool:
+    """Write a default config.yaml if none exists yet.
+
+    Called on daemon startup so a fresh install gets a real file the
+    settings API can read and update — previously the installed daemon
+    ran on in-memory defaults forever and logged "No config found" on
+    every reload. Never overwrites an existing file. Returns True if a
+    file was written.
+    """
+    target = config_path or DEFAULT_CONFIG_PATH
+    if target.exists():
+        return False
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "w") as f:
+            yaml.safe_dump(
+                dataclasses.asdict(AppConfig()),
+                f,
+                default_flow_style=False,
+                sort_keys=False,
+                allow_unicode=True,
+            )
+    except OSError as e:
+        logger.warning("Could not write default config to %s: %s", target, e)
+        return False
+    logger.info("Wrote default configuration to %s", target)
+    return True
+
+
+# Paths already warned about — a daemon reloads config frequently (API
+# routes, schedulers), and repeating the same missing-file warning once
+# per reload drowns the log.
+_missing_config_warned: set[str] = set()
+
+
 def load_config(config_path: Optional[Path] = None) -> AppConfig:
     """
     Load and validate the application configuration.
@@ -337,7 +372,11 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
     path = config_path or DEFAULT_CONFIG_PATH
 
     if not path.exists():
-        logger.warning("No config found at %s — using defaults.", path)
+        if str(path) not in _missing_config_warned:
+            _missing_config_warned.add(str(path))
+            logger.warning("No config found at %s — using defaults.", path)
+        else:
+            logger.debug("No config found at %s — using defaults.", path)
         config = AppConfig()
         # Defaults contain literal '~' (e.g. log_file, temp_audio_dir,
         # vault_path). Without this expansion the daemon will treat '~'

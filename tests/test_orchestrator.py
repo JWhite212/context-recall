@@ -1457,3 +1457,32 @@ def test_install_signal_handlers_tolerates_non_main_thread(
     with patch("src.main.signal.signal", side_effect=ValueError("not main thread")):
         # Must not raise.
         app._install_signal_handlers()
+
+
+# ---------------------------------------------------------------------------
+# First-boot config materialisation
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_init_materialises_default_config(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_path,
+):
+    """A fresh install has no config.yaml; the daemon must write the
+    defaults on first boot so the settings API has a real file to read
+    and update, instead of warning 'No config found' every minute."""
+    from src.main import ContextRecall
+
+    config_path = tmp_path / "config.yaml"
+    assert not config_path.exists()
+
+    ContextRecall(config_path=config_path)
+
+    assert config_path.exists()
