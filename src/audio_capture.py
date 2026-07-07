@@ -27,6 +27,7 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
+from src.audio_devices import resolve_default_mic_index
 from src.utils.config import AudioConfig
 
 logger = logging.getLogger(__name__)
@@ -117,16 +118,41 @@ class AudioCapture:
         )
 
     def _find_default_input_device(self) -> int | None:
-        """Return the index of the system default input device, or None."""
+        """Resolve the microphone device index, or None if no real mic exists.
+
+        Never returns a loopback/virtual device (BlackHole, Teams Audio,
+        aggregates, ...) even when macOS reports one as the default input —
+        recording the loopback as the "mic" captures silence twice and no
+        voice at all. Falls back to scanning for a real input device.
+        """
+        default_idx: int | None = None
         try:
-            idx = sd.default.device[0]
-            if idx is not None and idx >= 0:
-                device = sd.query_devices(idx)
-                logger.info(f"Using default input device: '{device['name']}' (index {idx})")
-                return idx
+            candidate = sd.default.device[0]
+            if candidate is not None and candidate >= 0:
+                default_idx = int(candidate)
         except Exception:
-            pass
-        return None
+            default_idx = None
+
+        try:
+            devices = sd.query_devices()
+        except Exception:
+            return None
+
+        exclude = {self._blackhole_idx} if self._blackhole_idx is not None else set()
+        idx = resolve_default_mic_index(devices, default_idx, exclude=exclude)
+        if idx is None:
+            return None
+        name = devices[idx]["name"]
+        if default_idx is not None and idx != default_idx:
+            logger.info(
+                "Default input device is a loopback/virtual device — "
+                "using '%s' (index %d) as the microphone instead.",
+                name,
+                idx,
+            )
+        else:
+            logger.info(f"Using default input device: '{name}' (index {idx})")
+        return idx
 
     def _to_mono(self, data: np.ndarray) -> np.ndarray:
         """Downmix multi-channel audio to a 1-D mono array (always copies)."""

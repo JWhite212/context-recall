@@ -20,6 +20,7 @@ from typing import Sequence
 
 import sounddevice as sd
 
+from src.audio_devices import resolve_default_mic_index
 from src.utils.config import AudioConfig
 
 logger = logging.getLogger("contextrecall.audio_preflight")
@@ -199,7 +200,11 @@ def run_preflight(config: AudioConfig) -> PreflightReport:
                 f"found. Recording will fall back to system audio only."
             )
     else:
-        mic_index = report.default_input_index
+        # Resolve the mic the same way AudioCapture will: never accept a
+        # loopback/virtual device even if macOS reports it as the default.
+        blackhole_index = _find_input_index_by_name(devices, config.blackhole_device_name)
+        exclude = {blackhole_index} if blackhole_index is not None else set()
+        mic_index = resolve_default_mic_index(devices, report.default_input_index, exclude=exclude)
         if mic_index is None:
             report.warnings.append(
                 "No default microphone is available. Recording will fall "

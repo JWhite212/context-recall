@@ -306,3 +306,23 @@ def test_preflight_default_device_access_failure_does_not_crash(cfg):
     # Even though default lookup blew up, we shouldn't have crashed —
     # the report should still report BlackHole presence accurately.
     assert report.blackhole_present is True
+
+
+def test_preflight_mic_probe_skips_loopback_default(cfg):
+    """When the system default input is the BlackHole loopback, the mic
+    probe must target a real microphone instead (production regression:
+    the 'mic' stream recorded the silent loopback)."""
+    devices = _make_devices()  # 0 = Built-in Microphone, 1 = BlackHole 2ch
+
+    fake_stream = MagicMock()
+
+    with (
+        patch("src.audio_preflight.sd.query_devices", return_value=devices),
+        patch("src.audio_preflight.sd.default", _stub_default(1)),
+        patch("src.audio_preflight.sd.InputStream", return_value=fake_stream) as mock_stream,
+        patch("src.audio_preflight.time.sleep"),
+    ):
+        report = run_preflight(cfg)
+
+    assert report.mic_openable is True
+    assert mock_stream.call_args.kwargs["device"] == 0

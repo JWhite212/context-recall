@@ -39,19 +39,50 @@ class TestAudioCaptureDeviceLookup:
         with pytest.raises(AudioCaptureError):
             capture._find_device("NonExistentDevice")
 
-    @patch("src.audio_capture.sd.query_devices")
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
     @patch("src.audio_capture.sd.default", new_callable=MagicMock)
     def test_find_default_input_device(self, mock_default, mock_qd, capture):
-        mock_default.device = [0, 1]
-        mock_qd.return_value = {"name": "MacBook Pro Mic", "max_input_channels": 1}
+        mock_default.device = [1, 1]
         idx = capture._find_default_input_device()
-        assert idx == 0
+        assert idx == 1
 
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
     @patch("src.audio_capture.sd.default", new_callable=MagicMock)
-    def test_find_default_input_device_none(self, mock_default, capture):
+    def test_default_input_loopback_falls_back_to_real_mic(self, mock_default, mock_qd, capture):
+        """Production failure: default input was BlackHole, so the 'mic'
+        stream recorded the silent loopback. Resolution must skip it."""
+        mock_default.device = [0, 1]  # Default input = BlackHole (index 0).
+        idx = capture._find_default_input_device()
+        assert idx == 1
+
+    @patch(
+        "src.audio_capture.sd.query_devices",
+        return_value=[{"name": "BlackHole 2ch", "max_input_channels": 2}],
+    )
+    @patch("src.audio_capture.sd.default", new_callable=MagicMock)
+    def test_find_default_input_device_none(self, mock_default, mock_qd, capture):
         mock_default.device = [-1, -1]
         idx = capture._find_default_input_device()
         assert idx is None
+
+    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
+    @patch("src.audio_capture.sd.default", new_callable=MagicMock)
+    @patch.object(AudioCapture, "_record_loop")
+    def test_start_never_records_loopback_as_mic(self, mock_record, mock_default, mock_qd, capture):
+        """End-to-end through start(): with default input on the loopback,
+        the mic stream must open on the real microphone instead."""
+        mock_default.device = [0, 1]
+        capture._config.mic_enabled = True
+        capture._config.mic_device_name = ""
+
+        capture.start()
+
+        assert capture._blackhole_idx == 0
+        assert capture._mic_idx == 1
+
+        capture._recording = False
+        if capture._thread and capture._thread.is_alive():
+            capture._thread.join(timeout=2)
 
 
 # ---------------------------------------------------------------------------
