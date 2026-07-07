@@ -245,3 +245,58 @@ class TestRestore:
         # Managed device is reused, not recreated.
         assert len(backend.created) == 1
         assert backend.destroyed == []
+
+    def test_restore_heals_stale_hijack_from_previous_process(self):
+        """A crash or daemon restart loses the in-memory previous-device
+        record while the managed device stays the system default
+        (observed live 2026-07-07: a capture failure at 18:21 left
+        'Context Recall Audio' as the user's output across two daemon
+        restarts, killing their volume keys). A FRESH router must hand
+        control back to the first real sub-device instead of declaring
+        'nothing to restore'."""
+        devices = _standard_devices()
+        devices[9] = {
+            "name": MANAGED_DEVICE_NAME,
+            "uid": MANAGED_DEVICE_UID,
+            "subs": [JABRA_UID, BLACKHOLE_UID],
+            "output": True,
+        }
+        backend = FakeBackend(devices, default_output=9)
+
+        result = _router(backend).restore()
+
+        assert result.changed is True
+        assert backend.default_output_device() == 1  # the Jabra
+
+    def test_restore_stale_hijack_skips_missing_subdevices(self):
+        """If the first real sub-device was unplugged, fall through to
+        the next one rather than failing."""
+        devices = _standard_devices()
+        devices[9] = {
+            "name": MANAGED_DEVICE_NAME,
+            "uid": MANAGED_DEVICE_UID,
+            "subs": ["usb:unplugged-headset", SPEAKERS_UID, BLACKHOLE_UID],
+            "output": True,
+        }
+        backend = FakeBackend(devices, default_output=9)
+
+        result = _router(backend).restore()
+
+        assert result.changed is True
+        assert backend.default_output_device() == 3  # the speakers
+
+    def test_restore_stale_hijack_without_real_subdevice_errors(self):
+        devices = _standard_devices()
+        devices[9] = {
+            "name": MANAGED_DEVICE_NAME,
+            "uid": MANAGED_DEVICE_UID,
+            "subs": [BLACKHOLE_UID],
+            "output": True,
+        }
+        backend = FakeBackend(devices, default_output=9)
+
+        result = _router(backend).restore()
+
+        assert result.changed is False
+        assert result.error is not None
+        assert backend.default_output_device() == 9  # left alone, not broken

@@ -273,9 +273,16 @@ class ContextRecall:
         surfaces capture-thread failures and stream-status flags as
         pipeline.error / pipeline.warning events the moment they happen,
         rather than discovering them after wait_for_merge times out."""
-        self._capture.on_capture_error = lambda err: self._emit(
-            "pipeline.error", stage="capture", error=str(err)
-        )
+
+        def _on_capture_error(err: AudioCaptureError) -> None:
+            self._emit("pipeline.error", stage="capture", error=str(err))
+            # The capture thread is dead, so no stop() will ever run (a
+            # manual stop now 409s on "Not recording") — hand the output
+            # device back immediately or the managed multi-output stays
+            # the user's default with the volume keys disabled.
+            self._restore_audio_routing()
+
+        self._capture.on_capture_error = _on_capture_error
         self._capture.on_stream_status = lambda source, status: self._emit(
             "pipeline.warning",
             source=source,

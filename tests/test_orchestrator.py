@@ -1745,3 +1745,44 @@ def test_api_start_recording_proceeds_when_permission_unknown(
         app.api_start_recording()
 
     app._capture.start.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Capture-thread failure must hand the output device back. When the capture
+# thread dies (e.g. PortAudio -9986 at stream.start), nothing ever calls
+# stop(): a subsequent manual stop 409s on "Not recording", so the restore
+# in the stop paths never runs and the managed multi-output stays the user's
+# default (observed live 2026-07-07, 18:21–18:22).
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_capture_error_callback_restores_routing(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.audio_capture import AudioCaptureError
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._audio_router = MagicMock()
+    app._emit = MagicMock()
+
+    app._wire_capture_error_callbacks()
+    error_callback = app._capture.on_capture_error
+    error_callback(
+        AudioCaptureError(
+            "Failed to capture audio: Error starting stream: "
+            "Internal PortAudio error [PaErrorCode -9986]"
+        )
+    )
+
+    app._audio_router.restore.assert_called_once()
+    error_calls = [c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.error"]
+    assert error_calls, "capture errors must still reach the UI as pipeline.error"

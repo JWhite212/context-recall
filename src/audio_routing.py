@@ -413,7 +413,7 @@ class AudioRouter:
         """
         with self._lock:
             if self._previous_output_id is None:
-                return RoutingResult(message="Routing unchanged — nothing to restore.")
+                return self._heal_stale_hijack_locked()
             try:
                 current_id = self._backend.default_output_device()
                 if self._managed_id is not None and current_id != self._managed_id:
@@ -437,3 +437,45 @@ class AudioRouter:
             finally:
                 self._previous_output_id = None
                 self._previous_output_uid = None
+
+    def _heal_stale_hijack_locked(self) -> RoutingResult:
+        """Recover when the managed device is default but this process
+        never switched to it.
+
+        A crash, a capture-thread failure, or a daemon restart loses the
+        in-memory previous-device record while the managed multi-output
+        stays the system default — the user is left without volume keys
+        until something switches away. Hand control back to the first
+        sub-device that still exists and isn't the loopback.
+        """
+        if not self._backend.available():
+            return RoutingResult(message="Routing unchanged — nothing to restore.")
+        try:
+            current_id = self._backend.default_output_device()
+            if self._backend.device_uid(current_id) != MANAGED_DEVICE_UID:
+                return RoutingResult(message="Routing unchanged — nothing to restore.")
+
+            subs = self._backend.subdevice_uids(current_id) or []
+            blackhole_uid = self._find_blackhole_uid()
+            real_uids = [u for u in subs if u != blackhole_uid and "blackhole" not in u.lower()]
+            for uid in real_uids:
+                target = self._find_device_by_uid(uid)
+                if target is None:
+                    continue
+                self._backend.set_default_output_device(target)
+                message = (
+                    "Recovered the default output from a stale managed device "
+                    f"(switched to '{self._backend.device_name(target)}')."
+                )
+                logger.info(message)
+                return RoutingResult(changed=True, message=message)
+            return RoutingResult(
+                error=(
+                    "The managed output device is the system default but none "
+                    "of its sub-devices could be restored — pick an output in "
+                    "System Settings → Sound."
+                )
+            )
+        except CoreAudioError as e:
+            logger.warning("Stale-routing recovery failed: %s", e)
+            return RoutingResult(error=f"Failed to restore output device: {e}")
