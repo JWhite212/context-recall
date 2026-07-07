@@ -454,6 +454,11 @@ def test_audio_persistence_fallback_to_copy(
     mock_server.loop = mock_loop
     app._api_server = mock_server
 
+    # Suppress post-processing: _post_process_async is a coroutine the
+    # patched run_coroutine_threadsafe never awaits, which produces a
+    # RuntimeWarning at gc time. This test is about audio persistence.
+    app._run_post_processing = MagicMock()
+
     # Create source audio file.
     audio_file = tmp_path / "source.wav"
     audio_file.write_bytes(b"RIFF" + b"\x00" * 40)
