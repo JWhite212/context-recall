@@ -22,11 +22,122 @@ fn launch_agent_plist_path() -> Result<PathBuf, String> {
 }
 
 /// Resolve the bundled daemon binary path (mirrors `daemon_binary_path`).
+///
+/// The bundle declares `resources/context-recall-daemon` (a PyInstaller
+/// output directory), which Tauri places at
+/// `Contents/Resources/resources/context-recall-daemon/` with the actual
+/// executable inside it. The previous resolution returned
+/// `Contents/Resources/context-recall-daemon` — a path that does not
+/// exist — so LaunchAgents written from it could never start.
 fn resolve_daemon_binary(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .resource_dir()
-        .map(|p| p.join("context-recall-daemon"))
+        .map(|p| {
+            p.join("resources")
+                .join("context-recall-daemon")
+                .join("context-recall-daemon")
+        })
         .map_err(|e| e.to_string())
+}
+
+/// Extract `ProgramArguments[0]` from a LaunchAgent plist on disk.
+fn plist_program_path(path: &Path) -> Option<PathBuf> {
+    let value = plist::Value::from_file(path).ok()?;
+    let dict = value.as_dictionary()?;
+    let args = dict.get("ProgramArguments")?.as_array()?;
+    let first = args.first()?.as_string()?;
+    Some(PathBuf::from(first))
+}
+
+fn current_uid() -> Result<String, String> {
+    let out = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(|e| format!("Failed to run id -u: {e}"))?;
+    if !out.status.success() {
+        return Err("id -u failed".into());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+fn launchctl(args: &[&str]) -> Result<std::process::Output, String> {
+    std::process::Command::new("launchctl")
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to run launchctl: {e}"))
+}
+
+/// Ensure the daemon LaunchAgent is installed and the daemon is running.
+///
+/// Silent, idempotent bootstrap: installs (or repairs) the plist when its
+/// target binary is missing, loads the service with `launchctl bootstrap`
+/// (tolerated when already loaded), and starts it with a gentle
+/// `launchctl kickstart` (no `-k`, so a running daemon is untouched).
+/// An existing plist whose target binary exists is left exactly as the
+/// user configured it (e.g. a dev venv invocation).
+fn ensure_daemon_running(app: &tauri::AppHandle) -> Result<String, String> {
+    let plist_path = launch_agent_plist_path()?;
+    let bundled = resolve_daemon_binary(app)?;
+    let existing_target_ok = plist_path.exists()
+        && plist_program_path(&plist_path)
+            .map(|p| p.exists())
+            .unwrap_or(false);
+
+    let uid = current_uid()?;
+    let service = format!("gui/{uid}/{LAUNCH_AGENT_LABEL}");
+    let mut actions: Vec<&str> = Vec::new();
+
+    if !existing_target_ok {
+        if !bundled.exists() {
+            if plist_path.exists() {
+                return Err(format!(
+                    "LaunchAgent at {} points at a missing daemon binary and no \
+                     bundled daemon is available to repair it.",
+                    plist_path.display()
+                ));
+            }
+            return Err(
+                "No daemon available: no LaunchAgent installed and the bundled \
+                 daemon binary is missing (development build?)."
+                    .into(),
+            );
+        }
+        if let Some(parent) = plist_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {}", parent.display(), e))?;
+        }
+        // A stale service with this label may still be loaded from the old
+        // plist — boot it out first (tolerated when not loaded).
+        let _ = launchctl(&["bootout", &service]);
+        let home = dirs::home_dir().ok_or_else(|| "Cannot resolve home directory".to_string())?;
+        write_launch_agent_plist(&plist_path, &bundled.display().to_string(), &home)?;
+        actions.push("installed LaunchAgent");
+    }
+
+    // Load if not already loaded; bootstrap fails harmlessly when loaded.
+    let plist_str = plist_path.display().to_string();
+    let bootstrap = launchctl(&["bootstrap", &format!("gui/{uid}"), &plist_str])?;
+    if bootstrap.status.success() {
+        actions.push("loaded service");
+    }
+
+    let kick = launchctl(&["kickstart", &service])?;
+    if !kick.status.success() {
+        return Err(format!(
+            "launchctl kickstart failed: {}",
+            String::from_utf8_lossy(&kick.stderr).trim()
+        ));
+    }
+    actions.push("daemon running");
+    Ok(actions.join("; "))
+}
+
+/// Start (or repair + start) the local daemon. Invoked automatically by
+/// the frontend when the daemon is unreachable, and available from the
+/// connection screen's "Start local service" button.
+#[tauri::command]
+fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
+    ensure_daemon_running(&app)
 }
 
 /// Build the LaunchAgent plist as a structured dictionary.
@@ -215,10 +326,7 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, Stri
 /// Return the absolute path to the bundled daemon binary.
 #[tauri::command]
 fn daemon_binary_path(app: tauri::AppHandle) -> Result<String, String> {
-    app.path()
-        .resource_dir()
-        .map(|p| p.join("context-recall-daemon").display().to_string())
-        .map_err(|e| e.to_string())
+    resolve_daemon_binary(&app).map(|p| p.display().to_string())
 }
 
 /// Reveal the Context Recall logs folder in Finder.
@@ -297,6 +405,47 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plist_program_path_reads_first_program_argument() {
+        let dir = std::env::temp_dir().join(format!("cr-plist-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.plist");
+        write_launch_agent_plist(&path, "/opt/daemon/context-recall-daemon", Path::new("/Users/test")).unwrap();
+
+        let program = plist_program_path(&path);
+        assert_eq!(program, Some(PathBuf::from("/opt/daemon/context-recall-daemon")));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plist_program_path_none_for_missing_or_invalid() {
+        assert_eq!(plist_program_path(Path::new("/nonexistent/agent.plist")), None);
+
+        let dir = std::env::temp_dir().join(format!("cr-plist-bad-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.plist");
+        fs::write(&path, "not a plist").unwrap();
+        assert_eq!(plist_program_path(&path), None);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn launch_agent_plist_keeps_daemon_alive_and_runs_at_load() {
+        let value = build_launch_agent_plist("/opt/daemon/bin", Path::new("/Users/test"));
+        let dict = value.as_dictionary().unwrap();
+        assert_eq!(
+            dict.get("Label").and_then(|v| v.as_string()),
+            Some(LAUNCH_AGENT_LABEL)
+        );
+        assert_eq!(dict.get("RunAtLoad").and_then(|v| v.as_boolean()), Some(true));
+        assert!(dict.get("KeepAlive").is_some());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -315,9 +464,19 @@ pub fn run() {
             open_macos_settings,
             is_start_at_login_enabled,
             set_start_at_login,
+            start_daemon,
         ])
         .setup(|app| {
             tray::setup(app)?;
+            // Silent daemon bootstrap: bring the daemon up on every app
+            // launch without user input. Off the main thread — launchctl
+            // calls must not block window creation. Failures are logged
+            // only; the frontend retries via start_daemon with UI feedback.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || match ensure_daemon_running(&handle) {
+                Ok(status) => eprintln!("[daemon-bootstrap] {status}"),
+                Err(e) => eprintln!("[daemon-bootstrap] skipped: {e}"),
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
