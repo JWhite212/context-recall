@@ -69,6 +69,23 @@ jobs:
         run: cd ui && npm run tauri build
         if: ${{ !env.TAURI_SIGNING_PRIVATE_KEY }}
 
+      # The Tauri resource copier destroys the symlink farm inside the
+      # PyInstaller daemon bundle (the daemon then dies at bootstrap with
+      # "No module named '_struct'"). Re-inject the pristine bundle with
+      # a symlink-preserving copy and regenerate the DMG from the fixed
+      # app. The daemon artifact was downloaded to the same path
+      # build_daemon.sh uses locally, so the inject script finds it.
+      - name: Re-inject daemon bundle and rebuild DMG
+        run: |
+          mkdir -p dist
+          cp -R ui/src-tauri/resources/context-recall-daemon dist/context-recall-daemon
+          ./scripts/inject_daemon.sh "ui/src-tauri/target/release/bundle/macos/Context Recall.app"
+          rm -f ui/src-tauri/target/release/bundle/dmg/*.dmg
+          hdiutil create -volname "Context Recall" \
+            -srcfolder "ui/src-tauri/target/release/bundle/macos/Context Recall.app" \
+            -ov -format UDZO \
+            "ui/src-tauri/target/release/bundle/dmg/Context Recall_injected_aarch64.dmg"
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
