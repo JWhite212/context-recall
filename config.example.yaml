@@ -31,6 +31,12 @@ audio:
   # Audio MIDI Setup. Run `python -m sounddevice` to list devices.
   blackhole_device_name: "BlackHole 2ch"
 
+  # Automatically switch the default output to a managed Multi-Output
+  # Device ("Context Recall Audio" = your current output + BlackHole)
+  # while recording, and switch back afterwards. Set to false if you
+  # prefer to manage routing yourself in Audio MIDI Setup.
+  auto_route_system_audio: true
+
   # Microphone device name (substring match). Empty = system default input.
   # This captures your voice alongside the remote participants' audio.
   mic_device_name: ""

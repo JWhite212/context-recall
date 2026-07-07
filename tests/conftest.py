@@ -21,6 +21,17 @@ from src.utils.config import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_coreaudio(monkeypatch):
+    """The suite must never mutate the host's audio configuration.
+
+    Any code path that constructs a real CoreAudioBackend sees it as
+    unavailable, so AudioRouter degrades to a graceful no-op. Routing
+    logic is tested against FakeBackend in test_audio_routing.py.
+    """
+    monkeypatch.setattr("src.audio_routing.CoreAudioBackend.available", lambda self: False)
+
+
 class FakePlatform:
     """Controllable PlatformDetector for testing."""
 

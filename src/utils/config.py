@@ -77,6 +77,10 @@ class DetectionConfig:
 @dataclass
 class AudioConfig:
     blackhole_device_name: str = "BlackHole 2ch"
+    # Automatically switch the default output to a managed Multi-Output
+    # Device (current output + BlackHole) while recording, and switch back
+    # afterwards — no manual Audio MIDI Setup required.
+    auto_route_system_audio: bool = True
     mic_device_name: str = ""  # Empty = system default input device.
     mic_enabled: bool = True  # Mix microphone input with system audio.
     mic_volume: float = 1.0  # Mic gain relative to system audio (0.0–2.0).

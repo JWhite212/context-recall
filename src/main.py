@@ -34,6 +34,7 @@ from pathlib import Path
 
 from src.audio_capture import AudioCapture, AudioCaptureError
 from src.audio_preflight import run_preflight
+from src.audio_routing import AudioRouter
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
 from src.diariser import EnergyDiariser, create_diariser
 from src.output.markdown_writer import MarkdownWriter
@@ -70,6 +71,7 @@ class ContextRecall:
 
         self._detector = TeamsDetector(self._config.detection)
         self._capture = AudioCapture(self._config.audio)
+        self._audio_router = AudioRouter(blackhole_name=self._config.audio.blackhole_device_name)
         self._transcriber = Transcriber(self._config.transcription)
         self._summariser = Summariser(self._config.summarisation)
         self._diariser = (
@@ -210,6 +212,30 @@ class ContextRecall:
         if warning:
             self._emit("pipeline.warning", source="mic", message=str(warning))
 
+    def _ensure_audio_routing(self) -> None:
+        """Route system audio into the capture loopback before recording.
+
+        Failures are warnings, not errors: mic capture still works
+        without routing, and the silent-input detector will flag the
+        missing system audio while the meeting is in flight.
+        """
+        if not self._config.audio.auto_route_system_audio:
+            return
+        result = self._audio_router.ensure_routed()
+        if result.error:
+            self._emit("pipeline.warning", source="routing", message=result.error)
+        elif result.changed:
+            self._emit("audio.routing", message=result.message)
+
+    def _restore_audio_routing(self) -> None:
+        """Switch the default output back after recording (best-effort)."""
+        if not self._config.audio.auto_route_system_audio:
+            return
+        try:
+            self._audio_router.restore()
+        except Exception:
+            logger.exception("Restoring audio routing failed")
+
     def _wire_audio_level_callback(self) -> None:
         """Install the audio.level callback used by both auto-detect and
         manual-recording entry points. Resets the silent-input detector
@@ -280,6 +306,7 @@ class ContextRecall:
                 )
                 return
 
+        self._ensure_audio_routing()
         self._wire_audio_level_callback()
         self._wire_capture_error_callbacks()
 
@@ -288,6 +315,7 @@ class ContextRecall:
         except Exception as e:
             logger.error("Failed to start audio capture: %s", e, exc_info=True)
             self._emit("pipeline.error", stage="capture", error=str(e))
+            self._restore_audio_routing()
             return
 
         self._emit_capture_warnings()
@@ -387,6 +415,10 @@ class ContextRecall:
             audio_path = self._capture.stop(blocking=False)
         except TypeError:
             audio_path = self._capture.stop()
+
+        # Hand the output device back to the user regardless of whether
+        # capture produced a usable file.
+        self._restore_audio_routing()
 
         if audio_path is None or not audio_path.exists():
             logger.error("No audio file produced. Skipping processing.")
@@ -897,6 +929,7 @@ class ContextRecall:
 
         Raises AudioCaptureError if the audio device cannot be opened.
         """
+        self._ensure_audio_routing()
         self._wire_audio_level_callback()
         self._wire_capture_error_callbacks()
 
@@ -905,6 +938,7 @@ class ContextRecall:
         except Exception:
             logger.error("API recording start failed", exc_info=True)
             self._emit("pipeline.error", stage="capture", error="Failed to start audio capture")
+            self._restore_audio_routing()
             raise
 
         self._emit_capture_warnings()
@@ -916,6 +950,7 @@ class ContextRecall:
         started_at = self._meeting_started_at
         self._emit("meeting.ended", duration=time.time() - started_at)
         audio_path = self._capture.stop()
+        self._restore_audio_routing()
 
         if audio_path and audio_path.exists():
             duration = time.time() - started_at
@@ -938,6 +973,7 @@ class ContextRecall:
         duration = time.time() - started_at
         self._emit("meeting.ended", duration=duration)
         audio_path = self._capture.stop()
+        self._restore_audio_routing()
 
         if not audio_path or not audio_path.exists():
             raise AudioCaptureError("No audio file produced")
@@ -998,6 +1034,9 @@ class ContextRecall:
                 self._capture.stop(blocking=False)
         except Exception:
             logger.exception("Shutdown watcher: capture.stop() failed")
+        # Never leave the user's output pointed at the managed device
+        # across a daemon shutdown.
+        self._restore_audio_routing()
 
     def _install_signal_handlers(self) -> None:
         """Install idempotent SIGINT/SIGTERM handlers.

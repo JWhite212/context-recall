@@ -1486,3 +1486,139 @@ def test_init_materialises_default_config(
     ContextRecall(config_path=config_path)
 
     assert config_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Automatic audio routing wiring
+# ---------------------------------------------------------------------------
+
+
+def _clean_preflight_report():
+    from src.audio_preflight import PreflightReport
+
+    return PreflightReport(
+        blackhole_present=True,
+        blackhole_input_candidates=["BlackHole 2ch"],
+        mic_openable=True,
+        microphone_permission_likely=True,
+        default_input_index=0,
+    )
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_meeting_start_ensures_audio_routing(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Recording must not depend on the user hand-building a Multi-Output
+    Device: meeting start routes system audio into the loopback."""
+    from src.audio_routing import RoutingResult
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture.is_recording = False
+    app._audio_router = MagicMock()
+    app._audio_router.ensure_routed.return_value = RoutingResult(changed=True, message="routed")
+
+    with patch("src.main.run_preflight", return_value=_clean_preflight_report()):
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+
+    app._audio_router.ensure_routed.assert_called_once()
+    app._capture.start.assert_called_once()
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_meeting_start_skips_routing_when_disabled(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture.is_recording = False
+    app._config.audio.auto_route_system_audio = False
+    app._audio_router = MagicMock()
+
+    with patch("src.main.run_preflight", return_value=_clean_preflight_report()):
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+
+    app._audio_router.ensure_routed.assert_not_called()
+    app._capture.start.assert_called_once()
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_routing_failure_warns_but_recording_continues(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.audio_routing import RoutingResult
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture.is_recording = False
+    app._audio_router = MagicMock()
+    app._audio_router.ensure_routed.return_value = RoutingResult(error="HAL says no")
+
+    emitted: list[dict] = []
+    app._emit = lambda event_type, **kwargs: emitted.append({"type": event_type, **kwargs})
+
+    with patch("src.main.run_preflight", return_value=_clean_preflight_report()):
+        app._on_meeting_start(
+            MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0, duration_seconds=0.0)
+        )
+
+    warnings = [e for e in emitted if e["type"] == "pipeline.warning"]
+    assert any("HAL says no" in str(e.get("message", "")) for e in warnings)
+    app._capture.start.assert_called_once()
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_meeting_end_restores_routing_even_without_audio(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """restore() must run even when capture produced no audio file."""
+    from src.detector import MeetingEvent, MeetingState
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._audio_router = MagicMock()
+    app._live_transcriber = None
+    app._capture.stop.return_value = None
+
+    app._on_meeting_end(
+        MeetingEvent(state=MeetingState.IDLE, started_at=1000.0, duration_seconds=60.0)
+    )
+
+    app._audio_router.restore.assert_called_once()
