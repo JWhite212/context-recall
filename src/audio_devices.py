@@ -13,6 +13,7 @@ the two always agree on what counts as a usable microphone.
 
 from __future__ import annotations
 
+import difflib
 import logging
 from typing import Iterable, Sequence
 
@@ -57,6 +58,55 @@ def is_virtual_input(name: str) -> bool:
     """True if the device name identifies a loopback/virtual device."""
     lowered = name.lower()
     return any(pattern in lowered for pattern in VIRTUAL_INPUT_PATTERNS)
+
+
+def resolve_named_input_index(
+    devices: Sequence[dict],
+    name: str,
+) -> tuple[int | None, str | None]:
+    """Resolve an explicitly-configured input device name.
+
+    Exact (case-insensitive) substring match first — the contract the
+    capture path has always used. When that fails, fall back to a fuzzy
+    match against real (non-virtual) input devices so a typo in Settings
+    degrades to a warning instead of silently costing the microphone
+    (production 2026-07-07: configured 'Jabre Link 390', hardware
+    'Jabra Link 390' — every recording fell back to system-audio-only).
+
+    Returns ``(index, note)``: ``note`` is None on an exact match, a
+    human-readable substitution message on a fuzzy match, and
+    ``(None, None)`` when nothing matches.
+    """
+    if not name:
+        return None, None
+
+    needle = name.lower()
+    inputs = [
+        (idx, str(dev.get("name", "")))
+        for idx, dev in enumerate(devices)
+        if dev.get("max_input_channels", 0) > 0
+    ]
+    for idx, dev_name in inputs:
+        if needle in dev_name.lower():
+            return idx, None
+
+    best: tuple[float, int, str] | None = None
+    for idx, dev_name in inputs:
+        if is_virtual_input(dev_name):
+            continue  # A typo must never land on the loopback.
+        ratio = difflib.SequenceMatcher(None, needle, dev_name.lower()).ratio()
+        if ratio >= 0.75 and (best is None or ratio > best[0]):
+            best = (ratio, idx, dev_name)
+    if best is None:
+        return None, None
+
+    _, idx, dev_name = best
+    note = (
+        f"Configured microphone {name!r} was not found — using the closest "
+        f"match {dev_name!r}. Update the device name in Settings to silence "
+        f"this warning."
+    )
+    return idx, note
 
 
 def resolve_default_mic_index(

@@ -21,7 +21,11 @@ from typing import Sequence
 import sounddevice as sd
 
 from src import mic_permission
-from src.audio_devices import refresh_input_devices, resolve_default_mic_index
+from src.audio_devices import (
+    refresh_input_devices,
+    resolve_default_mic_index,
+    resolve_named_input_index,
+)
 from src.utils.config import AudioConfig
 
 logger = logging.getLogger("contextrecall.audio_preflight")
@@ -218,12 +222,16 @@ def run_preflight(config: AudioConfig, *, refresh: bool = False) -> PreflightRep
         return report
 
     if config.mic_device_name:
-        mic_index = _find_input_index_by_name(devices, config.mic_device_name)
+        mic_index, note = resolve_named_input_index(devices, config.mic_device_name)
         if mic_index is None:
             report.warnings.append(
                 f"Configured microphone {config.mic_device_name!r} was not "
                 f"found. Recording will fall back to system audio only."
             )
+        elif note:
+            # Fuzzy substitution (typo in Settings) — same resolution the
+            # capture path applies, surfaced so the user can fix the name.
+            report.warnings.append(note)
     else:
         # Resolve the mic the same way AudioCapture will: never accept a
         # loopback/virtual device even if macOS reports it as the default.

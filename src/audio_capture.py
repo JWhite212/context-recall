@@ -27,7 +27,11 @@ import numpy as np
 import sounddevice as sd
 import soundfile as sf
 
-from src.audio_devices import refresh_input_devices, resolve_default_mic_index
+from src.audio_devices import (
+    refresh_input_devices,
+    resolve_default_mic_index,
+    resolve_named_input_index,
+)
 from src.utils.config import AudioConfig
 
 logger = logging.getLogger(__name__)
@@ -562,10 +566,11 @@ class AudioCapture:
             if self._config.mic_enabled:
                 if self._config.mic_device_name:
                     try:
-                        self._mic_idx = self._find_device(
-                            self._config.mic_device_name, kind="microphone"
-                        )
-                    except AudioCaptureError:
+                        devices = sd.query_devices()
+                    except Exception:
+                        devices = []
+                    idx, note = resolve_named_input_index(devices, self._config.mic_device_name)
+                    if idx is None:
                         logger.warning(
                             "Mic device %r not found. Recording system audio only.",
                             self._config.mic_device_name,
@@ -574,6 +579,17 @@ class AudioCapture:
                             f"Configured microphone {self._config.mic_device_name!r} "
                             f"was not found. Recording system audio only."
                         )
+                    else:
+                        self._mic_idx = idx
+                        if note:
+                            logger.warning(note)
+                            self._last_warning = note
+                        else:
+                            logger.info(
+                                "Found microphone device: %r (index %d)",
+                                str(devices[idx].get("name", "")),
+                                idx,
+                            )
                 else:
                     self._mic_idx = self._find_default_input_device()
                     if self._mic_idx is None:

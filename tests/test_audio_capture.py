@@ -491,6 +491,35 @@ class TestMicResolutionWarning:
                 capture._thread.join(timeout=2)
 
     @patch.object(AudioCapture, "_record_loop")
+    @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
+    @patch(
+        "src.audio_capture.sd.query_devices",
+        return_value=[
+            {"name": "BlackHole 2ch", "max_input_channels": 2},
+            {"name": "Jabra Link 390", "max_input_channels": 1},
+        ],
+    )
+    def test_typoed_mic_name_resolves_to_closest_real_device(
+        self, mock_qd, mock_default, mock_record, capture
+    ):
+        """Production 2026-07-07: mic_device_name 'Jabre Link 390' (typo)
+        degraded every recording to system-audio-only. A close match must
+        be used, with a warning that names both strings so the user can
+        fix Settings."""
+        capture._config.mic_enabled = True
+        capture._config.mic_device_name = "Jabre Link 390"
+        capture.start()
+        try:
+            assert capture._mic_idx == 1
+            assert capture.last_warning is not None
+            assert "Jabre Link 390" in capture.last_warning
+            assert "Jabra Link 390" in capture.last_warning
+        finally:
+            capture._recording = False
+            if capture._thread and capture._thread.is_alive():
+                capture._thread.join(timeout=2)
+
+    @patch.object(AudioCapture, "_record_loop")
     @patch.object(AudioCapture, "_find_default_input_device", return_value=1)
     @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
     def test_successful_mic_resolution_sets_no_warning(

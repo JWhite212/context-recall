@@ -104,3 +104,70 @@ class TestRefreshInputDevices:
 
         mock_sd._initialize.side_effect = RuntimeError("boom")
         refresh_input_devices()  # Must not raise.
+
+
+class TestResolveNamedInputIndex:
+    """Fuzzy resolution of an explicitly-configured device name.
+
+    Production 2026-07-07: the live config held mic_device_name
+    'Jabre Link 390' (typo) while the hardware was 'Jabra Link 390' —
+    exact substring matching silently degraded every recording to
+    system-audio-only. A one-letter typo must not cost the mic.
+    """
+
+    DEVICES = [
+        {"name": "BlackHole 2ch", "max_input_channels": 2},
+        {"name": "Jabra Link 390", "max_input_channels": 1},
+        {"name": "MacBook Pro Microphone", "max_input_channels": 1},
+        {"name": "HDMI Output", "max_input_channels": 0},
+    ]
+
+    def test_exact_substring_match_has_no_note(self):
+        from src.audio_devices import resolve_named_input_index
+
+        idx, note = resolve_named_input_index(self.DEVICES, "Jabra Link 390")
+        assert idx == 1
+        assert note is None
+
+    def test_match_is_case_insensitive(self):
+        from src.audio_devices import resolve_named_input_index
+
+        idx, note = resolve_named_input_index(self.DEVICES, "jabra link")
+        assert idx == 1
+        assert note is None
+
+    def test_one_letter_typo_resolves_with_note(self):
+        from src.audio_devices import resolve_named_input_index
+
+        idx, note = resolve_named_input_index(self.DEVICES, "Jabre Link 390")
+        assert idx == 1
+        assert note is not None
+        assert "Jabre Link 390" in note
+        assert "Jabra Link 390" in note
+
+    def test_garbage_name_returns_none(self):
+        from src.audio_devices import resolve_named_input_index
+
+        idx, note = resolve_named_input_index(self.DEVICES, "Flurble Quantum X9")
+        assert idx is None
+        assert note is None
+
+    def test_fuzzy_never_lands_on_a_virtual_device(self):
+        """A typo must not silently select the loopback as the mic."""
+        from src.audio_devices import resolve_named_input_index
+
+        idx, note = resolve_named_input_index(self.DEVICES, "BlackHole 2cj")
+        assert idx is None or idx != 0
+
+    def test_output_only_devices_are_ignored(self):
+        from src.audio_devices import resolve_named_input_index
+
+        idx, _ = resolve_named_input_index(self.DEVICES, "HDMI Output")
+        assert idx is None
+
+    def test_empty_name_returns_none(self):
+        from src.audio_devices import resolve_named_input_index
+
+        idx, note = resolve_named_input_index(self.DEVICES, "")
+        assert idx is None
+        assert note is None
