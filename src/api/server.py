@@ -41,6 +41,7 @@ from src.db.database import Database
 from src.db.repository import MeetingRepository
 from src.embeddings import Embedder, is_embeddings_available
 from src.utils.config import DEFAULT_CONFIG_PATH, load_config
+from src.utils.paths import audio_dir
 
 logger = logging.getLogger("contextrecall.api")
 
@@ -313,6 +314,23 @@ class ApiServer:
                 logger.info("Recovered %d stale reprocess job(s) on startup", reset)
         except Exception:
             logger.warning("Stale reprocess-job recovery failed", exc_info=True)
+
+        # Repair 'pending' rows whose audio_path was never written (the
+        # deferred-stop event-loop deadlock, fixed in the recording route,
+        # produced these). The WAV usually survives in the durable audio
+        # dir under a capture-timestamp name; relink it so "Process Now"
+        # works again instead of the meeting sitting 'pending' forever.
+        try:
+            relinked, errored = await self.repo.relink_orphaned_pending_audio(audio_dir())
+            if relinked or errored:
+                logger.info(
+                    "Orphaned pending meetings: relinked %d to surviving audio, "
+                    "marked %d without audio as error",
+                    relinked,
+                    errored,
+                )
+        except Exception:
+            logger.warning("Orphaned-pending audio relink failed", exc_info=True)
 
         # Run data retention cleanup on startup.
         try:

@@ -7,10 +7,12 @@ Provides async CRUD operations over the SQLite database.
 import json
 import logging
 import os
+import re
 import struct
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from src.db.database import Database
@@ -531,6 +533,94 @@ class MeetingRepository:
             )
             await self._db.conn.commit()
             return cursor.rowcount
+
+    async def relink_orphaned_pending_audio(
+        self,
+        audio_dir: Path,
+        tolerance_seconds: float = 5.0,
+    ) -> tuple[int, int]:
+        """Repair 'pending' rows whose audio_path was never written.
+
+        The deferred-stop event-loop deadlock (fixed in the recording
+        route) created the meeting row but timed out before writing its
+        audio_path, leaving the recording permanently unprocessable even
+        though the WAV survived in *audio_dir*. Capture names files
+        ``meeting_%Y%m%d_%H%M%S.wav`` from its start wall-clock, which is
+        within a few seconds of the row's started_at — close enough to
+        relink deterministically.
+
+        Files already claimed by another meeting row are never candidates.
+        Orphans with no surviving file are flipped to 'error' so the UI
+        shows a failed meeting rather than one forever 'pending'.
+
+        Returns (relinked_count, flipped_to_error_count).
+        """
+        cursor = await self._db.conn.execute(
+            "SELECT id, started_at FROM meetings "
+            "WHERE status = 'pending' AND (audio_path IS NULL OR audio_path = '') "
+            "ORDER BY started_at"
+        )
+        orphans = await cursor.fetchall()
+        if not orphans:
+            return 0, 0
+
+        cursor = await self._db.conn.execute(
+            "SELECT audio_path FROM meetings WHERE audio_path IS NOT NULL AND audio_path != ''"
+        )
+        claimed = {row[0] for row in await cursor.fetchall()}
+
+        stem_re = re.compile(r"^meeting_(\d{8}_\d{6})$")
+        candidates: list[tuple[float, Path]] = []
+        try:
+            wavs = sorted(Path(audio_dir).glob("meeting_*.wav"))
+        except OSError:
+            wavs = []
+        for wav in wavs:
+            if str(wav) in claimed:
+                continue
+            match = stem_re.match(wav.stem)
+            if not match:
+                continue
+            try:
+                stamp = time.mktime(time.strptime(match.group(1), "%Y%m%d_%H%M%S"))
+            except (ValueError, OverflowError):
+                continue
+            candidates.append((stamp, wav))
+
+        relinked = errored = 0
+        now = time.time()
+        async with self._db.write_lock:
+            for meeting_id, started_at in orphans:
+                best: Path | None = None
+                best_diff = tolerance_seconds
+                for stamp, wav in candidates:
+                    diff = abs(stamp - started_at)
+                    if diff <= best_diff:
+                        best, best_diff = wav, diff
+                if best is not None:
+                    await self._db.conn.execute(
+                        "UPDATE meetings SET audio_path = ?, updated_at = ? WHERE id = ?",
+                        (str(best), now, meeting_id),
+                    )
+                    candidates = [(s, w) for s, w in candidates if w != best]
+                    relinked += 1
+                    logger.info(
+                        "Relinked pending meeting %s to surviving audio %s",
+                        meeting_id,
+                        best.name,
+                    )
+                else:
+                    await self._db.conn.execute(
+                        "UPDATE meetings SET status = 'error', updated_at = ? WHERE id = ?",
+                        (now, meeting_id),
+                    )
+                    errored += 1
+                    logger.warning(
+                        "Pending meeting %s has no surviving audio file; marked as error",
+                        meeting_id,
+                    )
+            await self._db.conn.commit()
+        return relinked, errored
 
     async def update_fts(self, meeting_id: str) -> None:
         """Update the FTS index for a meeting after transcript/summary changes."""
