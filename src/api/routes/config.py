@@ -11,22 +11,12 @@ from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict, create_model
 
 from src.utils.config import (
-    ApiConfig,
     AppConfig,
-    AudioConfig,
-    DetectionConfig,
-    DiarisationConfig,
     EmailChannelConfig,
-    LoggingConfig,
-    MarkdownConfig,
     NotificationsConfig,
-    NotionConfig,
-    RetentionConfig,
-    SummarisationConfig,
-    TranscriptionConfig,
     WebhookChannelConfig,
     _build_dataclass,
 )
@@ -58,33 +48,33 @@ def _read_yaml() -> dict:
 
 
 def _full_config_dict(raw: dict) -> dict:
-    """Build a complete config dict with dataclass defaults for any missing fields."""
-    notif_raw = raw.get("notifications", {})
-    if not isinstance(notif_raw, dict):
-        notif_raw = {}
-    # Strip nested channel dicts so _build_dataclass doesn't pass them as scalars.
-    notif_base = {k: v for k, v in notif_raw.items() if k not in {"webhook", "email"}}
-    config = AppConfig(
-        detection=_build_dataclass(DetectionConfig, raw.get("detection", {})),
-        audio=_build_dataclass(AudioConfig, raw.get("audio", {})),
-        transcription=_build_dataclass(TranscriptionConfig, raw.get("transcription", {})),
-        summarisation=_build_dataclass(SummarisationConfig, raw.get("summarisation", {})),
-        diarisation=_build_dataclass(DiarisationConfig, raw.get("diarisation", {})),
-        markdown=_build_dataclass(MarkdownConfig, raw.get("markdown", {})),
-        notion=_build_dataclass(NotionConfig, raw.get("notion", {})),
-        logging=_build_dataclass(LoggingConfig, raw.get("logging", {})),
-        api=_build_dataclass(ApiConfig, raw.get("api", {})),
-        retention=_build_dataclass(RetentionConfig, raw.get("retention", {})),
-        notifications=_build_dataclass(NotificationsConfig, notif_base),
-    )
-    # Handle nested notification channel configs.
-    webhook_raw = notif_raw.get("webhook", {})
-    if isinstance(webhook_raw, dict):
-        config.notifications.webhook = _build_dataclass(WebhookChannelConfig, webhook_raw)
-    email_raw = notif_raw.get("email", {})
-    if isinstance(email_raw, dict):
-        config.notifications.email = _build_dataclass(EmailChannelConfig, email_raw)
-    return dataclasses.asdict(config)
+    """Build a complete config dict with dataclass defaults for any missing fields.
+
+    Sections are derived from AppConfig's own fields so a new config section
+    is automatically read from (and written back to) the YAML without this
+    module needing to know about it.
+    """
+    sections = {}
+    for f in dataclasses.fields(AppConfig):
+        section_raw = raw.get(f.name, {})
+        if not isinstance(section_raw, dict):
+            section_raw = {}
+        section_cls = f.default_factory
+        if f.name == "notifications":
+            # Strip nested channel dicts so _build_dataclass doesn't pass
+            # them as scalars, then rebuild them explicitly.
+            notif_base = {k: v for k, v in section_raw.items() if k not in {"webhook", "email"}}
+            notifications = _build_dataclass(NotificationsConfig, notif_base)
+            webhook_raw = section_raw.get("webhook", {})
+            if isinstance(webhook_raw, dict):
+                notifications.webhook = _build_dataclass(WebhookChannelConfig, webhook_raw)
+            email_raw = section_raw.get("email", {})
+            if isinstance(email_raw, dict):
+                notifications.email = _build_dataclass(EmailChannelConfig, email_raw)
+            sections[f.name] = notifications
+        else:
+            sections[f.name] = _build_dataclass(section_cls, section_raw)
+    return dataclasses.asdict(AppConfig(**sections))
 
 
 def _mask_secrets(config: dict) -> dict:
@@ -131,23 +121,16 @@ async def get_config():
     return _mask_secrets(full)
 
 
-class ConfigUpdateBody(BaseModel):
-    """Validated schema for config updates — rejects unknown top-level keys."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    detection: dict | None = None
-    audio: dict | None = None
-    transcription: dict | None = None
-    summarisation: dict | None = None
-    diarisation: dict | None = None
-    markdown: dict | None = None
-    notion: dict | None = None
-    logging: dict | None = None
-    api: dict | None = None
-    calendar: dict | None = None
-    retention: dict | None = None
-    notifications: dict | None = None
+# Validated schema for config updates — accepts exactly the sections
+# AppConfig defines (generated, so it cannot drift when sections are added)
+# and rejects unknown top-level keys. A hand-maintained copy of this list
+# once missed action_items/series/analytics/prep, which broke every save
+# from the UI with "Extra inputs are not permitted".
+ConfigUpdateBody = create_model(
+    "ConfigUpdateBody",
+    __config__=ConfigDict(extra="forbid"),
+    **{f.name: (dict | None, None) for f in dataclasses.fields(AppConfig)},
+)
 
 
 @router.put("/api/config", summary="Update configuration")

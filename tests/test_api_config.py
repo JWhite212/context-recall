@@ -41,10 +41,14 @@ def _reset_config_path():
 
 def test_get_config_masks_api_keys(tmp_path):
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump({
-        "summarisation": {"anthropic_api_key": "sk-secret-key-12345"},
-        "notion": {"api_key": "ntn_secret_abcdef"},
-    }))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "summarisation": {"anthropic_api_key": "sk-secret-key-12345"},
+                "notion": {"api_key": "ntn_secret_abcdef"},
+            }
+        )
+    )
     app = _make_config_app(config_path)
     with TestClient(app) as c:
         resp = c.get("/api/config", headers=_auth_headers())
@@ -64,8 +68,16 @@ def test_get_config_returns_full_defaults(tmp_path):
         data = resp.json()
         # All top-level sections should be present.
         for section in [
-            "detection", "audio", "transcription", "summarisation",
-            "diarisation", "markdown", "notion", "logging", "api", "retention",
+            "detection",
+            "audio",
+            "transcription",
+            "summarisation",
+            "diarisation",
+            "markdown",
+            "notion",
+            "logging",
+            "api",
+            "retention",
         ]:
             assert section in data, f"Missing section: {section}"
 
@@ -73,9 +85,13 @@ def test_get_config_returns_full_defaults(tmp_path):
 def test_put_config_preserves_masked_secret(tmp_path):
     config_path = tmp_path / "config.yaml"
     original_key = "sk-real-secret-key"
-    config_path.write_text(yaml.dump({
-        "summarisation": {"anthropic_api_key": original_key},
-    }))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "summarisation": {"anthropic_api_key": original_key},
+            }
+        )
+    )
     app = _make_config_app(config_path)
     with TestClient(app) as c:
         # PUT with the mask value — should preserve the original key.
@@ -93,9 +109,13 @@ def test_put_config_preserves_masked_secret(tmp_path):
 
 def test_put_config_updates_real_value(tmp_path):
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump({
-        "summarisation": {"anthropic_api_key": "old-key"},
-    }))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "summarisation": {"anthropic_api_key": "old-key"},
+            }
+        )
+    )
     app = _make_config_app(config_path)
     with TestClient(app) as c:
         resp = c.put(
@@ -124,12 +144,16 @@ def test_put_config_rejects_unknown_top_level(tmp_path):
 
 def test_deep_merge_nested_dicts(tmp_path):
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump({
-        "detection": {
-            "poll_interval_seconds": 3,
-            "min_meeting_duration_seconds": 30,
-        },
-    }))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "detection": {
+                    "poll_interval_seconds": 3,
+                    "min_meeting_duration_seconds": 30,
+                },
+            }
+        )
+    )
     app = _make_config_app(config_path)
     with TestClient(app) as c:
         # Update only one nested field.
@@ -149,9 +173,13 @@ def test_deep_merge_nested_dicts(tmp_path):
 
 def test_empty_secret_not_masked(tmp_path):
     config_path = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump({
-        "summarisation": {"anthropic_api_key": ""},
-    }))
+    config_path.write_text(
+        yaml.dump(
+            {
+                "summarisation": {"anthropic_api_key": ""},
+            }
+        )
+    )
     app = _make_config_app(config_path)
     with TestClient(app) as c:
         resp = c.get("/api/config", headers=_auth_headers())
@@ -171,6 +199,72 @@ def test_put_config_empty_body(tmp_path):
 
     saved = yaml.safe_load(config_path.read_text())
     assert saved["detection"]["poll_interval_seconds"] == 3
+
+
+def test_put_config_accepts_full_get_roundtrip(tmp_path):
+    """The UI saves by PUTting the entire GET body back — every section
+    GET returns must be accepted by PUT. Regression: action_items, series,
+    analytics, and prep were missing from ConfigUpdateBody, so every save
+    failed with 4x 'Extra inputs are not permitted'."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("")
+    app = _make_config_app(config_path)
+    with TestClient(app) as c:
+        fetched = c.get("/api/config", headers=_auth_headers()).json()
+        resp = c.put("/api/config", headers=_auth_headers(), json=fetched)
+        assert resp.status_code == 200, resp.text
+
+
+def test_config_update_body_covers_all_appconfig_sections():
+    """Drift guard: PUT must accept exactly the sections AppConfig defines."""
+    import dataclasses
+
+    from src.utils.config import AppConfig
+
+    body_fields = set(config_routes.ConfigUpdateBody.model_fields)
+    appconfig_fields = {f.name for f in dataclasses.fields(AppConfig)}
+    assert body_fields == appconfig_fields
+
+
+def test_get_config_reflects_yaml_for_intelligence_sections(tmp_path):
+    """GET must return the YAML values, not dataclass defaults, for the
+    calendar / action_items / series / analytics / prep sections."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.dump(
+            {
+                "calendar": {"enabled": True},
+                "action_items": {"auto_extract": False},
+                "series": {"min_meetings_for_series": 7},
+                "analytics": {"refresh_interval_hours": 12},
+                "prep": {"lead_time_minutes": 45},
+            }
+        )
+    )
+    app = _make_config_app(config_path)
+    with TestClient(app) as c:
+        data = c.get("/api/config", headers=_auth_headers()).json()
+        assert data["calendar"]["enabled"] is True
+        assert data["action_items"]["auto_extract"] is False
+        assert data["series"]["min_meetings_for_series"] == 7
+        assert data["analytics"]["refresh_interval_hours"] == 12
+        assert data["prep"]["lead_time_minutes"] == 45
+
+
+def test_put_config_roundtrip_persists_intelligence_sections(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("")
+    app = _make_config_app(config_path)
+    with TestClient(app) as c:
+        resp = c.put(
+            "/api/config",
+            headers=_auth_headers(),
+            json={"prep": {"lead_time_minutes": 30}, "analytics": {"rolling_window_weeks": 8}},
+        )
+        assert resp.status_code == 200, resp.text
+    saved = yaml.safe_load(config_path.read_text())
+    assert saved["prep"]["lead_time_minutes"] == 30
+    assert saved["analytics"]["rolling_window_weeks"] == 8
 
 
 def test_put_config_no_config_path_returns_500(tmp_path, monkeypatch):
