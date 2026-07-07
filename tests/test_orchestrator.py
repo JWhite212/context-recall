@@ -1786,3 +1786,72 @@ def test_capture_error_callback_restores_routing(
     app._audio_router.restore.assert_called_once()
     error_calls = [c for c in app._emit.call_args_list if c.args and c.args[0] == "pipeline.error"]
     assert error_calls, "capture errors must still reach the UI as pipeline.error"
+
+
+# ---------------------------------------------------------------------------
+# Log hygiene
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_third_party_http_loggers_are_quietened(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """httpx/huggingface_hub log one INFO line per HTTP request; launchd
+    captures stdout to a file nothing rotates (11 MB observed). They must
+    run at WARNING."""
+    import logging as _logging
+
+    from src.main import ContextRecall
+
+    ContextRecall(config_path=tmp_config)
+    assert _logging.getLogger("httpx").level == _logging.WARNING
+    assert _logging.getLogger("huggingface_hub").level == _logging.WARNING
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_persist_audio_failure_logs_exception_type(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+    tmp_path,
+    caplog,
+):
+    """A TimeoutError has an empty str() — the live log showed
+    'Failed to create meeting record: ' with no clue. Log the repr."""
+    import logging as _logging
+
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    mock_server = MagicMock()
+    mock_server.repo = MagicMock()
+    mock_server.loop = MagicMock()
+    app._api_server = mock_server
+
+    audio = tmp_path / "meeting_20260707_120000.wav"
+    audio.write_bytes(b"\x00" * 64)
+
+    failing_future = MagicMock()
+    failing_future.result.side_effect = TimeoutError()
+
+    with (
+        patch("src.main.default_audio_dir", return_value=tmp_path / "durable"),
+        patch("src.main.asyncio.run_coroutine_threadsafe", return_value=failing_future),
+        caplog.at_level(_logging.WARNING, logger="contextrecall"),
+    ):
+        app._persist_audio(audio, started_at=123.0)
+
+    assert "TimeoutError" in caplog.text

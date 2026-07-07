@@ -170,6 +170,12 @@ class ContextRecall:
             ],
         )
 
+        # Third-party HTTP clients log one INFO line per request; the
+        # stdout copy lands in a launchd-captured file nothing rotates
+        # (11 MB observed in half a day during a model download).
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+
     # ------------------------------------------------------------------
     # Event helpers
     # ------------------------------------------------------------------
@@ -577,7 +583,10 @@ class ContextRecall:
                     loop,
                 )
             except Exception as e:
-                logger.warning("Failed to create meeting record: %s", e)
+                # %r: a bare TimeoutError stringifies to '' — the live log
+                # once showed "Failed to create meeting record: " with no
+                # clue what happened.
+                logger.warning("Failed to create meeting record: %r", e)
 
         return persistent_audio_path, meeting_id
 
