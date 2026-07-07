@@ -189,7 +189,21 @@ def _request_access_darwin(timeout_seconds: float) -> bool | None:
             ctypes.cast(ctypes.byref(block), ctypes.c_void_p),
         )
 
-        if not done.wait(timeout=timeout_seconds):
+        # The prompt/reply dance is delivered through the run loop —
+        # without pumping it the dialog never presents and the completion
+        # never fires (observed live: LS-launched requester blocked for
+        # the full timeout with no dialog). Pump in slices while also
+        # honouring completions delivered on background queues.
+        cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cf.CFRunLoopRunInMode.restype = ctypes.c_int32
+        cf.CFRunLoopRunInMode.argtypes = [ctypes.c_void_p, ctypes.c_double, ctypes.c_bool]
+        default_mode = ctypes.c_void_p.in_dll(cf, "kCFRunLoopDefaultMode").value
+
+        deadline = time.monotonic() + timeout_seconds
+        while not done.is_set() and time.monotonic() < deadline:
+            cf.CFRunLoopRunInMode(default_mode, 0.25, True)
+
+        if not done.is_set():
             logger.info(
                 "Microphone permission dialog not answered within %.0fs — "
                 "it stays on screen; recording can be retried after answering.",
