@@ -283,6 +283,7 @@ def test_on_meeting_start_wires_live_transcriber_warning_callback(
     """When a meeting starts and live transcription is enabled, the
     orchestrator must wire LiveTranscriber.on_warning so its structured
     payloads land on the event bus as pipeline.warning events."""
+    from src.audio_preflight import PreflightReport
     from src.detector import MeetingEvent, MeetingState
     from src.main import ContextRecall
 
@@ -293,8 +294,20 @@ def test_on_meeting_start_wires_live_transcriber_warning_callback(
     app._emit = lambda event_type, **kwargs: emitted.append((event_type, kwargs))
 
     # Patch LiveTranscriber so we can inspect the on_warning argument that
-    # main.py passes in (without spinning up MLX).
-    with patch("src.live_transcriber.LiveTranscriber") as mock_lt_cls:
+    # main.py passes in (without spinning up MLX). Stub the pre-flight
+    # check with a healthy report: the real one probes host audio devices
+    # and aborts meeting start on machines without BlackHole (CI runners).
+    with (
+        patch(
+            "src.main.run_preflight",
+            return_value=PreflightReport(
+                blackhole_present=True,
+                mic_openable=True,
+                microphone_permission_likely=True,
+            ),
+        ),
+        patch("src.live_transcriber.LiveTranscriber") as mock_lt_cls,
+    ):
         mock_lt = mock_lt_cls.return_value
         mock_lt.feed = lambda *_a, **_k: None
         mock_lt.start = lambda: None

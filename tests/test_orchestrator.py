@@ -787,6 +787,7 @@ def test_on_meeting_start_wires_capture_error_callback_before_start(
     tmp_config,
 ):
     """Same wiring guarantee on the detector-driven entry point."""
+    from src.audio_preflight import PreflightReport
     from src.detector import MeetingEvent, MeetingState
     from src.main import ContextRecall
 
@@ -801,7 +802,18 @@ def test_on_meeting_start_wires_capture_error_callback_before_start(
     app._capture.last_warning = None
     app._capture.start = fake_start
 
-    app._on_meeting_start(MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0))
+    # Stub the pre-flight check with a healthy report: the real one probes
+    # host audio devices and aborts meeting start on machines without
+    # BlackHole (CI runners).
+    with patch(
+        "src.main.run_preflight",
+        return_value=PreflightReport(
+            blackhole_present=True,
+            mic_openable=True,
+            microphone_permission_likely=True,
+        ),
+    ):
+        app._on_meeting_start(MeetingEvent(state=MeetingState.ACTIVE, started_at=1000.0))
 
     assert callable(callback_at_start_call.get("on_capture_error"))
     assert callable(callback_at_start_call.get("on_stream_status"))
