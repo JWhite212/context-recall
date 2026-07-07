@@ -27,37 +27,60 @@ fi
 echo "==> Building context-recall-daemon"
 python3 -m PyInstaller context-recall.spec --noconfirm
 
-# Verify the binary exists.
-BINARY="dist/context-recall-daemon/context-recall-daemon"
+# The spec's BUNDLE step wraps the payload as "Context Recall Daemon.app"
+# with a codesign-compliant layout and an Info.plist carrying
+# NSMicrophoneUsageDescription — TCC KILLS a process that requests
+# microphone access without one (observed 2026-07-07: launchd crash
+# loop, last exit reason OS_REASON_TCC). Repackage the .app under
+# dist/context-recall-daemon/ so the CI artifact path and the Tauri
+# resource directory stay unchanged.
+APP_SRC="dist/Context Recall Daemon.app"
+if [ ! -d "$APP_SRC" ]; then
+    echo "ERROR: Build failed - bundle not found at $APP_SRC"
+    exit 1
+fi
+rm -rf dist/context-recall-daemon
+mkdir -p dist/context-recall-daemon
+mv "$APP_SRC" dist/context-recall-daemon/
+APP_DIR="dist/context-recall-daemon/Context Recall Daemon.app"
+BINARY="$APP_DIR/Contents/MacOS/context-recall-daemon"
 if [ ! -f "$BINARY" ]; then
-    echo "ERROR: Build failed - binary not found at $BINARY"
+    echo "ERROR: Build failed - executable not found at $BINARY"
     exit 1
 fi
 
-# Fix MLX metallib location: PyInstaller puts libmlx.dylib in _internal/
-# but mlx.metallib in _internal/mlx/lib/. MLX resolves the metallib
-# relative to the dylib, so copy it next to libmlx.dylib.
-METALLIB="dist/context-recall-daemon/_internal/mlx/lib/mlx.metallib"
-if [ -f "$METALLIB" ]; then
-    cp "$METALLIB" "dist/context-recall-daemon/_internal/mlx.metallib"
-    echo "==> Copied mlx.metallib next to libmlx.dylib"
+# Fix MLX metallib location: MLX resolves the metallib relative to
+# libmlx.dylib, but PyInstaller collects it under mlx/lib/. Find both
+# inside the bundle (the .app layout differs from plain onedir).
+LIBMLX=$(find "$APP_DIR" -name "libmlx.dylib" -print -quit)
+METALLIB=$(find "$APP_DIR" -name "mlx.metallib" -print -quit)
+if [ -n "$LIBMLX" ] && [ -n "$METALLIB" ]; then
+    DEST="$(dirname "$LIBMLX")/mlx.metallib"
+    if [ ! -f "$DEST" ]; then
+        cp "$METALLIB" "$DEST"
+    fi
+    echo "==> Ensured mlx.metallib sits next to libmlx.dylib"
 fi
 
-# Sign the main binary with a stable identity when one is available.
+# Sign the daemon bundle with a stable identity when one is available.
 # macOS TCC stores a code-signing requirement with every permission
 # grant: an ad-hoc signature changes its cdhash on every rebuild, so the
 # user would be re-prompted for microphone access after each deploy —
 # and the 2026-07 rename already cost the daemon its grant once. A real
 # certificate plus a fixed identifier keeps grants valid across builds.
-SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:-Apple Development: jamiecs@live.co.uk (34FA3W7TK5)}"
+# SHA-1 fingerprint, not the name: the login keychain holds a revoked
+# copy of "Apple Development: jamiecs@live.co.uk (34FA3W7TK5)" with the
+# same name, which makes name-based selection ambiguous.
+SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:-92B7AF44BFEBAEB58A7208FF503AFE84311F1CFB}"
 SIGN_IDENTIFIER="dev.jamiewhite.contextrecall.daemon"
 if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
-    echo "==> Codesigning daemon binary with '$SIGN_IDENTITY'"
-    codesign --force --sign "$SIGN_IDENTITY" --identifier "$SIGN_IDENTIFIER" --timestamp=none "$BINARY"
-    codesign --verify --verbose=1 "$BINARY"
+    echo "==> Codesigning daemon app bundle with '$SIGN_IDENTITY'"
+    codesign --force --sign "$SIGN_IDENTITY" --identifier "$SIGN_IDENTIFIER" --timestamp=none "$APP_DIR"
+    codesign --verify --verbose=1 "$APP_DIR"
 else
-    echo "==> WARNING: signing identity not found; leaving ad-hoc signature"
+    echo "==> WARNING: signing identity not found; ad-hoc signing the bundle"
     echo "    (microphone permission will be re-requested after every rebuild)"
+    codesign --force --sign - --identifier "$SIGN_IDENTIFIER" "$APP_DIR"
 fi
 
 # Report size.

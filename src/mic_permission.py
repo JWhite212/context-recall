@@ -201,6 +201,33 @@ def _request_access_darwin(timeout_seconds: float) -> bool | None:
         return None
 
 
+def _has_mic_usage_description() -> bool:
+    """Whether the main bundle declares NSMicrophoneUsageDescription."""
+    try:
+        cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cf.CFBundleGetMainBundle.restype = ctypes.c_void_p
+        bundle = cf.CFBundleGetMainBundle()
+        if not bundle:
+            return False
+        cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        cf.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+        ]
+        key = cf.CFStringCreateWithCString(None, b"NSMicrophoneUsageDescription", 0x08000100)
+        cf.CFBundleGetValueForInfoDictionaryKey.restype = ctypes.c_void_p
+        cf.CFBundleGetValueForInfoDictionaryKey.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        value = cf.CFBundleGetValueForInfoDictionaryKey(bundle, key)
+        if key:
+            cf.CFRelease.argtypes = [ctypes.c_void_p]
+            cf.CFRelease(key)
+        return bool(value)
+    except Exception:
+        logger.debug("usage-description check failed", exc_info=True)
+        return False
+
+
 def authorization_status() -> str:
     """Current microphone TCC status for THIS process. Never prompts."""
     if sys.platform != "darwin":
@@ -211,6 +238,19 @@ def authorization_status() -> str:
 def request_access(*, timeout_seconds: float = 15.0) -> bool | None:
     """Trigger the macOS microphone permission dialog for THIS process."""
     if sys.platform != "darwin":
+        return None
+    if getattr(sys, "frozen", False) and not _has_mic_usage_description():
+        # TCC KILLS a process that requests access without a usage
+        # description (observed 2026-07-07: launchd crash loop,
+        # OS_REASON_TCC). A dev run under a terminal is covered by the
+        # terminal's own description; the frozen daemon must ship inside
+        # its app-bundle wrapper (scripts/build_daemon.sh).
+        logger.error(
+            "Refusing to request microphone access: this frozen binary "
+            "carries no NSMicrophoneUsageDescription, and macOS would "
+            "kill the process. Rebuild with scripts/build_daemon.sh so "
+            "the daemon ships inside its app-bundle wrapper."
+        )
         return None
     return _request_access_darwin(timeout_seconds)
 

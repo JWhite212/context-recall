@@ -128,6 +128,43 @@ class TestDescribeFix:
         assert "system audio" in msg.lower()
 
 
+# Captured at import time, before the conftest autouse guard replaces it.
+_REAL_REQUEST_ACCESS = mic_permission.request_access
+
+
+class TestUsageDescriptionGuard:
+    """A frozen binary without NSMicrophoneUsageDescription must never
+    call the real request API — macOS KILLS the process for it
+    (observed 2026-07-07: launchd crash loop, OS_REASON_TCC)."""
+
+    def test_frozen_without_description_refuses_to_request(self, monkeypatch):
+        monkeypatch.setattr(mic_permission, "request_access", _REAL_REQUEST_ACCESS)
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(mic_permission, "_has_mic_usage_description", lambda: False)
+
+        def _must_not_run(_timeout):
+            raise AssertionError("darwin request must not run without a usage description")
+
+        monkeypatch.setattr(mic_permission, "_request_access_darwin", _must_not_run)
+        assert mic_permission.request_access(timeout_seconds=1.0) is None
+
+    def test_frozen_with_description_requests_normally(self, monkeypatch):
+        monkeypatch.setattr(mic_permission, "request_access", _REAL_REQUEST_ACCESS)
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(mic_permission, "_has_mic_usage_description", lambda: True)
+        monkeypatch.setattr(mic_permission, "_request_access_darwin", lambda t: True)
+        assert mic_permission.request_access(timeout_seconds=1.0) is True
+
+    def test_unfrozen_dev_run_is_not_gated(self, monkeypatch):
+        """A terminal-run dev daemon is covered by the terminal's own
+        usage description — the guard must not block it."""
+        monkeypatch.setattr(mic_permission, "request_access", _REAL_REQUEST_ACCESS)
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        monkeypatch.setattr(mic_permission, "_has_mic_usage_description", lambda: False)
+        monkeypatch.setattr(mic_permission, "_request_access_darwin", lambda t: False)
+        assert mic_permission.request_access(timeout_seconds=1.0) is False
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="Darwin-only binding")
 class TestDarwinBinding:
     def test_status_read_returns_valid_value(self):

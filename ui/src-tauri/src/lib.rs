@@ -23,18 +23,23 @@ fn launch_agent_plist_path() -> Result<PathBuf, String> {
 
 /// Resolve the bundled daemon binary path (mirrors `daemon_binary_path`).
 ///
-/// The bundle declares `resources/context-recall-daemon` (a PyInstaller
-/// output directory), which Tauri places at
-/// `Contents/Resources/resources/context-recall-daemon/` with the actual
-/// executable inside it. The previous resolution returned
-/// `Contents/Resources/context-recall-daemon` — a path that does not
-/// exist — so LaunchAgents written from it could never start.
+/// The bundle declares `resources/context-recall-daemon`, which Tauri
+/// places at `Contents/Resources/resources/context-recall-daemon/`.
+/// Since 2026-07 that directory holds a minimal `Context Recall
+/// Daemon.app` wrapper: TCC kills any process that requests microphone
+/// access without an Info.plist carrying NSMicrophoneUsageDescription
+/// (observed as an OS_REASON_TCC launchd crash loop), and only a bundle
+/// can carry one — so the LaunchAgent must exec the executable inside
+/// the wrapper.
 fn resolve_daemon_binary(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .resource_dir()
         .map(|p| {
             p.join("resources")
                 .join("context-recall-daemon")
+                .join("Context Recall Daemon.app")
+                .join("Contents")
+                .join("MacOS")
                 .join("context-recall-daemon")
         })
         .map_err(|e| e.to_string())

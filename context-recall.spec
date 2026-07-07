@@ -145,7 +145,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    # BUNDLE (below) requires a windowed build; the flag has no effect on
+    # the daemon's stdio, which launchd redirects via the LaunchAgent.
+    console=False,
     target_arch="arm64",
 )
 
@@ -157,4 +159,29 @@ coll = COLLECT(
     strip=False,
     upx=False,
     name="context-recall-daemon",
+)
+
+# Wrap the payload in a real .app bundle. macOS TCC KILLS any process
+# that requests microphone access without an Info.plist carrying
+# NSMicrophoneUsageDescription (observed 2026-07-07 as a launchd crash
+# loop, last exit reason OS_REASON_TCC), and only a bundle can carry
+# one. BUNDLE also produces the codesign-compliant Frameworks/Resources
+# layout a hand-rolled wrapper does not.
+app = BUNDLE(
+    coll,
+    name="Context Recall Daemon.app",
+    icon=None,
+    bundle_identifier="dev.jamiewhite.contextrecall.daemon",
+    version="0.1.0",
+    info_plist={
+        "CFBundleName": "Context Recall Daemon",
+        "LSMinimumSystemVersion": "12.0",
+        "LSUIElement": True,
+        "NSMicrophoneUsageDescription": (
+            "Context Recall records meeting audio (the system-audio "
+            "loopback and your microphone) to transcribe and summarise "
+            "your meetings. Audio is captured only while a meeting is "
+            "detected or you press Record."
+        ),
+    },
 )
