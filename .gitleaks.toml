@@ -1,0 +1,23 @@
+# Gitleaks configuration — extends the default ruleset.
+#
+# The test suite uses obviously-fake credentials as fixtures (masking and
+# round-trip tests for the settings API). They are not secrets, but they
+# match the generic-api-key rule whenever a push touches the lines around
+# them (first observed: run 28868196869 flagged tests/test_api_config.py).
+# Allowlist the exact fixture values rather than the tests/ path, so a
+# real secret pasted into a test would still be caught.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake credentials used as fixtures in the test suite"
+regexTarget = "line"
+regexes = [
+  '''sk-secret-key-12345''',
+  '''sk-real-secret-key''',
+  '''ntn_secret_abcdef''',
+  '''new-key-12345''',
+  '''test-notion-key''',
+  '''test-token-for-config-tests''',
+]
