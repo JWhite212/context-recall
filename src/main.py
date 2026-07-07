@@ -618,8 +618,11 @@ class ContextRecall:
             audio_path, started_at, meeting_id=meeting_id, status="transcribing"
         )
 
-        # Wait for audio merge if stop was non-blocking.
-        if hasattr(self._capture, "wait_for_merge"):
+        # Wait for the audio merge if stop was non-blocking. Only when a
+        # capture session actually ran: in --process mode (and reprocess)
+        # there is no session, so the merge event would never fire and
+        # the old unconditional wait stalled 120s then skipped the file.
+        if getattr(self._capture, "merge_pending", False):
             if not self._capture.wait_for_merge(timeout=120):
                 logger.error("Audio merge timed out after 120s. Skipping processing.")
                 self._emit(

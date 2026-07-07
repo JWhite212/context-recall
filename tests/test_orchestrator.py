@@ -1789,6 +1789,71 @@ def test_capture_error_callback_restores_routing(
 
 
 # ---------------------------------------------------------------------------
+# --process mode: no capture session, so there is no merge to wait for.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_process_audio_skips_merge_wait_without_capture_session(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+    audio_file,
+):
+    """--process mode feeds an existing file straight into
+    _process_audio; the capture never ran, so its merge event can never
+    fire. The old unconditional wait_for_merge(120) made every --process
+    invocation stall two minutes and then skip processing entirely."""
+    from src.main import ContextRecall
+
+    class _NoSessionCapture:
+        merge_pending = False
+
+        def wait_for_merge(self, timeout):
+            raise AssertionError("must not wait for a merge no capture session started")
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture = _NoSessionCapture()
+    app._transcriber.transcribe.return_value = _make_short_transcript()
+    app._persist_audio = MagicMock(return_value=(audio_file, "meet-process-mode"))
+    app._db_update = MagicMock()
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    app._transcriber.transcribe.assert_called_once()
+
+
+def test_capture_merge_pending_lifecycle(tmp_path):
+    """merge_pending: False before any session, True while a started
+    session's merge is outstanding, False once the merge event fires."""
+    from src.audio_capture import AudioCapture
+    from src.utils.config import AudioConfig
+
+    capture = AudioCapture(AudioConfig(temp_audio_dir=str(tmp_path)))
+    assert capture.merge_pending is False
+
+    with (
+        patch.object(AudioCapture, "_record_loop"),
+        patch.object(AudioCapture, "_find_device", return_value=0),
+        patch.object(AudioCapture, "_find_default_input_device", return_value=None),
+    ):
+        capture.start()
+    try:
+        assert capture.merge_pending is True
+        capture._merge_complete.set()
+        assert capture.merge_pending is False
+    finally:
+        capture._recording = False
+        if capture._thread and capture._thread.is_alive():
+            capture._thread.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
 # Log hygiene
 # ---------------------------------------------------------------------------
 

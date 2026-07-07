@@ -84,6 +84,11 @@ class AudioCapture:
         # Lifecycle events for non-blocking stop.
         self._streams_stopped = threading.Event()
         self._merge_complete = threading.Event()
+        # True from start() until the session's merge (or its failure
+        # path) signals _merge_complete. Distinguishes "merge outstanding"
+        # from "no capture session ever ran" — the pipeline must not wait
+        # on a merge event that can never fire (--process mode).
+        self._session_started = False
 
         # Last unrecoverable capture error, surfaced to the orchestrator so
         # it can emit a meaningful pipeline.error to the UI instead of
@@ -606,6 +611,7 @@ class AudioCapture:
             self._last_error = None
             self._streams_stopped.clear()
             self._merge_complete.clear()
+            self._session_started = True
             self._thread = threading.Thread(
                 target=self._record_loop,
                 name="audio-capture",
@@ -650,6 +656,15 @@ class AudioCapture:
     @property
     def is_recording(self) -> bool:
         return self._recording
+
+    @property
+    def merge_pending(self) -> bool:
+        """True while a started session's post-capture merge is outstanding.
+
+        False when no session ever started — callers must not wait on a
+        merge event that can never fire.
+        """
+        return self._session_started and not self._merge_complete.is_set()
 
     @property
     def active_temp_paths(self) -> set[Path]:
