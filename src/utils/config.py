@@ -89,6 +89,10 @@ class AudioConfig:
     channels: int = 1
     temp_audio_dir: str = "~/Library/Caches/Context Recall"
     keep_source_files: bool = False  # Keep separate source WAVs (for diarisation).
+    # Days before recordings in temp_audio_dir are swept. The durable
+    # copy lives in Application Support; the temp side previously grew
+    # forever (every WAV since first install was still on disk).
+    temp_retention_days: float = 14.0
     # Base RMS threshold below which the system audio source counts as
     # silent. The SilentInputDetector raises this at runtime if the
     # noise-floor calibration window observes higher RMS. Outside the

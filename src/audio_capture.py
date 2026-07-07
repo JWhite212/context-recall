@@ -652,6 +652,15 @@ class AudioCapture:
         return self._recording
 
     @property
+    def active_temp_paths(self) -> set[Path]:
+        """Files the current/most-recent capture session may still write.
+
+        Used by the temp-audio sweeper so an in-flight recording is never
+        collected, whatever its current size or age.
+        """
+        return {p for p in (self._system_path, self._mic_path, self._output_path) if p is not None}
+
+    @property
     def last_error(self) -> AudioCaptureError | None:
         """The last unrecoverable error from the capture thread, if any.
 

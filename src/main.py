@@ -33,6 +33,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from src.audio_capture import AudioCapture, AudioCaptureError
+from src.audio_cleanup import cleanup_temp_audio
 from src.audio_preflight import run_preflight
 from src.audio_routing import AudioRouter
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
@@ -510,6 +511,23 @@ class ContextRecall:
             future.result()
         except Exception:
             logger.error("Background processing failed", exc_info=True)
+        self._sweep_temp_audio()
+
+    def _sweep_temp_audio(self) -> None:
+        """Remove empty stubs and stale recordings from the temp dir.
+
+        Runs at daemon start and after every pipeline completes, sparing
+        whatever the capture session currently has open.
+        """
+        try:
+            active = self._capture.active_temp_paths if self._capture.is_recording else ()
+            cleanup_temp_audio(
+                self._config.audio.temp_audio_dir,
+                max_age_days=self._config.audio.temp_retention_days,
+                active_paths=active,
+            )
+        except Exception:
+            logger.exception("Temp-audio sweep failed")
 
     # ------------------------------------------------------------------
     # Audio persistence
@@ -1139,6 +1157,14 @@ class ContextRecall:
         threading.Thread(
             target=self._request_mic_permission_at_boot,
             name="mic-permission",
+            daemon=True,
+        ).start()
+
+        # Sweep recording debris left in the temp dir (Caches) by failed
+        # or long-gone sessions.
+        threading.Thread(
+            target=self._sweep_temp_audio,
+            name="temp-audio-cleanup",
             daemon=True,
         ).start()
 

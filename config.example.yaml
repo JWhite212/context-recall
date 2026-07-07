@@ -66,6 +66,11 @@ audio:
   # Required for speaker diarisation. If false, temp files are deleted.
   keep_source_files: false
 
+  # Days before recordings left in temp_audio_dir are swept. The durable
+  # copy of each processed meeting lives in the app-support audio folder;
+  # empty header-only stubs are removed regardless of age.
+  temp_retention_days: 14
+
   # Base RMS threshold below which the system audio source counts as
   # silent. The detector raises this at runtime if its initial 2-second
   # calibration window observes a higher noise floor, so this is a
