@@ -149,6 +149,9 @@ def test_stop_recording_deferred_failure_returns_500(_patch_auth):
     with TestClient(app) as c:
         resp = c.post("/api/record/stop?defer=true", headers=_auth_headers())
         assert resp.status_code == 500
+        # The orchestrator's message reaches the UI (it says whether the
+        # audio itself survived) rather than a generic "check logs".
+        assert "No audio file produced" in resp.json()["detail"]
 
 
 def test_stop_recording_deferred_not_available(_patch_auth):

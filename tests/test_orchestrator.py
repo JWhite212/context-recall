@@ -1920,3 +1920,122 @@ def test_persist_audio_failure_logs_exception_type(
         app._persist_audio(audio, started_at=123.0)
 
     assert "TimeoutError" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Deferred stop ("Process Later") — the meeting row must never be left
+# without its audio_path pointer, and failures must be loud, not silent.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def _make_app_with_real_persist(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    mock_server = MagicMock()
+    mock_server.repo = MagicMock()
+    mock_server.loop = MagicMock()
+    mock_server.loop.is_closed.return_value = False
+    app._api_server = mock_server
+    return app
+
+
+def test_persist_audio_waits_for_audio_path_update(tmp_config, tmp_path):
+    """The audio_path write must not be fire-and-forget: a row created
+    without it can never be processed from the UI (canRetryMeeting hides
+    the button) nor via /reprocess (400, no audio file)."""
+    app = _make_app_with_real_persist(tmp_config=tmp_config)
+
+    audio = tmp_path / "meeting_20260707_120000.wav"
+    audio.write_bytes(b"\x00" * 64)
+
+    create_future = MagicMock()
+    create_future.result.return_value = "meet-1"
+    update_future = MagicMock()
+
+    with (
+        patch("src.main.default_audio_dir", return_value=tmp_path / "durable"),
+        patch(
+            "src.main.asyncio.run_coroutine_threadsafe",
+            side_effect=[create_future, update_future],
+        ),
+    ):
+        _, meeting_id = app._persist_audio(audio, started_at=123.0)
+
+    assert meeting_id == "meet-1"
+    update_future.result.assert_called_once()
+
+
+def test_persist_audio_update_failure_logs_error_with_meeting_id(tmp_config, tmp_path, caplog):
+    """If the audio_path write fails the row is in the poison state —
+    keep the meeting_id (the row exists) but log an ERROR naming it."""
+    import logging as _logging
+
+    app = _make_app_with_real_persist(tmp_config=tmp_config)
+
+    audio = tmp_path / "meeting_20260707_120000.wav"
+    audio.write_bytes(b"\x00" * 64)
+
+    create_future = MagicMock()
+    create_future.result.return_value = "meet-orphan"
+    update_future = MagicMock()
+    update_future.result.side_effect = TimeoutError()
+
+    with (
+        patch("src.main.default_audio_dir", return_value=tmp_path / "durable"),
+        patch(
+            "src.main.asyncio.run_coroutine_threadsafe",
+            side_effect=[create_future, update_future],
+        ),
+        caplog.at_level(_logging.ERROR, logger="contextrecall"),
+    ):
+        _, meeting_id = app._persist_audio(audio, started_at=123.0)
+
+    assert meeting_id == "meet-orphan"
+    assert "meet-orphan" in caplog.text
+
+
+def test_stop_deferred_raises_when_meeting_record_missing(app_with_mocked_api, audio_file):
+    """A deferred stop that cannot create the meeting row must raise so
+    the API returns 500 — not silently return '' while the UI toasts
+    'Recording saved. Process it later from Meetings.'"""
+    import time as _time
+
+    from src.audio_capture import AudioCaptureError
+
+    app = app_with_mocked_api
+    app._capture.stop.return_value = audio_file
+    app._meeting_started_at = _time.time() - 60
+    app._persist_audio = MagicMock(return_value=(audio_file, None))
+
+    with pytest.raises(AudioCaptureError):
+        app.api_stop_recording_deferred()
+
+
+def test_stop_deferred_returns_meeting_id_and_writes_duration(app_with_mocked_api, audio_file):
+    import time as _time
+
+    app = app_with_mocked_api
+    app._capture.stop.return_value = audio_file
+    app._meeting_started_at = _time.time() - 60
+    app._persist_audio = MagicMock(return_value=(audio_file, "meet-deferred"))
+
+    meeting_id = app.api_stop_recording_deferred()
+
+    assert meeting_id == "meet-deferred"
+    persist_call = app._persist_audio.call_args
+    assert persist_call.kwargs.get("status") == "pending"
+    db_call = app._db_update.call_args
+    assert db_call.args[0] == "meet-deferred"
+    assert db_call.kwargs["duration_seconds"] == pytest.approx(60, abs=5)
+    assert "ended_at" in db_call.kwargs

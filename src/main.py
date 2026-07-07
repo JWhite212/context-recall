@@ -594,18 +594,32 @@ class ContextRecall:
                 )
                 meeting_id = future.result(timeout=5)
                 self._active_meeting_id = meeting_id
-                asyncio.run_coroutine_threadsafe(
-                    self._api_server.repo.update_meeting(
-                        meeting_id,
-                        audio_path=str(persistent_audio_path),
-                    ),
-                    loop,
-                )
             except Exception as e:
                 # %r: a bare TimeoutError stringifies to '' — the live log
                 # once showed "Failed to create meeting record: " with no
                 # clue what happened.
                 logger.warning("Failed to create meeting record: %r", e)
+            else:
+                try:
+                    update_future = asyncio.run_coroutine_threadsafe(
+                        self._api_server.repo.update_meeting(
+                            meeting_id,
+                            audio_path=str(persistent_audio_path),
+                        ),
+                        loop,
+                    )
+                    # A row without audio_path can never be processed (the
+                    # UI hides Process/Retry and /reprocess returns 400),
+                    # so this write must not be fire-and-forget.
+                    update_future.result(timeout=5)
+                except Exception as e:
+                    logger.error(
+                        "Meeting %s was created without audio_path (%r); "
+                        "startup relink will repair it if %s survives",
+                        meeting_id,
+                        e,
+                        persistent_audio_path.name,
+                    )
 
         return persistent_audio_path, meeting_id
 
@@ -1075,7 +1089,14 @@ class ContextRecall:
         if not audio_path or not audio_path.exists():
             raise AudioCaptureError("No audio file produced")
 
-        _, meeting_id = self._persist_audio(audio_path, started_at, status="pending")
+        persistent_path, meeting_id = self._persist_audio(audio_path, started_at, status="pending")
+        if self._api_server is not None and not meeting_id:
+            # Without a row the recording is invisible in the UI. Raise so
+            # the API returns 500 instead of toasting "Recording saved."
+            raise AudioCaptureError(
+                f"Recording audio was saved to {persistent_path.name}, but the "
+                "meeting record could not be created. Check daemon logs."
+            )
         if meeting_id:
             self._db_update(meeting_id, duration_seconds=duration, ended_at=started_at + duration)
         return meeting_id or ""

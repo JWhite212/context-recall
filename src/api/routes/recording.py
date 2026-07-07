@@ -74,10 +74,9 @@ async def stop_recording(defer: bool = False):
             meeting_id = await asyncio.to_thread(_stop_recording_deferred)
         except Exception as e:
             logger.error("Failed to defer recording: %r", e)
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to stop recording. Check daemon logs.",
-            )
+            # Surface the orchestrator's message: it says whether the audio
+            # itself was saved, which the UI shows verbatim.
+            raise HTTPException(status_code=500, detail=f"Failed to stop recording: {e}")
         return {"status": "deferred", "meeting_id": meeting_id}
 
     # Run stop + processing on a background thread so we don't block
