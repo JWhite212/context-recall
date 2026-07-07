@@ -27,6 +27,7 @@ import ctypes
 import logging
 import sys
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -270,31 +271,49 @@ def describe_fix(status: str) -> str:
     )
 
 
-def ensure_microphone_access(
-    *,
-    request_if_undetermined: bool = True,
-    timeout_seconds: float = 15.0,
-) -> tuple[str, str | None]:
+def trigger_prompt_via_input_probe(seconds: float = 0.6) -> None:
+    """Raise the standard microphone prompt by briefly opening an input.
+
+    tccd kills a launchd daemon that calls AVCaptureDevice
+    requestAccessForMediaType even when the bundle carries the usage
+    description (observed 2026-07-07: OS_REASON_TCC crash loop with the
+    key demonstrably sealed into the bundle). The IMPLICIT request —
+    simply opening an input stream — has never killed this daemon in
+    months of production, and with the usage description present it
+    raises the normal permission dialog. Best-effort: every failure is
+    swallowed (a failed probe just means no prompt yet).
+    """
+    try:
+        import sounddevice as sd
+
+        stream = sd.InputStream(channels=1, blocksize=1024)
+        try:
+            stream.start()
+            time.sleep(seconds)
+        finally:
+            try:
+                stream.stop()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+    except Exception:
+        logger.debug("input-probe prompt trigger failed", exc_info=True)
+
+
+def ensure_microphone_access() -> tuple[str, str | None]:
     """Gate helper for recording starts.
 
     Returns ``(status, problem)``. ``problem`` is None when recording may
-    proceed (authorized, or status unknowable — the silent-input detector
-    remains the runtime backstop) and a user-facing message otherwise.
+    proceed and a user-facing message otherwise. NOT_DETERMINED proceeds:
+    opening the capture streams performs the implicit TCC request, which
+    shows the system dialog now that the daemon bundle carries a usage
+    description. Only an explicit denial blocks the start. UNKNOWN also
+    proceeds — the silent-input detector remains the runtime backstop.
     """
     status = authorization_status()
-    if status == AUTHORIZED:
-        return status, None
-
-    if status == NOT_DETERMINED and request_if_undetermined:
-        granted = request_access(timeout_seconds=timeout_seconds)
-        if granted is True:
-            return AUTHORIZED, None
-        if granted is False:
-            return DENIED, describe_fix(DENIED)
-        return NOT_DETERMINED, describe_fix(NOT_DETERMINED)
-
     if status in (DENIED, RESTRICTED):
         return status, describe_fix(status)
-    if status == NOT_DETERMINED:
-        return status, describe_fix(NOT_DETERMINED)
     return status, None

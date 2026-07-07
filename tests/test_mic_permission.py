@@ -36,6 +36,12 @@ def _forbid_request(monkeypatch):
 
 
 class TestEnsureMicrophoneAccess:
+    """The gate NEVER calls the explicit request API: tccd kills a
+    launchd daemon for AVCaptureDevice requestAccessForMediaType even
+    with the usage description sealed into the bundle (2026-07-07,
+    OS_REASON_TCC). NOT_DETERMINED proceeds — opening the capture
+    streams performs the implicit request, which prompts normally."""
+
     def test_authorized_proceeds_without_prompt(self, monkeypatch):
         monkeypatch.setattr(mic_permission, "authorization_status", lambda: AUTHORIZED)
         _forbid_request(monkeypatch)
@@ -59,36 +65,12 @@ class TestEnsureMicrophoneAccess:
         assert status == RESTRICTED
         assert problem is not None
 
-    def test_not_determined_prompt_granted(self, monkeypatch):
-        monkeypatch.setattr(mic_permission, "authorization_status", lambda: NOT_DETERMINED)
-        monkeypatch.setattr(mic_permission, "request_access", lambda **kw: True)
-        status, problem = ensure_microphone_access()
-        assert status == AUTHORIZED
-        assert problem is None
-
-    def test_not_determined_prompt_denied(self, monkeypatch):
-        monkeypatch.setattr(mic_permission, "authorization_status", lambda: NOT_DETERMINED)
-        monkeypatch.setattr(mic_permission, "request_access", lambda **kw: False)
-        status, problem = ensure_microphone_access()
-        assert status == DENIED
-        assert problem is not None
-        assert "System Settings" in problem
-
-    def test_not_determined_prompt_unanswered(self, monkeypatch):
-        """Timeout / mechanism failure: tell the user to answer the dialog."""
-        monkeypatch.setattr(mic_permission, "authorization_status", lambda: NOT_DETERMINED)
-        monkeypatch.setattr(mic_permission, "request_access", lambda **kw: None)
-        status, problem = ensure_microphone_access()
-        assert status == NOT_DETERMINED
-        assert problem is not None
-        assert "Allow" in problem
-
-    def test_not_determined_without_request(self, monkeypatch):
+    def test_not_determined_proceeds_so_stream_open_can_prompt(self, monkeypatch):
         monkeypatch.setattr(mic_permission, "authorization_status", lambda: NOT_DETERMINED)
         _forbid_request(monkeypatch)
-        status, problem = ensure_microphone_access(request_if_undetermined=False)
+        status, problem = ensure_microphone_access()
         assert status == NOT_DETERMINED
-        assert problem is not None
+        assert problem is None
 
     def test_unknown_status_never_blocks(self, monkeypatch):
         """Introspection failure must not stop recording (could be a
@@ -100,17 +82,45 @@ class TestEnsureMicrophoneAccess:
         assert status == UNKNOWN
         assert problem is None
 
-    def test_request_timeout_passed_through(self, monkeypatch):
-        seen = {}
-        monkeypatch.setattr(mic_permission, "authorization_status", lambda: NOT_DETERMINED)
 
-        def _fake_request(*, timeout_seconds):
-            seen["timeout"] = timeout_seconds
-            return True
+# Captured at import time, before the conftest autouse guard replaces it.
+_REAL_TRIGGER_PROBE = mic_permission.trigger_prompt_via_input_probe
 
-        monkeypatch.setattr(mic_permission, "request_access", _fake_request)
-        ensure_microphone_access(timeout_seconds=42.0)
-        assert seen["timeout"] == 42.0
+
+class TestTriggerPromptViaInputProbe:
+    def test_probe_opens_starts_and_closes_a_stream(self, monkeypatch):
+        events = []
+
+        class _FakeStream:
+            def start(self):
+                events.append("start")
+
+            def stop(self):
+                events.append("stop")
+
+            def close(self):
+                events.append("close")
+
+        fake_sd = type("sd", (), {"InputStream": lambda **kw: _FakeStream()})
+        monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+        monkeypatch.setattr(mic_permission.time, "sleep", lambda s: None)
+        _REAL_TRIGGER_PROBE(seconds=0.0)
+        assert events == ["start", "stop", "close"]
+
+    def test_probe_swallows_stream_errors(self, monkeypatch):
+        class _ExplodingStream:
+            def start(self):
+                raise RuntimeError("PaErrorCode -9986")
+
+            def stop(self):
+                pass
+
+            def close(self):
+                pass
+
+        fake_sd = type("sd", (), {"InputStream": lambda **kw: _ExplodingStream()})
+        monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+        _REAL_TRIGGER_PROBE(seconds=0.0)  # must not raise
 
 
 class TestDescribeFix:

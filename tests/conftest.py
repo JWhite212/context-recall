@@ -47,6 +47,7 @@ def _no_real_tcc_prompt(monkeypatch):
         raise AssertionError("request_access() must never run inside the test suite")
 
     monkeypatch.setattr("src.mic_permission.request_access", _forbidden)
+    monkeypatch.setattr("src.mic_permission.trigger_prompt_via_input_probe", lambda *a, **kw: None)
 
 
 class FakePlatform:

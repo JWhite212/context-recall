@@ -308,7 +308,7 @@ class ContextRecall:
         Returns None when recording may proceed, else the user-facing
         problem (already emitted as pipeline.error).
         """
-        status, problem = ensure_microphone_access(timeout_seconds=15.0)
+        status, problem = ensure_microphone_access()
         if problem is None:
             return None
         logger.error("Microphone permission gate blocked recording (%s): %s", status, problem)
@@ -316,17 +316,36 @@ class ContextRecall:
         return problem
 
     def _request_mic_permission_at_boot(self) -> None:
-        """Fire the TCC prompt at daemon start when still undetermined.
+        """Raise the TCC prompt at daemon start when still undetermined.
 
-        A launchd daemon never shows the dialog implicitly by opening
-        input streams (observed in production: no prompt, no TCC record,
-        zeros on every stream), so ask explicitly and generously wait.
+        Uses the implicit path (briefly opening an input stream): tccd
+        KILLS a launchd daemon for the explicit AVCaptureDevice request
+        even with the usage description sealed into the bundle (observed
+        2026-07-07, OS_REASON_TCC crash loop), while the implicit request
+        merely prompts. Polls for the user's answer so the log records
+        the outcome.
         """
-        status, problem = ensure_microphone_access(timeout_seconds=300.0)
-        if problem is not None:
-            logger.error("Microphone permission at boot (%s): %s", status, problem)
-        else:
+        from src.mic_permission import (
+            NOT_DETERMINED,
+            authorization_status,
+            trigger_prompt_via_input_probe,
+        )
+
+        status = authorization_status()
+        if status != NOT_DETERMINED:
             logger.info("Microphone permission at boot: %s", status)
+            return
+        logger.info(
+            "Microphone permission undetermined — raising the system dialog via an input probe."
+        )
+        trigger_prompt_via_input_probe()
+        deadline = time.monotonic() + 300.0
+        while time.monotonic() < deadline:
+            status = authorization_status()
+            if status != NOT_DETERMINED:
+                break
+            time.sleep(2.0)
+        logger.info("Microphone permission at boot: %s", status)
 
     def _on_meeting_start(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting begins."""
