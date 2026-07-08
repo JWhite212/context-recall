@@ -40,7 +40,7 @@ The Tauri bundle ships a PyInstaller-built daemon as a sidecar at `ui/src-tauri/
 ```bash
 # Python
 pip install -r requirements-dev.txt
-python3 -m pytest tests/ -v            # Full Python suite (~690 tests)
+python3 -m pytest tests/ -v            # Full Python suite (~870 tests)
 python3 -m pytest tests/ -x            # Stop on first failure
 ruff check src/ tests/                 # Lint check
 
@@ -74,7 +74,9 @@ TeamsDetector  ──►  AudioCapture  ──►  Transcriber  ──►  Diari
 
 ### Pipeline core
 
-**`src/main.py`** — Orchestrator (`ContextRecall` class). Wires components together, manages lifecycle, owns the embedded `ApiServer` reference. Detector callbacks fire `_on_meeting_start` / `_on_meeting_end`; the latter dispatches the live-transcriber join to a daemon thread (so the detector callback returns promptly — see X4 fix in `654ecff`) and submits `_process_audio` to a `ThreadPoolExecutor`. `_process_audio` runs transcribe → diarise → summarise → DB persist → write outputs → post-process.
+**`src/main.py`** — Orchestrator (`ContextRecall` class). Wires components together, manages lifecycle, owns the embedded `ApiServer` reference. Detector callbacks fire `_on_meeting_start` / `_on_meeting_end`; the latter dispatches the live-transcriber join to a daemon thread (so the detector callback returns promptly — see X4 fix in `654ecff`) and submits `_process_audio` to a `ThreadPoolExecutor`. `_process_audio` handles capture-specific pre-steps (merge wait, capture errors) then delegates to the shared `PipelineRunner`.
+
+**`src/pipeline_runner.py`** — The shared post-capture pipeline (transcribe → diarise → voice-ID → speaker enrichment → client/project pre-assignment → summarise → persist/FTS → embeddings → writers → post-processing). Both the orchestrator and the reprocess route drive this class, so the two paths cannot drift. `DbBridge` marshals repo coroutines onto the API loop from pipeline threads. Post-processing (action items, speaker-name suggestions, LLM auto-tagging, tracker scans, analytics) runs async on the API loop with blocking LLM calls pushed to threads.
 
 **`src/detector.py`** — State machine (IDLE → ACTIVE → ENDING) with debounce. Delegates platform-specific detection (`pgrep`, `lsof`, `osascript`) to `src/platform/` implementations via the `PlatformDetector` protocol.
 
@@ -106,13 +108,13 @@ TeamsDetector  ──►  AudioCapture  ──►  Transcriber  ──►  Diari
 
 **`src/api/server.py`** — `ApiServer` class. Spins up a uvicorn server in a background thread on the orchestrator's lifecycle. Exposes its asyncio loop as `self.loop` so the pipeline thread can use `asyncio.run_coroutine_threadsafe` to write to the DB without owning an event loop. Also owns `self.repo` (the `MeetingRepository`) and a connection-manager (`src/api/websocket.py`) used for real-time pipeline events.
 
-**`src/api/routes/`** — 20 router modules (status, meetings, config, recording, devices, diagnostics, support_bundle, export, resummarise, reprocess, models, templates, search, speakers, calendar, action_items, series, analytics, notifications, prep). Each registers under bearer-token auth (`src/api/auth.py`). The orchestrator emits pipeline lifecycle events (`pipeline.stage`, `pipeline.warning`, `pipeline.error`, `pipeline.complete`, `transcript.segment`) via the WebSocket event bus; the UI drives all its state off those plus REST polls.
+**`src/api/routes/`** — 25 router modules (status, meetings, config, recording, devices, diagnostics, support_bundle, export, resummarise, reprocess, models, templates, search, speakers, people, clients, ask, meeting_insights, trackers, calendar, action_items, series, analytics, notifications, prep). Each registers under bearer-token auth (`src/api/auth.py`). The orchestrator emits pipeline lifecycle events (`pipeline.stage`, `pipeline.warning`, `pipeline.error`, `pipeline.complete`, `transcript.segment`) via the WebSocket event bus; the UI drives all its state off those plus REST polls.
 
-**`src/api/routes/reprocess.py`** — POST `/api/meetings/{id}/reprocess`. Submits the pipeline as a background task and returns 202 immediately (C4 fix) so long re-transcriptions don't time out the HTTP client. Mirrors the orchestrator's empty/short-transcript contract from `_process_audio` (B1 unification).
+**`src/api/routes/reprocess.py`** — POST `/api/meetings/{id}/reprocess`. Submits the FULL shared pipeline as a background task and returns 202 immediately (C4 fix). Recovers surviving source WAVs from the temp dir for diarisation, re-applies stored speaker renames, archives + replaces the previous Notion page (`meetings.notion_page_id`), replaces extracted action items, and refreshes the meeting's own analytics period.
 
 ### DB
 
-**`src/db/database.py` + `src/db/repository.py`** — SQLite via `aiosqlite`. Migrations are numbered; `tests/test_db_migration_v9.py` is the latest. Schema covers meetings, segments, attendees, speaker mappings, templates, action items, analytics rollups, prep briefings, series memberships, notification dispatches, and an FTS5 mirror for full-text search. `segment_embeddings_vec` is a `sqlite-vec` virtual table populated by `src/embeddings.py` for semantic search.
+**`src/db/database.py` + `src/db/repository.py`** — SQLite via `aiosqlite`. Migrations are numbered (`SCHEMA_VERSION` is the head; `tests/test_db_migration_v14.py` is the latest). Schema covers meetings (incl. `notion_page_id` and client/project assignment columns), segments, speaker mappings (person-linked), people + voice profiles, clients + projects, keyword trackers + hits, templates, action items, analytics rollups, prep briefings, series memberships, notification dispatches, and an FTS5 mirror for full-text search. `segment_embeddings_vec` is a `sqlite-vec` virtual table populated by `src/embeddings.py` for semantic search.
 
 ### Intelligence modules
 
@@ -125,6 +127,11 @@ These run after the core pipeline finishes (via `_run_post_processing`), each no
 - **`src/calendar_matcher.py`** — matches the active recording to a calendar event (uses macOS Calendar via EventKit when available). When a match is found, attendees are stored as candidate speaker labels and the orchestrator may auto-rename "Remote" in 2-person meetings.
 - **`src/notifications/`** — dispatches outbound notifications (channels under `src/notifications/channels/`).
 - **`src/embeddings.py`** — `Embedder` wrapping a local sentence-transformer; called per-segment after diarisation to populate `segment_embeddings_vec`.
+- **`src/people/`** — persistent people directory (repository + LLM `suggester.py` that detects self-introductions and stores `candidate:` speaker suggestions).
+- **`src/voice/`** — ECAPA voice recognition: `embedder.py` (SpeechBrain, lazy, guarded — degrades without speechbrain), `recognition.py` (pure numpy clustering + profile matching over unresolved labels like `Remote`/`SPEAKER_NN`), `enrolment.py` (builds profile samples from a labelled speaker's segments).
+- **`src/tagging/`** — client/project store + auto-assignment: deterministic pre-pass (attendee email domains, calendar-title aliases, series inheritance) before summarisation with description injection into the prompt (`Summariser.summarise(extra_context=...)`), LLM classifier in post-processing for the rest. Manual assignments are never overwritten.
+- **`src/trackers/`** — keyword trackers: `scanner.py` (word-boundary matching) + repository; scanned in post-processing, reprocess-safe (`replace_hits_for_meeting`).
+- **`src/talk_stats.py`** — pure per-speaker talk-time/turns/monologue computation from `transcript_json`.
 
 ### UI
 
@@ -134,13 +141,13 @@ These run after the core pipeline finishes (via `_run_post_processing`), each no
 
 ### Config
 
-**`src/utils/config.py`** — Typed dataclass config loaded from `config.yaml`. `_build_dataclass()` ignores unknown keys for forward-compatibility. Paths with `~` are expanded via `_expand_path()`. Sections: `detection`, `audio`, `transcription`, `summarisation`, `diarisation`, `calendar`, `markdown`, `notion`, `logging`, `api`, `retention`, `action_items`, `series`, `analytics`, `notifications`.
+**`src/utils/config.py`** — Typed dataclass config loaded from `config.yaml`. `_build_dataclass()` ignores unknown keys for forward-compatibility. Paths with `~` are expanded via `_expand_path()`. Sections: `detection`, `audio`, `transcription`, `summarisation`, `diarisation`, `calendar`, `markdown`, `notion`, `logging`, `api`, `retention`, `action_items`, `series`, `analytics`, `notifications`, `prep`, `voice_id`, `tagging`.
 
 ## Key Constraints
 
 - **macOS + Apple Silicon only**: relies on BlackHole virtual audio driver, `pgrep`, `lsof`, `osascript`, and `mlx_whisper` (MLX is Apple-Silicon only). The CI matrix marks the MLX/Tauri jobs as Apple-Silicon only (commit `554ede5`).
 - **`config.yaml` is gitignored** — contains API keys. `config.example.yaml` is the tracked template.
-- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~690 tests.
+- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~870 tests. Tests never load real ML models (sentence-transformers/speechbrain are faked or unavailable).
 - **UI tests**: vitest 4. `cd ui && npm test`. Pure UI; Tauri shell is not booted.
 - **Rust check**: `cd ui/src-tauri && cargo check` (requires the daemon-resource stub above).
 - **Linting**: ruff for Python (`ruff check src/ tests/`); tsc for TypeScript (`cd ui && npx tsc --noEmit`).
