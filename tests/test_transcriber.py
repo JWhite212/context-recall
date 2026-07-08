@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.transcriber import Transcriber, Transcript, TranscriptSegment
+from src.transcriber import (
+    KNOWN_HALLUCINATION_PHRASES,
+    Transcriber,
+    Transcript,
+    TranscriptSegment,
+)
 from src.utils.config import TranscriptionConfig
 
 # ------------------------------------------------------------------
@@ -418,3 +423,19 @@ class TestTextCompressionRatio:
 
     def test_empty_string_returns_zero(self):
         assert Transcriber._text_compression_ratio("") == 0.0
+
+
+class TestHallucinationHelpers:
+    def test_phrase_repetition_detects_repeated_short_phrase(self):
+        assert Transcriber._is_phrase_repetition("thank you. thank you. thank you.")
+        assert Transcriber._is_phrase_repetition("you you you you")
+
+    def test_phrase_repetition_ignores_normal_speech(self):
+        assert not Transcriber._is_phrase_repetition(
+            "thank you all for coming, let us begin the review"
+        )
+
+    def test_known_hallucination_phrase_matches_after_normalising(self):
+        assert "thank you" in KNOWN_HALLUCINATION_PHRASES
+        assert Transcriber._is_known_hallucination_phrase("Thank you.")
+        assert not Transcriber._is_known_hallucination_phrase("thank you everyone")
