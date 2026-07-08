@@ -142,7 +142,9 @@ class SummarisationConfig:
     ollama_timeout: int = 600  # Seconds per Ollama request.
     chunk_threshold_words: int = 20000  # Words above which transcripts are chunked.
     ollama_num_ctx: int = 32768  # Context window size for Ollama requests.
-    default_template: str = "standard"  # Template name for summarisation.
+    default_template: str = "standard"  # Fallback template name for summarisation.
+    auto_select_template: bool = True  # LLM picks the best template per meeting.
+    template_select_min_confidence: float = 0.6  # Below this, keep default_template.
 
     def __repr__(self) -> str:
         key_display = "****" if self.anthropic_api_key else "<not set>"

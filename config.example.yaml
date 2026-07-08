@@ -158,6 +158,11 @@ summarisation:
   # Custom templates can be added in ~/Library/Application Support/Context Recall/templates/
   default_template: "standard"
 
+  # Let an LLM pick the most appropriate template per meeting (falls back to
+  # default_template below the confidence threshold or on any error).
+  # auto_select_template: true
+  # template_select_min_confidence: 0.6
+
 # --- Speaker Diarisation ---
 diarisation:
   # Enable energy-based speaker labelling ("Me" vs "Remote").
