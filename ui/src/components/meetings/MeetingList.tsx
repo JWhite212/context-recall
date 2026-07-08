@@ -427,11 +427,6 @@ function MeetingRow({
       </div>
 
       <div className="flex items-center gap-2 shrink-0 ml-4">
-        {m.label && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">
-            {m.label}
-          </span>
-        )}
         {m.tags.length > 0 && (
           <div className="flex gap-1">
             {m.tags.slice(0, 2).map((tag) => (
