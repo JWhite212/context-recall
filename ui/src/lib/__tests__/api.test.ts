@@ -10,6 +10,7 @@ import {
   getCalendarEvents,
   getCalendars,
   getHealth,
+  getMeetingTags,
   getStatus,
   getUpcomingPrep,
   getUpcomingPrepList,
@@ -17,6 +18,7 @@ import {
   getPreparedEventUids,
   setAuthToken,
   triggerCalendarSync,
+  setMeetingTags,
 } from "../api";
 
 /**
@@ -386,5 +388,29 @@ describe("prep by-event", () => {
     const call = calls.find((c) => c.init?.method === "POST");
     expect(call?.url).toContain("/api/prep/by-event/generate");
     expect(JSON.parse(call?.init?.body as string).event_uid).toBe("EK1:1000");
+  });
+});
+
+describe("meeting tags", () => {
+  it("setMeetingTags PATCHes the tags array", async () => {
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse({}),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    await setMeetingTags("m1", ["a", "b"]);
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/api/meetings/m1/tags");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ tags: ["a", "b"] });
+  });
+
+  it("getMeetingTags returns the tags array", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({ tags: ["x", "y"] }),
+    ) as unknown as typeof fetch;
+
+    expect(await getMeetingTags()).toEqual(["x", "y"]);
   });
 });
