@@ -295,6 +295,14 @@ class PipelineRunner:
         # Step 2d: Enrich speaker labels from calendar attendees.
         self._enrich_speakers_from_attendees(transcript, attendees or [], meeting_id)
 
+        # Step 2e: Client/project pre-assignment. Deterministic signals
+        # (attendee email domains, calendar-title aliases, series
+        # inheritance) resolve before summarisation so the matched
+        # client/project descriptions can steer the summary.
+        extra_context = self._resolve_assignment_context(
+            meeting_id, attendees or [], calendar_fields
+        )
+
         # Step 3: Summarise.
         template = None
         try:
@@ -309,7 +317,9 @@ class PipelineRunner:
 
         summary_start = _time.monotonic()
         try:
-            summary = self._summariser.summarise(transcript, template=template)
+            summary = self._summariser.summarise(
+                transcript, template=template, extra_context=extra_context
+            )
         except Exception as e:
             elapsed = _time.monotonic() - summary_start
             logger.error("Summarisation failed after %.1fs: %s", elapsed, e, exc_info=True)
@@ -503,6 +513,93 @@ class PipelineRunner:
                     what="candidate speaker mapping",
                 )
 
+    def _resolve_assignment_context(
+        self,
+        meeting_id: str | None,
+        attendees: list[dict],
+        calendar_fields: dict | None,
+    ) -> str | None:
+        """Deterministic client/project pre-assignment + summariser context.
+
+        Non-fatal; returns the fenced context text (or None). A manual
+        assignment is never overwritten, but its descriptions still feed
+        the summariser.
+        """
+        cfg = getattr(self._config, "tagging", None)
+        if not cfg or not cfg.enabled:
+            return None
+        if not self._db_available() or self._db.database is None:
+            return None
+        try:
+            from src.tagging.assigner import (
+                Assignment,
+                build_context_text,
+                deterministic_assignment,
+            )
+            from src.tagging.repository import ClientProjectRepository
+
+            cp_repo = ClientProjectRepository(self._db.database)
+            roster = self._db.try_call(cp_repo.roster(), timeout=10.0, what="client roster fetch")
+            if not roster or (not roster["clients"] and not roster["projects"]):
+                return None
+
+            meeting = None
+            if meeting_id:
+                meeting = self._db.try_call(
+                    self._db.repo.get_meeting(meeting_id),
+                    timeout=10.0,
+                    what="meeting fetch for assignment",
+                )
+
+            if meeting is not None and getattr(meeting, "assignment_source", "") == "manual":
+                assignment = Assignment(
+                    client_id=meeting.client_id,
+                    project_id=meeting.project_id,
+                    confidence=1.0,
+                    method="manual",
+                )
+            else:
+                series_assignment = None
+                series_id = getattr(meeting, "series_id", None) if meeting else None
+                if series_id:
+                    series_assignment = self._db.try_call(
+                        cp_repo.latest_assignment_for_series(series_id),
+                        timeout=10.0,
+                        what="series assignment fetch",
+                    )
+                calendar_title = (calendar_fields or {}).get("calendar_event_title") or (
+                    getattr(meeting, "calendar_event_title", "") if meeting else ""
+                )
+                assignment = deterministic_assignment(
+                    roster,
+                    attendees=attendees,
+                    calendar_title=calendar_title or "",
+                    series_assignment=series_assignment,
+                )
+                if assignment and meeting_id:
+                    self._update(
+                        meeting_id,
+                        client_id=assignment.client_id,
+                        project_id=assignment.project_id,
+                        assignment_source="auto",
+                        assignment_confidence=assignment.confidence,
+                    )
+                    logger.info(
+                        "Assigned meeting %s to client=%s project=%s (%s, %.2f)",
+                        meeting_id,
+                        assignment.client_id,
+                        assignment.project_id,
+                        assignment.method,
+                        assignment.confidence,
+                    )
+
+            if assignment is None or not cfg.inject_context:
+                return None
+            return build_context_text(roster, assignment, cfg.max_context_chars)
+        except Exception as e:
+            logger.warning("Client/project pre-assignment failed: %s", e)
+            return None
+
     def _embed_segments(self, transcript, meeting_id: str | None) -> None:
         try:
             from src.embeddings import Embedder, is_embeddings_available
@@ -609,6 +706,12 @@ class PipelineRunner:
         except Exception:
             logger.warning("Speaker-name suggestion failed", exc_info=True)
         try:
+            tagging_cfg = getattr(self._config, "tagging", None)
+            if tagging_cfg and tagging_cfg.enabled and tagging_cfg.auto_assign:
+                await self._auto_assign_client_project(meeting_id)
+        except Exception:
+            logger.warning("Client/project auto-assignment failed", exc_info=True)
+        try:
             await self._refresh_analytics(started_at)
         except Exception:
             logger.warning("Analytics refresh failed", exc_info=True)
@@ -671,6 +774,57 @@ class PipelineRunner:
                 meeting_id=meeting_id,
                 suggestions=suggestions,
             )
+
+    async def _auto_assign_client_project(self, meeting_id: str) -> None:
+        """LLM assignment for meetings the deterministic pass left blank."""
+        from src.tagging.assigner import LlmAssigner
+        from src.tagging.repository import ClientProjectRepository
+
+        if self._db.database is None:
+            return
+        meeting = await self._db.repo.get_meeting(meeting_id)
+        if meeting is None or meeting.client_id or meeting.project_id:
+            return
+        cp_repo = ClientProjectRepository(self._db.database)
+        roster = await cp_repo.roster()
+        if not roster["clients"] and not roster["projects"]:
+            return
+        try:
+            attendees = json.loads(meeting.attendees_json or "[]")
+        except (ValueError, TypeError):
+            attendees = []
+        assigner = LlmAssigner(self._config.summarisation, self._config.tagging)
+        # The LLM call is blocking HTTP — keep it off the API event loop.
+        assignment = await asyncio.to_thread(
+            assigner.assign,
+            roster,
+            title=meeting.title,
+            summary_markdown=meeting.summary_markdown or "",
+            attendees=attendees,
+        )
+        if assignment is None:
+            return
+        await self._db.repo.update_meeting(
+            meeting_id,
+            client_id=assignment.client_id,
+            project_id=assignment.project_id,
+            assignment_source="auto",
+            assignment_confidence=assignment.confidence,
+        )
+        logger.info(
+            "LLM assigned meeting %s to client=%s project=%s (%.2f)",
+            meeting_id,
+            assignment.client_id,
+            assignment.project_id,
+            assignment.confidence,
+        )
+        self._emit(
+            "meeting.assigned",
+            meeting_id=meeting_id,
+            client_id=assignment.client_id,
+            project_id=assignment.project_id,
+            confidence=assignment.confidence,
+        )
 
     async def _refresh_analytics(self, started_at: float) -> None:
         from src.action_items.repository import ActionItemRepository

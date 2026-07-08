@@ -44,13 +44,21 @@ async def list_meetings(
     q: str | None = Query(None),
     tag: str | None = Query(None),
     sort: str | None = Query(None),
+    client_id: str | None = Query(None),
+    project_id: str | None = Query(None),
 ):
     if q:
         # FTS has its own ranking — ignore sort param when searching.
         meetings = await _repo.search_meetings(q, limit=limit)
     else:
         meetings = await _repo.list_meetings(
-            limit=limit, offset=offset, status=status, tag=tag, sort=sort
+            limit=limit,
+            offset=offset,
+            status=status,
+            tag=tag,
+            sort=sort,
+            client_id=client_id,
+            project_id=project_id,
         )
 
     total = await _repo.count_meetings(status=status, tag=tag)

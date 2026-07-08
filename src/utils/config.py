@@ -300,6 +300,17 @@ class PrepConfig:
 
 
 @dataclass
+class TaggingConfig:
+    """Client/project auto-assignment for meetings."""
+
+    enabled: bool = True
+    auto_assign: bool = True  # LLM assignment in post-processing when unassigned.
+    min_confidence: float = 0.6  # Below this the LLM's pick is discarded.
+    inject_context: bool = True  # Feed matched client/project descriptions to the summariser.
+    max_context_chars: int = 1500  # Cap on injected description text.
+
+
+@dataclass
 class VoiceIdConfig:
     """Cross-meeting speaker recognition via local voice embeddings."""
 
@@ -332,6 +343,7 @@ class AppConfig:
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     prep: PrepConfig = field(default_factory=PrepConfig)
     voice_id: VoiceIdConfig = field(default_factory=VoiceIdConfig)
+    tagging: TaggingConfig = field(default_factory=TaggingConfig)
 
 
 def _expand_path(path_str: str) -> str:
@@ -432,6 +444,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         notifications=_build_dataclass(NotificationsConfig, raw.get("notifications", {})),
         prep=_build_dataclass(PrepConfig, raw.get("prep", {})),
         voice_id=_build_dataclass(VoiceIdConfig, raw.get("voice_id", {})),
+        tagging=_build_dataclass(TaggingConfig, raw.get("tagging", {})),
     )
 
     # Handle nested notification channel configs.

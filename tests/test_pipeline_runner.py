@@ -72,9 +72,11 @@ class FakeSummariser:
         self._summary = summary or _make_summary()
         self._error = error
         self.calls = []
+        self.contexts = []
 
-    def summarise(self, transcript, template=None):
+    def summarise(self, transcript, template=None, extra_context=None):
         self.calls.append((transcript, template))
+        self.contexts.append(extra_context)
         if self._error:
             raise self._error
         return self._summary
@@ -133,6 +135,18 @@ def loop_thread():
     thread = threading.Thread(target=loop.run_forever, daemon=True)
     thread.start()
     yield loop
+
+    # Wait for anything fire-and-forgotten onto the loop (post-processing
+    # tasks awaiting to_thread) so teardown never destroys a pending task.
+    async def _wait_all_tasks():
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        if tasks:
+            await asyncio.wait(tasks, timeout=5)
+
+    try:
+        asyncio.run_coroutine_threadsafe(_wait_all_tasks(), loop).result(timeout=6)
+    except Exception:
+        pass
     loop.call_soon_threadsafe(loop.stop)
     thread.join(timeout=5)
     loop.close()
@@ -800,3 +814,178 @@ def test_speaker_suggestions_stored_as_candidates(tmp_path, loop_thread, monkeyp
     assert candidate_calls[0].args == ("m1", "candidate:Marcus", "Marcus")
     suggested = [e for e in events if e["type"] == "speakers.suggested"]
     assert suggested and suggested[0]["suggestions"][0]["suggested_name"] == "Marcus"
+
+
+# ----------------------------------------------------------------------
+# Client/project assignment
+# ----------------------------------------------------------------------
+
+ACME_ROSTER = {
+    "clients": [
+        {
+            "id": "c-acme",
+            "name": "Acme Corp",
+            "description": "Industrial widgets client.",
+            "aliases": [],
+            "email_domains": ["acme.com"],
+        }
+    ],
+    "projects": [],
+}
+
+
+class FakeCPRepo:
+    def __init__(self, database, roster=None, series_assignment=None):
+        self._roster = roster if roster is not None else ACME_ROSTER
+        self._series_assignment = series_assignment
+
+    async def roster(self):
+        return self._roster
+
+    async def latest_assignment_for_series(self, series_id):
+        return self._series_assignment
+
+
+def _unassigned_meeting(**overrides):
+    from types import SimpleNamespace
+
+    defaults = {
+        "assignment_source": "",
+        "series_id": None,
+        "calendar_event_title": "",
+        "client_id": None,
+        "project_id": None,
+        "title": "Weekly sync",
+        "summary_markdown": "Portal work discussed.",
+        "attendees_json": "[]",
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def test_deterministic_assignment_injects_context_and_persists(tmp_path, loop_thread, monkeypatch):
+    import src.tagging.repository as cp_mod
+
+    monkeypatch.setattr(cp_mod, "ClientProjectRepository", FakeCPRepo)
+
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_unassigned_meeting())
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    summariser = FakeSummariser()
+    runner = _make_runner(_make_config(tmp_path), db=bridge, summariser=summariser)
+
+    result = runner.run(
+        tmp_path / "a.wav",
+        "m1",
+        started_at=1000.0,
+        attendees=[{"name": "Sarah", "email": "sarah@acme.com"}],
+    )
+
+    assert result.status == "complete"
+    assert summariser.contexts[0] is not None
+    assert "Acme Corp" in summariser.contexts[0]
+    assert "Industrial widgets" in summariser.contexts[0]
+    _drain(loop_thread)
+    assign_calls = [
+        c.kwargs
+        for c in repo.update_meeting.await_args_list
+        if c.kwargs.get("assignment_source") == "auto"
+    ]
+    assert assign_calls and assign_calls[0]["client_id"] == "c-acme"
+
+
+def test_manual_assignment_respected_but_context_still_injected(tmp_path, loop_thread, monkeypatch):
+    import src.tagging.repository as cp_mod
+
+    monkeypatch.setattr(cp_mod, "ClientProjectRepository", FakeCPRepo)
+
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(
+        return_value=_unassigned_meeting(assignment_source="manual", client_id="c-acme")
+    )
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    summariser = FakeSummariser()
+    runner = _make_runner(_make_config(tmp_path), db=bridge, summariser=summariser)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    assert summariser.contexts[0] is not None
+    assert "Acme Corp" in summariser.contexts[0]
+    _drain(loop_thread)
+    assign_calls = [
+        c.kwargs
+        for c in repo.update_meeting.await_args_list
+        if c.kwargs.get("assignment_source") == "auto"
+    ]
+    assert assign_calls == [], "manual assignment must never be overwritten"
+
+
+def test_no_roster_means_no_context_and_no_assignment(tmp_path, loop_thread, monkeypatch):
+    import src.tagging.repository as cp_mod
+
+    class EmptyCPRepo(FakeCPRepo):
+        def __init__(self, database):
+            super().__init__(database, roster={"clients": [], "projects": []})
+
+    monkeypatch.setattr(cp_mod, "ClientProjectRepository", EmptyCPRepo)
+
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_unassigned_meeting())
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    summariser = FakeSummariser()
+    runner = _make_runner(_make_config(tmp_path), db=bridge, summariser=summariser)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    assert summariser.contexts[0] is None
+
+
+def test_llm_auto_assignment_runs_in_post_processing(tmp_path, loop_thread, monkeypatch):
+    import src.tagging.assigner as assigner_mod
+    import src.tagging.repository as cp_mod
+    from src.tagging.assigner import Assignment
+
+    monkeypatch.setattr(cp_mod, "ClientProjectRepository", FakeCPRepo)
+
+    class FakeLlmAssigner:
+        def __init__(self, summarisation_config, config):
+            pass
+
+        def assign(self, roster, *, title, summary_markdown, attendees):
+            return Assignment(client_id="c-acme", project_id=None, confidence=0.8, method="llm")
+
+    monkeypatch.setattr(assigner_mod, "LlmAssigner", FakeLlmAssigner)
+
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_unassigned_meeting())
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    runner = _make_runner(config, db=bridge)
+
+    asyncio.run(runner._post_process_async("m1", _make_transcript(), 1000.0, False))
+
+    assign_calls = [
+        c.kwargs
+        for c in repo.update_meeting.await_args_list
+        if c.kwargs.get("assignment_source") == "auto"
+    ]
+    assert assign_calls and assign_calls[0]["client_id"] == "c-acme"
+    assert assign_calls[0]["assignment_confidence"] == 0.8
+
+
+def test_llm_auto_assignment_skipped_when_already_assigned(tmp_path, loop_thread, monkeypatch):
+    import src.tagging.assigner as assigner_mod
+    import src.tagging.repository as cp_mod
+
+    monkeypatch.setattr(cp_mod, "ClientProjectRepository", FakeCPRepo)
+    assigner_cls = MagicMock()
+    monkeypatch.setattr(assigner_mod, "LlmAssigner", assigner_cls)
+
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_unassigned_meeting(client_id="c-acme"))
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    runner = _make_runner(_make_config(tmp_path), db=bridge)
+
+    asyncio.run(runner._post_process_async("m1", _make_transcript(), 1000.0, False))
+
+    assigner_cls.assert_not_called()

@@ -40,6 +40,10 @@ _MUTABLE_COLUMNS = frozenset(
         "teams_meeting_id",
         "series_id",
         "notion_page_id",
+        "client_id",
+        "project_id",
+        "assignment_source",
+        "assignment_confidence",
         "updated_at",
     }
 )
@@ -71,6 +75,10 @@ class MeetingRecord:
     teams_meeting_id: str = ""
     series_id: str | None = None
     notion_page_id: str = ""
+    client_id: str | None = None
+    project_id: str | None = None
+    assignment_source: str = ""
+    assignment_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +102,10 @@ class MeetingRecord:
             "teams_meeting_id": self.teams_meeting_id,
             "series_id": self.series_id,
             "notion_page_id": self.notion_page_id,
+            "client_id": self.client_id,
+            "project_id": self.project_id,
+            "assignment_source": self.assignment_source,
+            "assignment_confidence": self.assignment_confidence,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -130,6 +142,18 @@ class MeetingRecord:
         except (IndexError, KeyError):
             pass
 
+        client_id = None
+        project_id = None
+        assignment_source = ""
+        assignment_confidence = 0.0
+        try:
+            client_id = row["client_id"]
+            project_id = row["project_id"]
+            assignment_source = row["assignment_source"] or ""
+            assignment_confidence = row["assignment_confidence"] or 0.0
+        except (IndexError, KeyError):
+            pass
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -153,6 +177,10 @@ class MeetingRecord:
             teams_meeting_id=teams_meeting_id,
             series_id=series_id,
             notion_page_id=notion_page_id,
+            client_id=client_id,
+            project_id=project_id,
+            assignment_source=assignment_source,
+            assignment_confidence=assignment_confidence,
         )
 
 
@@ -251,8 +279,10 @@ class MeetingRepository:
         status: str | None = None,
         tag: str | None = None,
         sort: str | None = None,
+        client_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[MeetingRecord]:
-        """List meetings with optional status/tag filters and sort order."""
+        """List meetings with optional status/tag/assignment filters."""
         conditions: list[str] = []
         params: list = []
         if status:
@@ -261,6 +291,12 @@ class MeetingRepository:
         if tag:
             conditions.append("EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)")
             params.append(tag)
+        if client_id:
+            conditions.append("client_id = ?")
+            params.append(client_id)
+        if project_id:
+            conditions.append("project_id = ?")
+            params.append(project_id)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         order = self._SORT_MAP.get(sort or "", "started_at DESC")
         assert order in self._SAFE_ORDERS, f"Unsafe sort order: {order}"

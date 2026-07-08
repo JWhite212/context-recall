@@ -21,6 +21,7 @@ from src.api.events import EventBus
 from src.api.middleware import BodySizeLimitMiddleware, RateLimitMiddleware
 from src.api.routes import auth as auth_routes
 from src.api.routes import calendar as calendar_routes
+from src.api.routes import clients as clients_routes
 from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
 from src.api.routes import diagnostics as diagnostics_routes
@@ -161,8 +162,10 @@ class ApiServer:
         speakers_routes.init(self.repo)
 
         from src.people.repository import PersonRepository
+        from src.tagging.repository import ClientProjectRepository
 
         people_routes.init(self.repo, PersonRepository(self.db))
+        clients_routes.init(self.repo, ClientProjectRepository(self.db))
 
         # Register REST routers with auth dependency.
         auth_deps = [Depends(verify_token)]
@@ -182,6 +185,7 @@ class ApiServer:
         app.include_router(search_routes.router, dependencies=auth_deps)
         app.include_router(speakers_routes.router, dependencies=auth_deps)
         app.include_router(people_routes.router, dependencies=auth_deps)
+        app.include_router(clients_routes.router, dependencies=auth_deps)
         app.include_router(calendar_routes.router, dependencies=auth_deps)
         app.include_router(auth_routes.router, dependencies=auth_deps)
 
