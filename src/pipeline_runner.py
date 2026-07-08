@@ -29,6 +29,7 @@ from src.diariser import EnergyDiariser, create_diariser
 from src.output.markdown_writer import MarkdownWriter
 from src.output.notion_writer import NotionWriter
 from src.summariser import Summariser
+from src.template_selection import TemplateSelector
 from src.templates import TemplateManager
 from src.transcriber import Transcriber
 
@@ -313,13 +314,10 @@ class PipelineRunner:
             meeting_id, attendees or [], calendar_fields
         )
 
-        # Step 3: Summarise.
-        template = None
-        try:
-            tm = TemplateManager()
-            template = tm.get_template(self._config.summarisation.default_template)
-        except Exception as e:
-            logger.warning("Failed to load template: %s", e)
+        # Step 3: Summarise (per-meeting template: manual -> auto -> default).
+        template, template_source = self._select_template_with_source(
+            meeting_id, transcript, attendees or [], calendar_fields
+        )
 
         logger.info("Generating summary...")
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="summarising")
@@ -350,6 +348,8 @@ class PipelineRunner:
             tags=summary.tags,
             language=transcript.language,
             word_count=transcript.word_count,
+            template_name=template.name if template else "",
+            template_source=template_source,
         )
         if calendar_fields and meeting_id:
             try:
@@ -537,6 +537,58 @@ class PipelineRunner:
                     timeout=5.0,
                     what="candidate speaker mapping",
                 )
+
+    def _select_template_with_source(self, meeting_id, transcript, attendees, calendar_fields):
+        """Resolve ``(SummaryTemplate, source)`` for a meeting.
+
+        Precedence: a persisted manual override -> LLM auto-selection ->
+        the configured default. Runs before summarisation, so the selector
+        sees the title/attendees/transcript (never the summary). Any failure
+        falls back to the default template; selection never fails the run.
+        """
+        sm = self._config.summarisation
+        tm = TemplateManager()
+        default_name = sm.default_template
+
+        meeting = None
+        if meeting_id and self._db_available():
+            meeting = self._db.try_call(
+                self._db.repo.get_meeting(meeting_id),
+                timeout=10.0,
+                what="meeting fetch for template selection",
+            )
+
+        # 1. A manual override persisted on the meeting always wins.
+        if meeting is not None and getattr(meeting, "template_source", "") == "manual":
+            manual_name = getattr(meeting, "template_name", "") or ""
+            manual_tpl = tm.get_template(manual_name) if manual_name else None
+            if manual_tpl:
+                return manual_tpl, "manual"
+
+        # 2. LLM auto-selection (best effort).
+        if sm.auto_select_template:
+            calendar_title = (calendar_fields or {}).get("calendar_event_title") or (
+                getattr(meeting, "calendar_event_title", "") if meeting else ""
+            )
+            title = calendar_title or (getattr(meeting, "title", "") if meeting else "") or ""
+            chosen = default_name
+            try:
+                chosen = TemplateSelector(sm).select(
+                    title=title,
+                    attendees=attendees or [],
+                    transcript_text=transcript.full_text,
+                    templates=tm.list_templates(),
+                    default_name=default_name,
+                    min_confidence=sm.template_select_min_confidence,
+                )
+            except Exception as e:
+                logger.warning("Template selection failed: %s", e)
+            tpl = tm.get_template(chosen)
+            if tpl:
+                return tpl, ("auto" if chosen != default_name else "default")
+
+        # 3. Default.
+        return tm.get_template(default_name), "default"
 
     def _resolve_assignment_context(
         self,
