@@ -47,6 +47,8 @@ export interface Meeting {
   project_id?: string | null;
   assignment_source?: string;
   assignment_confidence?: number;
+  template_name?: string | null;
+  template_source?: string | null;
 }
 
 /** A client in the client/project store. */
