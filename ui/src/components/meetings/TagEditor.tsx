@@ -40,6 +40,10 @@ export function TagEditor({
   });
 
   const addTag = (raw: string) => {
+    // A save in flight means `tags` is stale (the parent refetches on
+    // success), so block until it settles or we could submit a stale array
+    // and clobber a concurrent edit.
+    if (saveTags.isPending) return;
     const tag = raw.trim();
     setDraft("");
     setOpen(false);
@@ -48,6 +52,7 @@ export function TagEditor({
   };
 
   const removeTag = (tag: string) => {
+    if (saveTags.isPending) return;
     saveTags.mutate(tags.filter((t) => t !== tag));
   };
 
@@ -82,8 +87,9 @@ export function TagEditor({
           {tag}
           <button
             onClick={() => removeTag(tag)}
+            disabled={saveTags.isPending}
             aria-label={`Remove tag ${tag}`}
-            className="opacity-60 hover:opacity-100 transition-opacity"
+            className="opacity-60 hover:opacity-100 transition-opacity disabled:opacity-30"
           >
             <svg
               width="10"
