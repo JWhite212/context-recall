@@ -407,6 +407,21 @@ export async function getMeetingLabels(): Promise<string[]> {
   return data.labels;
 }
 
+export async function setMeetingTags(
+  id: string,
+  tags: string[],
+): Promise<void> {
+  await request(`/api/meetings/${encodeURIComponent(id)}/tags`, {
+    method: "PATCH",
+    body: JSON.stringify({ tags }),
+  });
+}
+
+export async function getMeetingTags(): Promise<string[]> {
+  const data = await request<{ tags: string[] }>("/api/meetings/tags");
+  return data.tags;
+}
+
 export async function getTemplates(): Promise<SummaryTemplate[]> {
   return request<SummaryTemplate[]>("/api/templates");
 }
