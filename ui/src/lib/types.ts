@@ -41,6 +41,36 @@ export interface Meeting {
   calendar_confidence: number;
   teams_join_url: string;
   teams_meeting_id: string;
+  series_id?: string | null;
+  notion_page_id?: string;
+  client_id?: string | null;
+  project_id?: string | null;
+  assignment_source?: string;
+  assignment_confidence?: number;
+}
+
+/** A client in the client/project store. */
+export interface Client {
+  id: string;
+  name: string;
+  description: string;
+  aliases: string[];
+  email_domains: string[];
+  status: "active" | "archived";
+  created_at: number;
+  updated_at: number;
+}
+
+/** A project, optionally belonging to a client. */
+export interface Project {
+  id: string;
+  client_id: string | null;
+  name: string;
+  description: string;
+  aliases: string[];
+  status: "active" | "archived";
+  created_at: number;
+  updated_at: number;
 }
 
 export interface CalendarMeetingsResponse {

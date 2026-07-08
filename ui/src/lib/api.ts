@@ -11,7 +11,9 @@ import type {
   AnalyticsTrendsResponse,
   AppConfig,
   AssignPersonResponse,
+  Client,
   Person,
+  Project,
   VoiceSample,
   CalendarMeetingsResponse,
   DevicesResponse,
@@ -446,6 +448,94 @@ export async function setSpeakerName(
       body: JSON.stringify({ display_name: displayName }),
     },
   );
+}
+
+// --- Clients & projects ---
+
+export async function getClients(includeArchived = false): Promise<Client[]> {
+  return request<Client[]>(
+    `/api/clients${includeArchived ? "?include_archived=true" : ""}`,
+  );
+}
+
+export async function createClient(client: {
+  name: string;
+  description?: string;
+  aliases?: string[];
+  email_domains?: string[];
+}): Promise<Client> {
+  return request<Client>("/api/clients", {
+    method: "POST",
+    body: JSON.stringify(client),
+  });
+}
+
+export async function updateClient(
+  clientId: string,
+  fields: Partial<
+    Pick<
+      Client,
+      "name" | "description" | "aliases" | "email_domains" | "status"
+    >
+  >,
+): Promise<Client> {
+  return request<Client>(`/api/clients/${encodeURIComponent(clientId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteClient(clientId: string): Promise<void> {
+  await request(`/api/clients/${encodeURIComponent(clientId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getProjects(clientId?: string): Promise<Project[]> {
+  const qs = clientId ? `?client_id=${encodeURIComponent(clientId)}` : "";
+  return request<Project[]>(`/api/projects${qs}`);
+}
+
+export async function createProject(project: {
+  name: string;
+  client_id?: string | null;
+  description?: string;
+  aliases?: string[];
+}): Promise<Project> {
+  return request<Project>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(project),
+  });
+}
+
+export async function updateProject(
+  projectId: string,
+  fields: Partial<
+    Pick<Project, "name" | "client_id" | "description" | "aliases" | "status">
+  >,
+): Promise<Project> {
+  return request<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  await request(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+/** Manually assign (or clear, with nulls) a meeting's client/project. */
+export async function setMeetingAssignment(
+  meetingId: string,
+  clientId: string | null,
+  projectId: string | null,
+): Promise<void> {
+  await request(`/api/meetings/${encodeURIComponent(meetingId)}/assignment`, {
+    method: "PATCH",
+    body: JSON.stringify({ client_id: clientId, project_id: projectId }),
+  });
 }
 
 // --- People directory ---

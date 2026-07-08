@@ -16,6 +16,7 @@ import {
   getMeetingActionItems,
 } from "../../lib/api";
 import { ActionItemCard } from "../action-items/ActionItemCard";
+import { AssignmentSelect } from "../clients/AssignmentSelect";
 import { AssignSpeakerMenu } from "../people/AssignSpeakerMenu";
 import { API_BASE } from "../../lib/constants";
 import { canRetryMeeting } from "../../lib/meetingStatus";
@@ -678,6 +679,11 @@ export function MeetingDetail() {
         {/* Label */}
         <div className="mt-2">
           <LabelEditor meetingId={meeting.id} initialLabel={meeting.label} />
+        </div>
+
+        {/* Client / project assignment */}
+        <div className="mt-2">
+          <AssignmentSelect meeting={meeting} />
         </div>
 
         {/* Calendar info */}
