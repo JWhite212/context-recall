@@ -39,6 +39,7 @@ _MUTABLE_COLUMNS = frozenset(
         "teams_join_url",
         "teams_meeting_id",
         "series_id",
+        "notion_page_id",
         "updated_at",
     }
 )
@@ -69,6 +70,7 @@ class MeetingRecord:
     teams_join_url: str = ""
     teams_meeting_id: str = ""
     series_id: str | None = None
+    notion_page_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +93,7 @@ class MeetingRecord:
             "teams_join_url": self.teams_join_url,
             "teams_meeting_id": self.teams_meeting_id,
             "series_id": self.series_id,
+            "notion_page_id": self.notion_page_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -121,6 +124,12 @@ class MeetingRecord:
         except (IndexError, KeyError):
             pass
 
+        notion_page_id = ""
+        try:
+            notion_page_id = row["notion_page_id"] or ""
+        except (IndexError, KeyError):
+            pass
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -143,6 +152,7 @@ class MeetingRecord:
             teams_join_url=teams_join_url,
             teams_meeting_id=teams_meeting_id,
             series_id=series_id,
+            notion_page_id=notion_page_id,
         )
 
 

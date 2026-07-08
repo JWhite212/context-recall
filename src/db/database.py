@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _vec_available = False
 
@@ -411,6 +411,8 @@ class Database:
             await _safe_add_column(self.conn, "meetings", "series_id", "TEXT", "NULL")
             # Reprocess job durability (v10).
             await self.conn.executescript(REPROCESS_JOBS_SQL)
+            # Notion page identity for reprocess update-or-create (v11).
+            await _safe_add_column(self.conn, "meetings", "notion_page_id", "TEXT", "''")
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -501,9 +503,18 @@ class Database:
             # DB so a daemon restart can detect and recover stuck rows that
             # were left in 'transcribing' by a previous process.
             await self.conn.executescript(REPROCESS_JOBS_SQL)
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 10")
             await self.conn.commit()
             logger.info("Database migrated to version 10 (reprocess jobs)")
             current_version = 10
+        if current_version < 11:
+            # Notion page identity: reprocess archives the previously
+            # written page and stores the replacement's id, so re-runs
+            # never accumulate duplicate Notion pages.
+            await _safe_add_column(self.conn, "meetings", "notion_page_id", "TEXT", "''")
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 11 (notion page identity)")
+            current_version = 11
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

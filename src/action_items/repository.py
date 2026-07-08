@@ -136,6 +136,21 @@ class ActionItemRepository:
             await self._db.conn.execute("DELETE FROM action_items WHERE id = ?", (item_id,))
             await self._db.conn.commit()
 
+    async def delete_extracted_for_meeting(self, meeting_id: str) -> int:
+        """Delete a meeting's LLM-extracted action items; keep manual ones.
+
+        Reprocessing re-runs extraction against the fresh transcript, so
+        the previous extraction round is replaced rather than duplicated.
+        Returns the number of rows deleted.
+        """
+        async with self._db.write_lock:
+            cursor = await self._db.conn.execute(
+                "DELETE FROM action_items WHERE meeting_id = ? AND source = 'extracted'",
+                (meeting_id,),
+            )
+            await self._db.conn.commit()
+            return cursor.rowcount
+
     async def list_items(
         self,
         status: str | None = None,
