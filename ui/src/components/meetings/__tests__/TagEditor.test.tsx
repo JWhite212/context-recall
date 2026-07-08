@@ -65,4 +65,40 @@ describe("TagEditor", () => {
       expect(patch?.body).toEqual({ tags: ["planning"] });
     });
   });
+
+  it("blocks edits while a save is in flight", async () => {
+    let releasePatch: (r: Response) => void = () => {};
+    globalThis.fetch = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PATCH") {
+          return new Promise<Response>((resolve) => {
+            releasePatch = resolve;
+          });
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ tags: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      },
+    ) as unknown as typeof fetch;
+
+    render(<TagEditor meetingId="m1" tags={["budget"]} />, {
+      wrapper: makeWrapper(),
+    });
+    // Start a removal — the PATCH hangs, keeping the mutation pending.
+    fireEvent.click(screen.getByLabelText("Remove tag budget"));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Remove tag budget")).toBeDisabled(),
+    );
+
+    releasePatch(
+      new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+  });
 });
