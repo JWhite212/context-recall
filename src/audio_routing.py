@@ -390,12 +390,26 @@ class AudioRouter:
                 master_uid=real_uids[0],
             )
 
+        current_name = self._backend.device_name(current_id)
         self._backend.set_default_output_device(managed_id)
+        # Verify the switch actually took effect — CoreAudio can accept the
+        # set without the default changing, which would silently capture only
+        # the microphone (Bug #5). Keep the previous-output bookkeeping on the
+        # confirmed-success path so restore() never reverts a switch that
+        # never happened.
+        if self._backend.default_output_device() != managed_id:
+            return RoutingResult(
+                error=(
+                    "System audio routing did not take effect — the default "
+                    f"output is still '{current_name}'; system audio will not "
+                    "be captured. Route output to a Multi-Output Device "
+                    "containing BlackHole in Audio MIDI Setup."
+                )
+            )
         self._previous_output_id = current_id
         self._previous_output_uid = current_uid
         self._managed_id = managed_id
 
-        current_name = self._backend.device_name(current_id)
         message = (
             f"System audio routed through '{MANAGED_DEVICE_NAME}' "
             f"({current_name} + capture) for this recording."
