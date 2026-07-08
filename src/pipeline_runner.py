@@ -465,9 +465,24 @@ class PipelineRunner:
 
             recogniser = VoiceRecogniser(VoiceEmbedder(cfg.model_source), _RecogniserConfig())
             matches = recogniser.identify(transcript, audio_path, profiles)
-            for match in matches:
-                if not match.person_id or not meeting_id:
+            # speaker_mappings holds ONE row per (meeting, label). When two
+            # different people were matched inside the same original label,
+            # storing either would corrupt re-application on reprocess —
+            # the transcript renames stand, but the mapping is skipped.
+            person_matches = [m for m in matches if m.person_id]
+            by_label: dict[str, list] = {}
+            for match in person_matches:
+                by_label.setdefault(match.original_label, []).append(match)
+            for label, label_matches in by_label.items():
+                if not meeting_id:
                     continue
+                if len({m.person_id for m in label_matches}) > 1:
+                    logger.info(
+                        "Label '%s' matched multiple people; skipping mapping row",
+                        label,
+                    )
+                    continue
+                match = label_matches[0]
                 self._db.try_call(
                     self._db.repo.set_speaker_name(
                         meeting_id,
