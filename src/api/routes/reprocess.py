@@ -103,7 +103,7 @@ async def _do_reprocess(meeting, config) -> None:
             audio_path,
             meeting.id,
             meeting.started_at,
-            0.0,
+            meeting.duration_seconds or 0.0,
             attendees=_stored_attendees(meeting),
             mic_audio_path=sources["mic"],
             preserve_mappings=True,

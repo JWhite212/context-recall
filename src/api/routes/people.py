@@ -124,7 +124,7 @@ async def list_voice_samples(person_id: str):
 @router.delete("/api/people/{person_id}/voice-samples/{sample_id}")
 async def delete_voice_sample(person_id: str, sample_id: int):
     _require_repos()
-    deleted = await _person_repo.delete_voice_sample(sample_id)
+    deleted = await _person_repo.delete_voice_sample(sample_id, person_id=person_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Voice sample not found")
     return {"deleted": sample_id}

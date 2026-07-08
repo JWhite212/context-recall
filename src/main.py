@@ -539,12 +539,20 @@ class ContextRecall:
             )
             raise err
 
+        # Snapshot live-session context NOW: a back-to-back meeting can
+        # overwrite self._calendar_match and the capture's source paths
+        # before the executor thread gets around to reading them.
+        calendar_match = self._calendar_match
+        mic_path = self._capture.mic_audio_path if self._config.audio.keep_source_files else None
+
         future = self._processing_executor.submit(
             self._process_audio,
             audio_path=audio_path,
             started_at=event.started_at,
             duration_seconds=event.duration_seconds,
             meeting_id=meeting_id,
+            calendar_match=calendar_match,
+            mic_audio_path=mic_path,
         )
         self._processing_futures.append(future)
 
@@ -654,6 +662,8 @@ class ContextRecall:
         started_at: float = 0.0,
         duration_seconds: float = 0.0,
         meeting_id: str | None = None,
+        calendar_match=None,
+        mic_audio_path: Path | None = None,
     ) -> None:
         """
         Run the full pipeline on a captured audio file:
@@ -708,19 +718,27 @@ class ContextRecall:
         # contributes its live-session context: the calendar match, the
         # surviving mic source WAV, and a DB bridge that routes meeting
         # updates through _db_update (C3 logging + test seam).
+        # Callers that dispatch to the executor snapshot these; direct
+        # single-flight callers (--record-now, --process, shutdown drain)
+        # fall back to the live attributes.
+        if calendar_match is None:
+            calendar_match = self._calendar_match
+        if mic_audio_path is None:
+            mic_audio_path = (
+                self._capture.mic_audio_path if self._config.audio.keep_source_files else None
+            )
+
         attendees: list[dict] = []
         calendar_fields = None
-        if self._calendar_match:
-            attendees = self._calendar_match.attendees or []
+        if calendar_match:
+            attendees = calendar_match.attendees or []
             calendar_fields = {
-                "calendar_event_title": self._calendar_match.event_title,
-                "attendees_json": json.dumps(self._calendar_match.attendees),
-                "calendar_confidence": self._calendar_match.confidence,
-                "teams_join_url": self._calendar_match.teams_join_url,
-                "teams_meeting_id": self._calendar_match.teams_meeting_id,
+                "calendar_event_title": calendar_match.event_title,
+                "attendees_json": json.dumps(calendar_match.attendees),
+                "calendar_confidence": calendar_match.confidence,
+                "teams_join_url": calendar_match.teams_join_url,
+                "teams_meeting_id": calendar_match.teams_meeting_id,
             }
-
-        mic_path = self._capture.mic_audio_path if self._config.audio.keep_source_files else None
 
         runner = PipelineRunner(
             self._config,
@@ -733,12 +751,12 @@ class ContextRecall:
             notion_writer=self._notion_writer,
         )
         runner.run(
-            audio_path,
+            persistent_audio_path,
             meeting_id,
             started_at,
             duration_seconds,
             attendees=attendees,
-            mic_audio_path=mic_path,
+            mic_audio_path=mic_audio_path,
             calendar_fields=calendar_fields,
         )
 

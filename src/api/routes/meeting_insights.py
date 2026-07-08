@@ -107,7 +107,10 @@ async def draft_email(meeting_id: str, body: DraftEmailRequest):
         response = await asyncio.to_thread(summariser.chat, EMAIL_PROMPT, user_msg)
     except Exception as e:
         logger.error("Email draft failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Draft generation failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Draft generation failed — check the summarisation backend and daemon logs.",
+        )
 
     subject, email_body = _parse_email(response, meeting.title)
     return {"subject": subject, "body": email_body}

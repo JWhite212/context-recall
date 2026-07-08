@@ -364,8 +364,14 @@ class MeetingRepository:
             await self._db.conn.commit()
             return cursor.rowcount > 0
 
-    async def count_meetings(self, status: str | None = None, tag: str | None = None) -> int:
-        """Count total meetings, optionally filtered by status and/or tag."""
+    async def count_meetings(
+        self,
+        status: str | None = None,
+        tag: str | None = None,
+        client_id: str | None = None,
+        project_id: str | None = None,
+    ) -> int:
+        """Count total meetings, mirroring list_meetings' filters."""
         conditions: list[str] = []
         params: list = []
         if status:
@@ -374,6 +380,12 @@ class MeetingRepository:
         if tag:
             conditions.append("EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)")
             params.append(tag)
+        if client_id:
+            conditions.append("client_id = ?")
+            params.append(client_id)
+        if project_id:
+            conditions.append("project_id = ?")
+            params.append(project_id)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         cursor = await self._db.conn.execute(f"SELECT COUNT(*) FROM meetings {where}", params)
         row = await cursor.fetchone()
@@ -1038,6 +1050,8 @@ class MeetingRepository:
         ``confidence`` records how sure an automatic source (voice
         matching) was.
         """
+        if confidence is not None and not (0.0 <= confidence <= 1.0):
+            raise ValueError(f"confidence must be within [0, 1], got {confidence!r}")
         now = time.time()
         async with self._db.write_lock:
             await self._db.conn.execute(

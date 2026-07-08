@@ -115,6 +115,12 @@ class DbBridge:
             return None
         try:
             return future.result(timeout=timeout)
+        except TimeoutError as e:
+            # Stop the coroutine on the loop too — a zombie DB write
+            # landing later would race whatever the caller does next.
+            future.cancel()
+            logger.warning("%s timed out after %.0fs: %r", what, timeout, e)
+            return None
         except Exception as e:
             logger.warning("%s failed: %r", what, e)
             return None
@@ -275,6 +281,10 @@ class PipelineRunner:
                 duration_seconds=duration_seconds,
                 status="complete",
                 transcript_json=json.dumps(transcript.to_dict()),
+                # A reprocess that now yields a near-empty transcript must
+                # not leave the previous run's summary/tags looking current.
+                summary_markdown=None,
+                tags=[],
                 language=transcript.language,
                 word_count=transcript.word_count,
             )
@@ -664,14 +674,6 @@ class PipelineRunner:
     ) -> None:
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="writing")
 
-        # Reprocess: archive the previously written Notion page so the
-        # replacement doesn't accumulate as a duplicate.
-        if notion_page_id and self._notion_writer is not None:
-            try:
-                self._notion_writer.archive_page(notion_page_id)
-            except Exception as e:
-                logger.warning("Could not archive previous Notion page: %s", e)
-
         for source, writer in (
             ("markdown", self._md_writer),
             ("notion", self._notion_writer),
@@ -691,7 +693,15 @@ class PipelineRunner:
                     message=str(writer.last_error),
                 )
 
+        # Reprocess: archive the previously written Notion page only once
+        # its replacement exists — a failed write must not leave the
+        # meeting with no page at all.
         new_page_id = getattr(self._notion_writer, "last_page_id", None)
+        if notion_page_id and new_page_id and notion_page_id != new_page_id:
+            try:
+                self._notion_writer.archive_page(notion_page_id)
+            except Exception as e:
+                logger.warning("Could not archive previous Notion page: %s", e)
         if new_page_id and meeting_id:
             self._update(meeting_id, notion_page_id=new_page_id)
 
@@ -854,9 +864,9 @@ class PipelineRunner:
             return
         tracker_repo = TrackerRepository(self._db.database)
         trackers = await tracker_repo.list_trackers(enabled_only=True)
-        if not trackers:
-            return
-        hits = scan_transcript(transcript, trackers)
+        hits = scan_transcript(transcript, trackers) if trackers else []
+        # Always replace — a reprocess with trackers since disabled or
+        # edited must clear the stale hits from the previous scan.
         await tracker_repo.replace_hits_for_meeting(meeting_id, hits)
         if hits:
             by_tracker: dict[str, int] = {}

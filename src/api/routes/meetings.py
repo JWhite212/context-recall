@@ -61,7 +61,9 @@ async def list_meetings(
             project_id=project_id,
         )
 
-    total = await _repo.count_meetings(status=status, tag=tag)
+    total = await _repo.count_meetings(
+        status=status, tag=tag, client_id=client_id, project_id=project_id
+    )
 
     return {
         "meetings": [m.to_dict() for m in meetings],

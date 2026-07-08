@@ -70,7 +70,6 @@ class SpeakerSuggester:
             return []
 
     def _call_llm(self, transcript_text: str) -> str:
-        config = self._summariser._config
         fence = "=" * 40
         user_msg = (
             f"Identify the generically-labelled speakers in this transcript.\n\n"
@@ -78,12 +77,7 @@ class SpeakerSuggester:
             f"{transcript_text}\n"
             f"{fence} END TRANSCRIPT {fence}"
         )
-        if config.backend == "claude":
-            return self._summariser._claude_chat(SUGGESTION_PROMPT, user_msg)
-        base_url = Summariser._validate_ollama_url(config.ollama_base_url)
-        return self._summariser._ollama_chat(
-            base_url, config.ollama_model, SUGGESTION_PROMPT, user_msg
-        )
+        return self._summariser.chat(SUGGESTION_PROMPT, user_msg)
 
     @staticmethod
     def _parse(response: str, unresolved: set[str]) -> list[dict]:

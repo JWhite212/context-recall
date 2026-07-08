@@ -226,13 +226,7 @@ class LlmAssigner:
             f"{summary}\n"
             f"{fence} END MEETING SUMMARY {fence}"
         )
-        config = self._summariser._config
-        if config.backend == "claude":
-            return self._summariser._claude_chat(ASSIGNMENT_PROMPT, user_msg)
-        base_url = Summariser._validate_ollama_url(config.ollama_base_url)
-        return self._summariser._ollama_chat(
-            base_url, config.ollama_model, ASSIGNMENT_PROMPT, user_msg
-        )
+        return self._summariser.chat(ASSIGNMENT_PROMPT, user_msg)
 
     def _parse(self, response: str, clients: list[dict], projects: list[dict]):
         if not response:
@@ -263,8 +257,10 @@ class LlmAssigner:
         project = project_by_id.get(project_id)
         if project is None:
             project_id = None
-        elif client_id is None:
-            client_id = project.get("client_id")
+        elif project.get("client_id"):
+            # The project's own client is authoritative — an LLM pick of a
+            # different client alongside it would be a contradiction.
+            client_id = project["client_id"]
 
         try:
             confidence = float(data.get("confidence", 0.0))

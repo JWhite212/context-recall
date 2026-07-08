@@ -201,3 +201,15 @@ def test_llm_assignment_skipped_with_empty_roster():
         )
     assert result is None
     call.assert_not_called()
+
+
+def test_llm_pick_of_wrong_client_reconciled_to_projects_client():
+    """A project's own client wins over a contradictory client pick."""
+    response = json.dumps(
+        {"client_id": "c-globex", "project_id": "p-portal", "confidence": 0.9}
+    )
+    assigner = _assigner()
+    with patch.object(assigner, "_call_llm", return_value=response):
+        assignment = assigner.assign(ROSTER, title="", summary_markdown="", attendees=[])
+    assert assignment.project_id == "p-portal"
+    assert assignment.client_id == "c-acme"

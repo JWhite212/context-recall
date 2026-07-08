@@ -188,6 +188,11 @@ async def set_meeting_assignment(meeting_id: str, body: AssignmentUpdate):
         project = await _cp_repo.get_project(project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
+        if client_id and project.get("client_id") and project["client_id"] != client_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Project belongs to a different client",
+            )
         # A project pick implies its client unless one was given.
         if not client_id and project.get("client_id"):
             client_id = project["client_id"]

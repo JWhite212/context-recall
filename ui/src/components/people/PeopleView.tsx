@@ -312,7 +312,9 @@ export function PeopleView() {
         <div className="rounded-xl bg-surface-raised border border-border p-3">
           <div className="flex flex-col gap-1">
             {people.map((p) => (
-              <PersonRow key={p.id} person={p} />
+              // updated_at in the key remounts the row (and its edit form
+              // state) whenever the underlying person record changes.
+              <PersonRow key={`${p.id}-${p.updated_at}`} person={p} />
             ))}
           </div>
         </div>

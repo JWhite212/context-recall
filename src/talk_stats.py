@@ -40,6 +40,8 @@ def compute_talk_stats(transcript_json: str | None) -> dict:
         entry["longest_monologue_seconds"] = max(entry["longest_monologue_seconds"], seconds)
 
     for seg in segments:
+        if not isinstance(seg, dict):
+            continue
         try:
             start = float(seg.get("start", 0.0))
             end = float(seg.get("end", 0.0))

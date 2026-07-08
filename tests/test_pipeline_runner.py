@@ -1022,3 +1022,65 @@ def test_tracker_scan_runs_in_post_processing(tmp_path, loop_thread, monkeypatch
     assert stored["hits"][0]["matched_keyword"] == "hello"
     hit_events = [e for e in events if e["type"] == "tracker.hits"]
     assert hit_events and hit_events[0]["trackers"][0]["count"] == 1
+
+
+def test_notion_old_page_kept_when_replacement_write_fails(tmp_path, loop_thread):
+    """The previous page must survive a failed replacement write."""
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+
+    class FailingNotionWriter(FakeNotionWriter):
+        def write(self, summary, transcript, started_at, duration_seconds):
+            self.calls.append((summary, transcript, started_at, duration_seconds))
+            self.last_page_id = None  # create failed
+            return None
+
+    notion = FailingNotionWriter()
+    runner = _make_runner(_make_config(tmp_path), db=bridge, notion_writer=notion)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0, notion_page_id="old-page")
+
+    assert notion.archived == []
+
+
+def test_tracker_scan_clears_hits_when_no_enabled_trackers(tmp_path, loop_thread, monkeypatch):
+    import src.trackers.repository as tracker_repo_mod
+
+    replaced = {}
+
+    class EmptyTrackerRepo:
+        def __init__(self, database):
+            pass
+
+        async def list_trackers(self, enabled_only=False):
+            return []
+
+        async def replace_hits_for_meeting(self, meeting_id, hits):
+            replaced["meeting_id"] = meeting_id
+            replaced["hits"] = hits
+            return 0
+
+    monkeypatch.setattr(tracker_repo_mod, "TrackerRepository", EmptyTrackerRepo)
+
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_unassigned_meeting(client_id="c1"))
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    runner = _make_runner(_make_config(tmp_path), db=bridge)
+
+    asyncio.run(runner._post_process_async("m1", _make_transcript(), 1000.0, False))
+
+    assert replaced == {"meeting_id": "m1", "hits": []}
+
+
+def test_short_transcript_clears_stale_summary_fields(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    transcriber = FakeTranscriber(transcript=_make_transcript(texts=("hi bye",)))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, transcriber=transcriber)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    _drain(loop_thread)
+    kwargs = repo.update_meeting.call_args.kwargs
+    assert kwargs["summary_markdown"] is None
+    assert kwargs["tags"] == []

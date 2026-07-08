@@ -239,3 +239,24 @@ async def test_assign_person_404s(api):
 
     assert missing_meeting.status_code == 404
     assert missing_person.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_voice_sample_delete_scoped_to_owner(api):
+    """Deleting via another person's URL must 404, not delete."""
+    person_repo = api["person_repo"]
+    owner = await person_repo.create(name="Owner")
+    other = await person_repo.create(name="Other")
+    sample_id = await person_repo.add_voice_sample(owner, [0.1, 0.2])
+
+    with TestClient(api["app"]) as c:
+        wrong = c.delete(
+            f"/api/people/{other}/voice-samples/{sample_id}", headers=_auth_headers()
+        )
+        right = c.delete(
+            f"/api/people/{owner}/voice-samples/{sample_id}", headers=_auth_headers()
+        )
+
+    assert wrong.status_code == 404
+    assert right.status_code == 200
+    assert await person_repo.list_voice_samples(owner) == []

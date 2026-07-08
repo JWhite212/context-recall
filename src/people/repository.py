@@ -164,7 +164,7 @@ class PersonRepository:
                 await self._db.conn.execute(
                     """DELETE FROM voice_profiles WHERE person_id = ? AND id NOT IN (
                            SELECT id FROM voice_profiles WHERE person_id = ?
-                           ORDER BY created_at DESC LIMIT ?
+                           ORDER BY created_at DESC, id DESC LIMIT ?
                        )""",
                     (person_id, person_id, max_samples),
                 )
@@ -181,11 +181,15 @@ class PersonRepository:
         )
         return [dict(r) for r in await cursor.fetchall()]
 
-    async def delete_voice_sample(self, sample_id: int) -> bool:
+    async def delete_voice_sample(self, sample_id: int, person_id: str | None = None) -> bool:
+        """Delete a sample; with *person_id* given, only if it belongs to them."""
+        sql = "DELETE FROM voice_profiles WHERE id = ?"
+        params: list = [sample_id]
+        if person_id is not None:
+            sql += " AND person_id = ?"
+            params.append(person_id)
         async with self._db.write_lock:
-            cursor = await self._db.conn.execute(
-                "DELETE FROM voice_profiles WHERE id = ?", (sample_id,)
-            )
+            cursor = await self._db.conn.execute(sql, params)
             await self._db.conn.commit()
             return cursor.rowcount > 0
 

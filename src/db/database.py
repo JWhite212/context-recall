@@ -524,6 +524,9 @@ class Database:
             await _safe_add_column(self.conn, "meetings", "project_id", "TEXT", "NULL")
             await _safe_add_column(self.conn, "meetings", "assignment_source", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "assignment_confidence", "REAL", "0.0")
+            # Keyword trackers (v14).
+            await self.conn.executescript(TRACKERS_SQL)
+            await self.conn.executescript(TRACKER_HITS_SQL)
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)

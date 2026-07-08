@@ -98,7 +98,7 @@ async def tracker_hits(tracker_id: str, limit: int = 200):
     _require_repos()
     if not await _tracker_repo.get(tracker_id):
         raise HTTPException(status_code=404, detail="Tracker not found")
-    return await _tracker_repo.hits_for_tracker(tracker_id, limit=min(limit, 500))
+    return await _tracker_repo.hits_for_tracker(tracker_id, limit=max(1, min(limit, 500)))
 
 
 @router.get("/api/meetings/{meeting_id}/tracker-hits")

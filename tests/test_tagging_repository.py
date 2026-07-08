@@ -102,3 +102,14 @@ async def test_meeting_list_filters_by_assignment(cp_repo, repo):
     filtered = await repo.list_meetings(client_id=client_id)
     assert [m.id for m in filtered] == [m1]
     assert (await repo.get_meeting(m1)).to_dict()["client_id"] == client_id
+
+
+@pytest.mark.asyncio
+async def test_count_meetings_matches_assignment_filters(cp_repo, repo):
+    client_id = await cp_repo.create_client(name="Acme")
+    m1 = await repo.create_meeting(started_at=1000.0, status="complete")
+    await repo.create_meeting(started_at=2000.0, status="complete")
+    await repo.update_meeting(m1, client_id=client_id, assignment_source="auto")
+
+    assert await repo.count_meetings(client_id=client_id) == 1
+    assert await repo.count_meetings() == 2

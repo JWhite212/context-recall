@@ -63,6 +63,10 @@ async def _retrieve(question: str, limit: int, date_from, date_to) -> list[dict]
         except Exception as e:
             logger.warning("Hybrid retrieval failed; falling back to FTS: %s", e)
     meetings = await _repo.search_meetings(question, limit=limit)
+    if date_from is not None:
+        meetings = [m for m in meetings if m.started_at >= date_from]
+    if date_to is not None:
+        meetings = [m for m in meetings if m.started_at <= date_to]
     return [
         {
             "meeting_id": m.id,
@@ -124,7 +128,10 @@ async def ask(body: AskRequest):
         answer = await asyncio.to_thread(summariser.chat, ANSWER_PROMPT, user_msg)
     except Exception as e:
         logger.error("Ask failed: %s", e, exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Answer generation failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Answer generation failed — check the summarisation backend and daemon logs.",
+        )
     logger.info("Ask answered in %.1fs (%d sources)", time.monotonic() - started, len(sources))
 
     return {"answer": answer, "sources": sources, "no_results": False}

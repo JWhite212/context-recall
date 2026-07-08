@@ -180,3 +180,21 @@ async def test_assignment_404s(api):
             ).status_code
             == 404
         )
+
+
+@pytest.mark.asyncio
+async def test_assignment_rejects_project_of_different_client(api):
+    repo = api["repo"]
+    cp_repo = api["cp_repo"]
+    meeting_id = await repo.create_meeting(started_at=1000.0, status="complete")
+    client_a = await cp_repo.create_client(name="A")
+    client_b = await cp_repo.create_client(name="B")
+    project_b = await cp_repo.create_project(name="B proj", client_id=client_b)
+
+    with TestClient(api["app"]) as c:
+        resp = c.patch(
+            f"/api/meetings/{meeting_id}/assignment",
+            headers=_auth_headers(),
+            json={"client_id": client_a, "project_id": project_b},
+        )
+    assert resp.status_code == 422
