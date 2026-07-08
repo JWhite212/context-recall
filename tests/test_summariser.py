@@ -535,7 +535,7 @@ class TestOllamaFallback:
                     tags=["test"],
                 )
                 result = summariser.summarise(transcript)
-                mock_claude.assert_called_once_with(transcript, None)
+                mock_claude.assert_called_once_with(transcript, None, None)
                 assert result.title == "Fallback"
 
     def test_ollama_timeout_without_claude_raises(self):
@@ -822,3 +822,43 @@ class TestOllamaSSRF:
     def test_loopback_ipv4(self):
         result = Summariser._validate_ollama_url("http://127.0.0.1:11434")
         assert result == "http://127.0.0.1:11434"
+
+
+class TestExtraContext:
+    """extra_context (client/project descriptions) reaches the system prompt."""
+
+    def test_extra_context_appended_to_system_prompt(self):
+        from src.summariser import _apply_extra_context
+        from src.templates import SUMMARISATION_PROMPT
+
+        augmented = _apply_extra_context(SUMMARISATION_PROMPT, "Client: Acme — widgets")
+        assert augmented.startswith(SUMMARISATION_PROMPT)
+        assert "BEGIN MEETING CONTEXT" in augmented
+        assert "Client: Acme — widgets" in augmented
+        assert "NOT transcript content" in augmented
+
+    def test_no_context_leaves_prompt_untouched(self):
+        from src.summariser import _apply_extra_context
+
+        assert _apply_extra_context("base", None) == "base"
+        assert _apply_extra_context("base", "") == "base"
+
+    def test_context_flows_through_ollama_backend(self):
+        config = SummarisationConfig(backend="ollama", ollama_model="test-model")
+        summariser = Summariser(config)
+        transcript = Transcript(
+            segments=[
+                TranscriptSegment(start=0, end=5, text="Hello world test content here")
+            ],
+        )
+        captured = {}
+
+        def fake_chat(base_url, model, system, user):
+            captured["system"] = system
+            return "# T\n\n## Summary\nx"
+
+        with patch.object(summariser, "_ollama_chat", side_effect=fake_chat):
+            summariser.summarise(transcript, extra_context="Client: Acme — widgets")
+
+        assert "Client: Acme — widgets" in captured["system"]
+        assert "BEGIN MEETING CONTEXT" in captured["system"]

@@ -10,6 +10,13 @@ import type {
   AnalyticsSummaryResponse,
   AnalyticsTrendsResponse,
   AppConfig,
+  AskResponse,
+  AssignPersonResponse,
+  Client,
+  EmailDraft,
+  Person,
+  Project,
+  VoiceSample,
   CalendarMeetingsResponse,
   DevicesResponse,
   HealthResponse,
@@ -29,6 +36,9 @@ import type {
   SpeakerMapping,
   StatusResponse,
   SummaryTemplate,
+  TalkStats,
+  Tracker,
+  TrackerHit,
   UnreadCountResponse,
 } from "./types";
 
@@ -445,6 +455,168 @@ export async function setSpeakerName(
   );
 }
 
+// --- Clients & projects ---
+
+export async function getClients(includeArchived = false): Promise<Client[]> {
+  return request<Client[]>(
+    `/api/clients${includeArchived ? "?include_archived=true" : ""}`,
+  );
+}
+
+export async function createClient(client: {
+  name: string;
+  description?: string;
+  aliases?: string[];
+  email_domains?: string[];
+}): Promise<Client> {
+  return request<Client>("/api/clients", {
+    method: "POST",
+    body: JSON.stringify(client),
+  });
+}
+
+export async function updateClient(
+  clientId: string,
+  fields: Partial<
+    Pick<
+      Client,
+      "name" | "description" | "aliases" | "email_domains" | "status"
+    >
+  >,
+): Promise<Client> {
+  return request<Client>(`/api/clients/${encodeURIComponent(clientId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteClient(clientId: string): Promise<void> {
+  await request(`/api/clients/${encodeURIComponent(clientId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getProjects(clientId?: string): Promise<Project[]> {
+  const qs = clientId ? `?client_id=${encodeURIComponent(clientId)}` : "";
+  return request<Project[]>(`/api/projects${qs}`);
+}
+
+export async function createProject(project: {
+  name: string;
+  client_id?: string | null;
+  description?: string;
+  aliases?: string[];
+}): Promise<Project> {
+  return request<Project>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(project),
+  });
+}
+
+export async function updateProject(
+  projectId: string,
+  fields: Partial<
+    Pick<Project, "name" | "client_id" | "description" | "aliases" | "status">
+  >,
+): Promise<Project> {
+  return request<Project>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  await request(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+/** Manually assign (or clear, with nulls) a meeting's client/project. */
+export async function setMeetingAssignment(
+  meetingId: string,
+  clientId: string | null,
+  projectId: string | null,
+): Promise<void> {
+  await request(`/api/meetings/${encodeURIComponent(meetingId)}/assignment`, {
+    method: "PATCH",
+    body: JSON.stringify({ client_id: clientId, project_id: projectId }),
+  });
+}
+
+// --- People directory ---
+
+export async function getPeople(): Promise<Person[]> {
+  return request<Person[]>("/api/people");
+}
+
+export async function createPerson(person: {
+  name: string;
+  email?: string;
+  aliases?: string[];
+  notes?: string;
+  is_me?: boolean;
+}): Promise<Person> {
+  return request<Person>("/api/people", {
+    method: "POST",
+    body: JSON.stringify(person),
+  });
+}
+
+export async function updatePerson(
+  personId: string,
+  fields: Partial<
+    Pick<Person, "name" | "email" | "aliases" | "notes" | "is_me">
+  >,
+): Promise<Person> {
+  return request<Person>(`/api/people/${encodeURIComponent(personId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deletePerson(personId: string): Promise<void> {
+  await request(`/api/people/${encodeURIComponent(personId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getVoiceSamples(
+  personId: string,
+): Promise<VoiceSample[]> {
+  return request<VoiceSample[]>(
+    `/api/people/${encodeURIComponent(personId)}/voice-samples`,
+  );
+}
+
+export async function deleteVoiceSample(
+  personId: string,
+  sampleId: number,
+): Promise<void> {
+  await request(
+    `/api/people/${encodeURIComponent(personId)}/voice-samples/${sampleId}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * Label a transcript speaker as a known person and (optionally) enrol
+ * their voice from this meeting so future meetings auto-recognise them.
+ */
+export async function assignPersonToSpeaker(
+  meetingId: string,
+  speakerId: string,
+  personId: string,
+  enrolVoice = true,
+): Promise<AssignPersonResponse> {
+  return request<AssignPersonResponse>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/speakers/${encodeURIComponent(speakerId)}/assign-person`,
+    {
+      method: "POST",
+      body: JSON.stringify({ person_id: personId, enrol_voice: enrolVoice }),
+    },
+  );
+}
+
 export async function getCalendarMeetings(
   start: number,
   end: number,
@@ -614,5 +786,81 @@ export async function generatePrep(meetingId: string): Promise<PrepBriefing> {
   return request<PrepBriefing>(
     `/api/prep/${encodeURIComponent(meetingId)}/generate`,
     { method: "POST" },
+  );
+}
+
+// --- Ask, insights & trackers ---
+
+/** Ask a question across meeting history. LLM answers can take a while. */
+export async function askMeetings(question: string): Promise<AskResponse> {
+  return request<AskResponse>("/api/ask", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+    timeoutMs: 180_000,
+  });
+}
+
+export async function getTalkStats(meetingId: string): Promise<TalkStats> {
+  return request<TalkStats>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/talk-stats`,
+  );
+}
+
+export async function draftFollowupEmail(
+  meetingId: string,
+  instructions = "",
+): Promise<EmailDraft> {
+  return request<EmailDraft>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/draft-email`,
+    {
+      method: "POST",
+      body: JSON.stringify({ instructions }),
+      timeoutMs: 180_000,
+    },
+  );
+}
+
+export async function getTrackers(): Promise<Tracker[]> {
+  return request<Tracker[]>("/api/trackers");
+}
+
+export async function createTracker(tracker: {
+  name: string;
+  keywords: string[];
+  enabled?: boolean;
+}): Promise<Tracker> {
+  return request<Tracker>("/api/trackers", {
+    method: "POST",
+    body: JSON.stringify(tracker),
+  });
+}
+
+export async function updateTracker(
+  trackerId: string,
+  fields: Partial<Pick<Tracker, "name" | "keywords" | "enabled">>,
+): Promise<Tracker> {
+  return request<Tracker>(`/api/trackers/${encodeURIComponent(trackerId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteTracker(trackerId: string): Promise<void> {
+  await request(`/api/trackers/${encodeURIComponent(trackerId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getTrackerHits(trackerId: string): Promise<TrackerHit[]> {
+  return request<TrackerHit[]>(
+    `/api/trackers/${encodeURIComponent(trackerId)}/hits`,
+  );
+}
+
+export async function getMeetingTrackerHits(
+  meetingId: string,
+): Promise<TrackerHit[]> {
+  return request<TrackerHit[]>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/tracker-hits`,
   );
 }

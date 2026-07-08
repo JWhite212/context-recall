@@ -15,8 +15,8 @@ from src.db.database import SCHEMA_VERSION, Database
 
 
 @pytest.mark.asyncio
-async def test_schema_version_is_v10():
-    assert SCHEMA_VERSION == 10
+async def test_schema_version_covers_v10():
+    assert SCHEMA_VERSION >= 10
 
 
 @pytest.mark.asyncio
@@ -28,7 +28,7 @@ async def test_fresh_install_creates_reprocess_jobs_table(tmp_path):
     try:
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 10
+        assert row[0] == SCHEMA_VERSION
 
         # Table exists.
         cursor = await db.conn.execute(
@@ -112,7 +112,7 @@ async def test_migration_from_v9_creates_reprocess_jobs(tmp_path):
     try:
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 10
+        assert row[0] == SCHEMA_VERSION
 
         # Old data preserved.
         cursor = await db.conn.execute("SELECT title FROM meetings WHERE id = ?", ("v9-meeting",))
@@ -143,7 +143,7 @@ async def test_migration_is_idempotent(tmp_path):
     try:
         cursor = await db2.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 10
+        assert row[0] == SCHEMA_VERSION
 
         # Table still exists and is still empty.
         cursor = await db2.conn.execute("SELECT COUNT(*) FROM reprocess_jobs")

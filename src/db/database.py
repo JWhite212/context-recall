@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 14
 
 _vec_available = False
 
@@ -228,6 +228,99 @@ CREATE TABLE IF NOT EXISTS reprocess_jobs (
 );
 """
 
+PEOPLE_SQL = """
+CREATE TABLE IF NOT EXISTS people (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    aliases_json TEXT DEFAULT '[]',
+    notes TEXT DEFAULT '',
+    is_me INTEGER DEFAULT 0,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_people_name ON people(name);
+"""
+
+CLIENTS_SQL = """
+CREATE TABLE IF NOT EXISTS clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    aliases_json TEXT DEFAULT '[]',
+    email_domains_json TEXT DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(name);
+"""
+
+PROJECTS_SQL = """
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    aliases_json TEXT DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_client ON projects(client_id);
+CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+"""
+
+TRACKERS_SQL = """
+CREATE TABLE IF NOT EXISTS trackers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    keywords_json TEXT DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+"""
+
+TRACKER_HITS_SQL = """
+CREATE TABLE IF NOT EXISTS tracker_hits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tracker_id TEXT NOT NULL,
+    meeting_id TEXT NOT NULL,
+    segment_index INTEGER NOT NULL,
+    matched_keyword TEXT NOT NULL,
+    matched_text TEXT DEFAULT '',
+    start_time REAL DEFAULT 0,
+    created_at REAL NOT NULL,
+    FOREIGN KEY (tracker_id) REFERENCES trackers(id) ON DELETE CASCADE,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracker_hits_tracker ON tracker_hits(tracker_id);
+CREATE INDEX IF NOT EXISTS idx_tracker_hits_meeting ON tracker_hits(meeting_id);
+"""
+
+VOICE_PROFILES_SQL = """
+CREATE TABLE IF NOT EXISTS voice_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    dim INTEGER NOT NULL,
+    source_meeting_id TEXT,
+    speaker_label TEXT DEFAULT '',
+    segment_count INTEGER DEFAULT 0,
+    duration_seconds REAL DEFAULT 0,
+    created_at REAL NOT NULL,
+    FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_profiles_person ON voice_profiles(person_id);
+"""
+
 
 _ALLOWED_TABLES = frozenset(
     {
@@ -240,6 +333,12 @@ _ALLOWED_TABLES = frozenset(
         "notifications",
         "prep_briefings",
         "reprocess_jobs",
+        "people",
+        "voice_profiles",
+        "clients",
+        "projects",
+        "trackers",
+        "tracker_hits",
     }
 )
 _ALLOWED_COL_TYPES = frozenset({"TEXT", "REAL", "INTEGER", "BLOB"})
@@ -411,6 +510,23 @@ class Database:
             await _safe_add_column(self.conn, "meetings", "series_id", "TEXT", "NULL")
             # Reprocess job durability (v10).
             await self.conn.executescript(REPROCESS_JOBS_SQL)
+            # Notion page identity for reprocess update-or-create (v11).
+            await _safe_add_column(self.conn, "meetings", "notion_page_id", "TEXT", "''")
+            # People directory + voice profiles (v12).
+            await self.conn.executescript(PEOPLE_SQL)
+            await self.conn.executescript(VOICE_PROFILES_SQL)
+            await _safe_add_column(self.conn, "speaker_mappings", "person_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "speaker_mappings", "confidence", "REAL", "NULL")
+            # Clients / projects + meeting assignment (v13).
+            await self.conn.executescript(CLIENTS_SQL)
+            await self.conn.executescript(PROJECTS_SQL)
+            await _safe_add_column(self.conn, "meetings", "client_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "meetings", "project_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "meetings", "assignment_source", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "assignment_confidence", "REAL", "0.0")
+            # Keyword trackers (v14).
+            await self.conn.executescript(TRACKERS_SQL)
+            await self.conn.executescript(TRACKER_HITS_SQL)
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -501,9 +617,55 @@ class Database:
             # DB so a daemon restart can detect and recover stuck rows that
             # were left in 'transcribing' by a previous process.
             await self.conn.executescript(REPROCESS_JOBS_SQL)
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 10")
             await self.conn.commit()
             logger.info("Database migrated to version 10 (reprocess jobs)")
             current_version = 10
+        if current_version < 11:
+            # Notion page identity: reprocess archives the previously
+            # written page and stores the replacement's id, so re-runs
+            # never accumulate duplicate Notion pages.
+            await _safe_add_column(self.conn, "meetings", "notion_page_id", "TEXT", "''")
+            await self.conn.execute("PRAGMA user_version = 11")
+            await self.conn.commit()
+            logger.info("Database migrated to version 11 (notion page identity)")
+            current_version = 11
+        if current_version < 12:
+            # People directory + voice profiles: persistent cross-meeting
+            # person identities, ECAPA voice-embedding enrolment samples,
+            # and person links on per-meeting speaker mappings.
+            await self.conn.executescript(PEOPLE_SQL)
+            await self.conn.executescript(VOICE_PROFILES_SQL)
+            # Defensive: an unusual DB may lack speaker_mappings entirely
+            # (IF NOT EXISTS makes this a no-op everywhere else).
+            await self.conn.executescript(SPEAKER_MAPPINGS_SQL)
+            await _safe_add_column(self.conn, "speaker_mappings", "person_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "speaker_mappings", "confidence", "REAL", "NULL")
+            await self.conn.execute("PRAGMA user_version = 12")
+            await self.conn.commit()
+            logger.info("Database migrated to version 12 (people + voice profiles)")
+            current_version = 12
+        if current_version < 13:
+            # Clients / projects: entities with descriptions that feed the
+            # summariser and auto-tagger; meetings gain an assignment with
+            # source ('auto' | 'manual') and confidence.
+            await self.conn.executescript(CLIENTS_SQL)
+            await self.conn.executescript(PROJECTS_SQL)
+            await _safe_add_column(self.conn, "meetings", "client_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "meetings", "project_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "meetings", "assignment_source", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "assignment_confidence", "REAL", "0.0")
+            await self.conn.execute("PRAGMA user_version = 13")
+            await self.conn.commit()
+            logger.info("Database migrated to version 13 (clients + projects)")
+            current_version = 13
+        if current_version < 14:
+            # Keyword trackers: user-defined topics watched across meetings.
+            await self.conn.executescript(TRACKERS_SQL)
+            await self.conn.executescript(TRACKER_HITS_SQL)
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 14 (keyword trackers)")
+            current_version = 14
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

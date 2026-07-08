@@ -39,6 +39,11 @@ _MUTABLE_COLUMNS = frozenset(
         "teams_join_url",
         "teams_meeting_id",
         "series_id",
+        "notion_page_id",
+        "client_id",
+        "project_id",
+        "assignment_source",
+        "assignment_confidence",
         "updated_at",
     }
 )
@@ -69,6 +74,11 @@ class MeetingRecord:
     teams_join_url: str = ""
     teams_meeting_id: str = ""
     series_id: str | None = None
+    notion_page_id: str = ""
+    client_id: str | None = None
+    project_id: str | None = None
+    assignment_source: str = ""
+    assignment_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +101,11 @@ class MeetingRecord:
             "teams_join_url": self.teams_join_url,
             "teams_meeting_id": self.teams_meeting_id,
             "series_id": self.series_id,
+            "notion_page_id": self.notion_page_id,
+            "client_id": self.client_id,
+            "project_id": self.project_id,
+            "assignment_source": self.assignment_source,
+            "assignment_confidence": self.assignment_confidence,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -121,6 +136,24 @@ class MeetingRecord:
         except (IndexError, KeyError):
             pass
 
+        notion_page_id = ""
+        try:
+            notion_page_id = row["notion_page_id"] or ""
+        except (IndexError, KeyError):
+            pass
+
+        client_id = None
+        project_id = None
+        assignment_source = ""
+        assignment_confidence = 0.0
+        try:
+            client_id = row["client_id"]
+            project_id = row["project_id"]
+            assignment_source = row["assignment_source"] or ""
+            assignment_confidence = row["assignment_confidence"] or 0.0
+        except (IndexError, KeyError):
+            pass
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -143,6 +176,11 @@ class MeetingRecord:
             teams_join_url=teams_join_url,
             teams_meeting_id=teams_meeting_id,
             series_id=series_id,
+            notion_page_id=notion_page_id,
+            client_id=client_id,
+            project_id=project_id,
+            assignment_source=assignment_source,
+            assignment_confidence=assignment_confidence,
         )
 
 
@@ -241,8 +279,10 @@ class MeetingRepository:
         status: str | None = None,
         tag: str | None = None,
         sort: str | None = None,
+        client_id: str | None = None,
+        project_id: str | None = None,
     ) -> list[MeetingRecord]:
-        """List meetings with optional status/tag filters and sort order."""
+        """List meetings with optional status/tag/assignment filters."""
         conditions: list[str] = []
         params: list = []
         if status:
@@ -251,6 +291,12 @@ class MeetingRepository:
         if tag:
             conditions.append("EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)")
             params.append(tag)
+        if client_id:
+            conditions.append("client_id = ?")
+            params.append(client_id)
+        if project_id:
+            conditions.append("project_id = ?")
+            params.append(project_id)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         order = self._SORT_MAP.get(sort or "", "started_at DESC")
         assert order in self._SAFE_ORDERS, f"Unsafe sort order: {order}"
@@ -318,8 +364,14 @@ class MeetingRepository:
             await self._db.conn.commit()
             return cursor.rowcount > 0
 
-    async def count_meetings(self, status: str | None = None, tag: str | None = None) -> int:
-        """Count total meetings, optionally filtered by status and/or tag."""
+    async def count_meetings(
+        self,
+        status: str | None = None,
+        tag: str | None = None,
+        client_id: str | None = None,
+        project_id: str | None = None,
+    ) -> int:
+        """Count total meetings, mirroring list_meetings' filters."""
         conditions: list[str] = []
         params: list = []
         if status:
@@ -328,6 +380,12 @@ class MeetingRepository:
         if tag:
             conditions.append("EXISTS (SELECT 1 FROM json_each(tags) WHERE json_each.value = ?)")
             params.append(tag)
+        if client_id:
+            conditions.append("client_id = ?")
+            params.append(client_id)
+        if project_id:
+            conditions.append("project_id = ?")
+            params.append(project_id)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         cursor = await self._db.conn.execute(f"SELECT COUNT(*) FROM meetings {where}", params)
         row = await cursor.fetchone()
@@ -977,23 +1035,37 @@ class MeetingRepository:
     # ------------------------------------------------------------------
 
     async def set_speaker_name(
-        self, meeting_id: str, speaker_id: str, display_name: str, source: str = "manual"
+        self,
+        meeting_id: str,
+        speaker_id: str,
+        display_name: str,
+        source: str = "manual",
+        person_id: str | None = None,
+        confidence: float | None = None,
     ) -> None:
         """Set or update the display name for a speaker in a meeting.
 
         Also updates the transcript_json to replace speaker labels.
+        ``person_id`` links the mapping to a people-directory entry;
+        ``confidence`` records how sure an automatic source (voice
+        matching) was.
         """
+        if confidence is not None and not (0.0 <= confidence <= 1.0):
+            raise ValueError(f"confidence must be within [0, 1], got {confidence!r}")
         now = time.time()
         async with self._db.write_lock:
             await self._db.conn.execute(
                 """INSERT INTO speaker_mappings
-                   (meeting_id, speaker_id, display_name, source, created_at)
-                   VALUES (?, ?, ?, ?, ?)
+                   (meeting_id, speaker_id, display_name, source, person_id,
+                    confidence, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET
                        display_name = excluded.display_name,
                        source = excluded.source,
+                       person_id = excluded.person_id,
+                       confidence = excluded.confidence,
                        created_at = excluded.created_at""",
-                (meeting_id, speaker_id, display_name, source, now),
+                (meeting_id, speaker_id, display_name, source, person_id, confidence, now),
             )
             await self._db.conn.commit()
 
@@ -1016,7 +1088,7 @@ class MeetingRepository:
     async def get_speaker_names(self, meeting_id: str) -> list[dict]:
         """Get all speaker name mappings for a meeting."""
         cursor = await self._db.conn.execute(
-            "SELECT speaker_id, display_name, source, created_at "
+            "SELECT speaker_id, display_name, source, person_id, confidence, created_at "
             "FROM speaker_mappings WHERE meeting_id = ? ORDER BY created_at",
             (meeting_id,),
         )
@@ -1026,6 +1098,8 @@ class MeetingRepository:
                 "speaker_id": row["speaker_id"],
                 "display_name": row["display_name"],
                 "source": row["source"],
+                "person_id": row["person_id"],
+                "confidence": row["confidence"],
                 "created_at": row["created_at"],
             }
             for row in rows

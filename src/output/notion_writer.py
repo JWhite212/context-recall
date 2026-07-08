@@ -43,6 +43,10 @@ class NotionWriter:
         # The orchestrator emits a pipeline.warning so the UI can surface
         # "Notion output skipped: <reason>" rather than failing silently.
         self.last_error: str | None = None
+        # Set after a successful write() to the created page's id. The
+        # pipeline persists it on the meeting row so a reprocess can
+        # archive the old page instead of accumulating duplicates.
+        self.last_page_id: str | None = None
 
     def _get_client(self) -> NotionClient:
         """Lazy-initialise the Notion client."""
@@ -212,6 +216,7 @@ class NotionWriter:
         ``last_error`` is set with a human-readable message.
         """
         self.last_error = None
+        self.last_page_id = None
         if not self._config.database_id:
             raise ValueError(
                 "Notion database ID not set. Add it to config.yaml under notion.database_id."
@@ -275,6 +280,7 @@ class NotionWriter:
 
         page_url = response.get("url", "")
         page_id = response.get("id", "")
+        self.last_page_id = page_id or None
 
         # Append remaining blocks if the summary exceeded 100.
         if len(blocks) > 100:
@@ -310,3 +316,25 @@ class NotionWriter:
 
         logger.info("Notion page created: %s", page_url)
         return page_url
+
+    def archive_page(self, page_id: str) -> bool:
+        """Archive a previously created page (best-effort).
+
+        Used by reprocessing: the replacement page is written by a
+        subsequent ``write()``, so the stale one is archived rather than
+        left as a duplicate. Failures are logged, never raised — a page
+        the user already deleted in Notion must not fail the pipeline.
+        """
+        if not page_id:
+            return False
+        try:
+            client = self._get_client()
+            self._call_with_retry(
+                lambda: client.pages.update(page_id=page_id, archived=True),
+                description="pages.update(archived)",
+            )
+        except Exception as e:
+            logger.warning("Could not archive Notion page %s: %s", page_id, e)
+            return False
+        logger.info("Archived previous Notion page %s", page_id)
+        return True

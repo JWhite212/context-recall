@@ -68,8 +68,11 @@ huggingface-hub==1.14.0
     # via
     #   mlx-whisper
     #   sentence-transformers
+    #   speechbrain
     #   tokenizers
     #   transformers
+hyperpyyaml==1.2.3
+    # via speechbrain
 idna==3.13
     # via
     #   anyio
@@ -80,7 +83,9 @@ jinja2==3.1.6
 jiter==0.14.0
     # via anthropic
 joblib==1.5.3
-    # via scikit-learn
+    # via
+    #   scikit-learn
+    #   speechbrain
 llvmlite==0.47.0
     # via numba
 markdown-it-py==4.1.0
@@ -118,10 +123,12 @@ numpy==2.4.4
     #   scipy
     #   sentence-transformers
     #   soundfile
+    #   speechbrain
     #   transformers
 packaging==26.2
     # via
     #   huggingface-hub
+    #   speechbrain
     #   transformers
 pycparser==3.0
     # via cffi
@@ -149,6 +156,7 @@ pyyaml==6.0.3
     # via
     #   -r requirements.in
     #   huggingface-hub
+    #   hyperpyyaml
     #   transformers
     #   uvicorn
 regex==2026.4.4
@@ -156,9 +164,15 @@ regex==2026.4.4
     #   tiktoken
     #   transformers
 requests==2.33.1
-    # via tiktoken
+    # via
+    #   speechbrain
+    #   tiktoken
 rich==15.0.0
     # via typer
+ruamel-yaml==0.18.17
+    # via hyperpyyaml
+ruamel-yaml-clib==0.2.15
+    # via ruamel-yaml
 safetensors==0.7.0
     # via transformers
 scikit-learn==1.8.0
@@ -168,8 +182,11 @@ scipy==1.17.1
     #   mlx-whisper
     #   scikit-learn
     #   sentence-transformers
+    #   speechbrain
 sentence-transformers==5.4.1
     # via -r requirements.in
+sentencepiece==0.2.1
+    # via speechbrain
 shellingham==1.5.4
     # via typer
 sniffio==1.3.1
@@ -177,6 +194,10 @@ sniffio==1.3.1
 sounddevice==0.5.5
     # via -r requirements.in
 soundfile==0.13.1
+    # via
+    #   -r requirements.in
+    #   speechbrain
+speechbrain==1.1.0
     # via -r requirements.in
 sqlite-vec==0.1.9
     # via -r requirements.in
@@ -196,11 +217,17 @@ torch==2.11.0
     # via
     #   mlx-whisper
     #   sentence-transformers
+    #   speechbrain
+torchaudio==2.11.0
+    # via
+    #   -r requirements.in
+    #   speechbrain
 tqdm==4.67.3
     # via
     #   huggingface-hub
     #   mlx-whisper
     #   sentence-transformers
+    #   speechbrain
     #   transformers
 transformers==5.8.0
     # via sentence-transformers

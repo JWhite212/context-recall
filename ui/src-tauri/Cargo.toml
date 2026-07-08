@@ -1,6 +1,6 @@
 [package]
 name = "context-recall"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first macOS meeting transcription, recall, and summarisation assistant"
 authors = ["Jamie White"]
 edition = "2021"

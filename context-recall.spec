@@ -41,6 +41,9 @@ datas += collect_data_files("sounddevice")
 binaries += collect_dynamic_libs("soundfile")
 datas += collect_data_files("soundfile")
 
+# speechbrain ships yaml/log-config data its inference classes read.
+datas += collect_data_files("speechbrain")
+
 a = Analysis(
     ["src/__main__.py"],
     pathex=["."],
@@ -80,6 +83,12 @@ a = Analysis(
         "notion_client",
         "slugify",
         "yaml",
+        # Voice identification + semantic search (torch stack)
+        "torch",
+        "torchaudio",
+        "speechbrain",
+        "hyperpyyaml",
+        "sentence_transformers",
         # The full src.* tree (pipeline, API routes, intelligence modules,
         # platform adapters, utilities) is enumerated by
         # collect_submodules("src") below — this picks up lazy imports like
@@ -92,7 +101,10 @@ a = Analysis(
     + collect_submodules("uvicorn")
     + collect_submodules("starlette")
     + collect_submodules("mlx")
-    + collect_submodules("mlx_whisper"),
+    + collect_submodules("mlx_whisper")
+    # speechbrain lazy-loads submodules via importutils, invisible to
+    # static analysis — enumerate the whole package.
+    + collect_submodules("speechbrain"),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -114,18 +126,14 @@ a = Analysis(
         "ruff",
         "pip",
         "setuptools",
-        # torch (~520 MB with libtorch) is only reachable through
-        # mlx_whisper.torch_whisper — the offline weight-conversion module
-        # the runtime transcription path never imports — and through
-        # sentence-transformers. Excluding the stack roughly halves the
-        # bundle. src/embeddings.py degrades gracefully (semantic search
-        # falls back to FTS5 keyword search) via is_embeddings_available().
-        "torch",
-        "torchgen",
-        "functorch",
-        "sentence_transformers",
-        "transformers",
-        "sklearn",
+        # torch was excluded until v0.2.0 (halved the bundle) because it
+        # was only reachable via mlx_whisper's offline weight converter
+        # and sentence-transformers. It now earns its ~520 MB: voice
+        # identification (speechbrain ECAPA) hard-requires torch +
+        # torchaudio, and with torch aboard sentence-transformers gives
+        # the packaged daemon working semantic search instead of the
+        # FTS5-only fallback. Re-exclude only if voice_id + embeddings
+        # are both retired.
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

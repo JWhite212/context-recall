@@ -90,3 +90,30 @@ async def test_delete(ai_repo, meeting_id):
     item_id = await ai_repo.create(meeting_id=meeting_id, title="Delete me")
     await ai_repo.delete(item_id)
     assert await ai_repo.get(item_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_extracted_for_meeting_spares_manual_items(ai_repo, meeting_id):
+    """Reprocess replaces the previous extraction round; the user's
+    manually created items must survive untouched."""
+    await ai_repo.create(meeting_id=meeting_id, title="Extracted A", source="extracted")
+    await ai_repo.create(meeting_id=meeting_id, title="Extracted B", source="extracted")
+    manual_id = await ai_repo.create(meeting_id=meeting_id, title="Manual", source="manual")
+
+    deleted = await ai_repo.delete_extracted_for_meeting(meeting_id)
+
+    assert deleted == 2
+    remaining = await ai_repo.list_by_meeting(meeting_id)
+    assert [i["id"] for i in remaining] == [manual_id]
+
+
+@pytest.mark.asyncio
+async def test_delete_extracted_scoped_to_meeting(ai_repo, meeting_id, repo):
+    other = await repo.create_meeting(started_at=1700000100)
+    await ai_repo.create(meeting_id=meeting_id, title="Mine", source="extracted")
+    await ai_repo.create(meeting_id=other, title="Theirs", source="extracted")
+
+    await ai_repo.delete_extracted_for_meeting(meeting_id)
+
+    assert await ai_repo.list_by_meeting(meeting_id) == []
+    assert len(await ai_repo.list_by_meeting(other)) == 1

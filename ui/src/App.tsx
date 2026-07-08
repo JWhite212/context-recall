@@ -25,6 +25,10 @@ import { ActionItemList } from "./components/action-items/ActionItemList";
 import { PrepBriefing } from "./components/prep/PrepBriefing";
 import { SeriesList } from "./components/series/SeriesList";
 import { SeriesDetail } from "./components/series/SeriesDetail";
+import { PeopleView } from "./components/people/PeopleView";
+import { ClientsView } from "./components/clients/ClientsView";
+import { AskView } from "./components/ask/AskView";
+import { TrackersView } from "./components/trackers/TrackersView";
 import { CommandPalette } from "./components/common/CommandPalette";
 import { NotificationPanel } from "./components/notifications/NotificationPanel";
 import { ToastProvider } from "./components/common/Toast";
@@ -138,6 +142,10 @@ const router = createBrowserRouter(
       <Route path="/prep/:meetingId" element={boundary(<PrepBriefing />)} />
       <Route path="/series" element={boundary(<SeriesList />)} />
       <Route path="/series/:id" element={boundary(<SeriesDetail />)} />
+      <Route path="/people" element={boundary(<PeopleView />)} />
+      <Route path="/clients" element={boundary(<ClientsView />)} />
+      <Route path="/ask" element={boundary(<AskView />)} />
+      <Route path="/trackers" element={boundary(<TrackersView />)} />
       <Route path="/search" element={boundary(<Search />)} />
       <Route path="/settings" element={boundary(<Settings />)} />
     </Route>,

@@ -42,6 +42,30 @@ Approximately 67k tokens at ~1.3 tokens/word, fitting within
 Claude's 200k context window and most Ollama models' windows.
 """
 
+
+def _apply_extra_context(system_prompt: str, extra_context: str | None) -> str:
+    """Append trusted user-provided meeting context to a system prompt.
+
+    Used to feed matched client/project descriptions to the model so it
+    gets names, terminology and emphasis right. Clearly fenced and
+    labelled as background — not transcript content — so it cannot be
+    confused with speech to summarise.
+    """
+    if not extra_context:
+        return system_prompt
+    fence = "=" * 40
+    return (
+        f"{system_prompt}\n\n"
+        "The user provided background context for this meeting "
+        "(client/project information). Treat it as trusted background "
+        "for names, terminology and relevance — it is NOT transcript "
+        "content:\n"
+        f"{fence} BEGIN MEETING CONTEXT {fence}\n"
+        f"{extra_context}\n"
+        f"{fence} END MEETING CONTEXT {fence}"
+    )
+
+
 _ALLOWED_OLLAMA_HOSTS = {"localhost", "127.0.0.1", "::1"}
 _ALLOWED_OLLAMA_PORTS = {11434, 80, 443}
 
@@ -265,6 +289,7 @@ class Summariser:
         text: str,
         word_count: int,
         template: SummaryTemplate | None = None,
+        extra_context: str | None = None,
     ) -> MeetingSummary:
         """Summarise a long transcript by chunking for Claude."""
         chunks = self._split_into_chunks(text)
@@ -314,7 +339,9 @@ class Summariser:
             f"cohesive meeting summary using the standard format.\n\n"
             f"{combined}"
         )
-        system_prompt = template.system_prompt if template else SUMMARISATION_PROMPT
+        system_prompt = _apply_extra_context(
+            template.system_prompt if template else SUMMARISATION_PROMPT, extra_context
+        )
         raw_markdown = self._claude_chat(
             system_prompt,
             consolidation_msg,
@@ -334,6 +361,7 @@ class Summariser:
         self,
         transcript: Transcript,
         template: SummaryTemplate | None = None,
+        extra_context: str | None = None,
     ) -> MeetingSummary:
         """Summarise using the Anthropic Claude API."""
         text, word_count = self._prepare_transcript(transcript)
@@ -344,6 +372,7 @@ class Summariser:
                 text,
                 word_count,
                 template,
+                extra_context,
             )
 
         logger.info(
@@ -357,7 +386,9 @@ class Summariser:
             text,
             word_count,
         )
-        system_prompt = template.system_prompt if template else SUMMARISATION_PROMPT
+        system_prompt = _apply_extra_context(
+            template.system_prompt if template else SUMMARISATION_PROMPT, extra_context
+        )
         raw_markdown = self._claude_chat(
             system_prompt,
             user_content,
@@ -530,6 +561,7 @@ class Summariser:
         text: str,
         word_count: int,
         template: SummaryTemplate | None = None,
+        extra_context: str | None = None,
     ) -> MeetingSummary:
         """Summarise a long transcript by chunking for Ollama."""
         model = self._config.ollama_model
@@ -584,7 +616,9 @@ class Summariser:
             f"cohesive meeting summary using the standard format.\n\n"
             f"{combined}"
         )
-        system_prompt = template.system_prompt if template else SUMMARISATION_PROMPT
+        system_prompt = _apply_extra_context(
+            template.system_prompt if template else SUMMARISATION_PROMPT, extra_context
+        )
         raw_markdown = self._ollama_chat(
             base_url,
             model,
@@ -597,6 +631,7 @@ class Summariser:
         self,
         transcript: Transcript,
         template: SummaryTemplate | None = None,
+        extra_context: str | None = None,
     ) -> MeetingSummary:
         """Summarise using a local Ollama instance."""
         text, word_count = self._prepare_transcript(transcript)
@@ -609,6 +644,7 @@ class Summariser:
                 text,
                 word_count,
                 template,
+                extra_context,
             )
 
         logger.info(
@@ -622,7 +658,9 @@ class Summariser:
             text,
             word_count,
         )
-        system_prompt = template.system_prompt if template else SUMMARISATION_PROMPT
+        system_prompt = _apply_extra_context(
+            template.system_prompt if template else SUMMARISATION_PROMPT, extra_context
+        )
         raw_markdown = self._ollama_chat(
             base_url,
             model,
@@ -631,29 +669,46 @@ class Summariser:
         )
         return MeetingSummary.from_markdown(raw_markdown)
 
+    def chat(self, system: str, user: str) -> str:
+        """One-shot chat completion on the configured backend.
+
+        The public seam for features that need an LLM call outside
+        summarisation (ask-your-meetings, follow-up drafts, action-item
+        extraction, auto-tagging) — so they stop reaching into the
+        private backend methods.
+        """
+        if self._config.backend.lower() == "claude":
+            return self._claude_chat(system, user)
+        base_url = self._validate_ollama_url(self._config.ollama_base_url)
+        return self._ollama_chat(base_url, self._config.ollama_model, system, user)
+
     def summarise(
         self,
         transcript: Transcript,
         template: SummaryTemplate | None = None,
+        extra_context: str | None = None,
     ) -> MeetingSummary:
         """
         Generate a structured summary from a meeting transcript
         using the configured backend.
 
         When *template* is provided, its ``system_prompt`` is used
-        instead of the built-in ``SUMMARISATION_PROMPT``.
+        instead of the built-in ``SUMMARISATION_PROMPT``. When
+        *extra_context* is provided (e.g. matched client/project
+        descriptions), it is appended to the system prompt as trusted
+        background so the model gets names and terminology right.
         """
         backend = self._config.backend.lower()
 
         if backend == "claude":
-            summary = self._summarise_claude(transcript, template)
+            summary = self._summarise_claude(transcript, template, extra_context)
         elif backend == "ollama":
             try:
-                summary = self._summarise_ollama(transcript, template)
+                summary = self._summarise_ollama(transcript, template, extra_context)
             except TimeoutError:
                 if self._config.anthropic_api_key:
                     logger.warning("Ollama timed out. Falling back to Claude API...")
-                    summary = self._summarise_claude(transcript, template)
+                    summary = self._summarise_claude(transcript, template, extra_context)
                 else:
                     raise
         else:

@@ -432,3 +432,68 @@ class TestNotionRetryAndErrorHandling:
 
         assert url == "https://notion.so/p"
         assert writer.last_error is None
+
+
+class TestNotionPageIdentity:
+    """last_page_id + archive_page: the reprocess update-or-create story."""
+
+    def _summary(self) -> MeetingSummary:
+        return MeetingSummary(raw_markdown="## S\nBody.", title="T", tags=[])
+
+    def _transcript(self) -> Transcript:
+        return Transcript(
+            segments=[TranscriptSegment(start=0.0, end=1.0, text="Hi.")],
+            language="en",
+            language_probability=0.9,
+            duration_seconds=1.0,
+        )
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_write_records_last_page_id(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client.pages.create.return_value = {
+            "url": "https://notion.so/page-123",
+            "id": "page-123",
+        }
+        mock_client_cls.return_value = mock_client
+
+        writer = _make_writer(api_key="k", database_id="db")
+        writer.write(self._summary(), self._transcript(), time.time(), 60.0)
+
+        assert writer.last_page_id == "page-123"
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_failed_write_leaves_last_page_id_none(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client.pages.create.side_effect = _api_error(400)
+        mock_client_cls.return_value = mock_client
+
+        writer = _make_writer(api_key="k", database_id="db")
+        writer.last_page_id = "stale"
+        writer.write(self._summary(), self._transcript(), time.time(), 60.0)
+
+        assert writer.last_page_id is None
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_archive_page_marks_page_archived(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        writer = _make_writer(api_key="k", database_id="db")
+        assert writer.archive_page("old-page") is True
+
+        mock_client.pages.update.assert_called_once_with(page_id="old-page", archived=True)
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_archive_page_failure_is_swallowed(self, mock_client_cls):
+        """Archiving a page the user already deleted must not raise."""
+        mock_client = MagicMock()
+        mock_client.pages.update.side_effect = RuntimeError("page gone")
+        mock_client_cls.return_value = mock_client
+
+        writer = _make_writer(api_key="k", database_id="db")
+        assert writer.archive_page("gone-page") is False
+
+    def test_archive_page_empty_id_is_noop(self):
+        writer = _make_writer(api_key="k", database_id="db")
+        assert writer.archive_page("") is False

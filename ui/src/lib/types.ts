@@ -8,11 +8,7 @@ export interface SummaryTemplate {
 }
 
 export type DaemonState =
-  | "idle"
-  | "detecting"
-  | "recording"
-  | "processing"
-  | "unknown";
+  "idle" | "detecting" | "recording" | "processing" | "unknown";
 
 export type MeetingStatus =
   | "recording"
@@ -45,6 +41,36 @@ export interface Meeting {
   calendar_confidence: number;
   teams_join_url: string;
   teams_meeting_id: string;
+  series_id?: string | null;
+  notion_page_id?: string;
+  client_id?: string | null;
+  project_id?: string | null;
+  assignment_source?: string;
+  assignment_confidence?: number;
+}
+
+/** A client in the client/project store. */
+export interface Client {
+  id: string;
+  name: string;
+  description: string;
+  aliases: string[];
+  email_domains: string[];
+  status: "active" | "archived";
+  created_at: number;
+  updated_at: number;
+}
+
+/** A project, optionally belonging to a client. */
+export interface Project {
+  id: string;
+  client_id: string | null;
+  name: string;
+  description: string;
+  aliases: string[];
+  status: "active" | "archived";
+  created_at: number;
+  updated_at: number;
 }
 
 export interface CalendarMeetingsResponse {
@@ -94,7 +120,44 @@ export interface SpeakerMapping {
   speaker_id: string;
   display_name: string;
   source: string;
+  person_id?: string | null;
+  confidence?: number | null;
   created_at: number;
+}
+
+/** A person in the persistent people directory. */
+export interface Person {
+  id: string;
+  name: string;
+  email: string;
+  aliases: string[];
+  notes: string;
+  is_me: boolean;
+  sample_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Metadata for one enrolled voice-profile sample (no embedding blob). */
+export interface VoiceSample {
+  id: number;
+  person_id: string;
+  dim: number;
+  source_meeting_id: string | null;
+  speaker_label: string;
+  segment_count: number;
+  duration_seconds: number;
+  created_at: number;
+}
+
+export interface AssignPersonResponse {
+  meeting_id: string;
+  speaker_id: string;
+  person_id: string;
+  display_name: string;
+  enrolled: boolean;
+  reason: string | null;
+  sample_count: number;
 }
 
 /** Application config sections matching config.yaml. */
@@ -478,4 +541,62 @@ export interface PrepBriefing {
   open_action_items_json: string;
   generated_at: number;
   expires_at: number;
+}
+
+/** Ask-your-meetings response. */
+export interface AskSource {
+  index: number;
+  meeting_id: string;
+  title: string;
+  started_at: number;
+  snippet: string;
+}
+
+export interface AskResponse {
+  answer: string;
+  sources: AskSource[];
+  no_results: boolean;
+}
+
+/** Per-speaker talk-time statistics. */
+export interface TalkSpeaker {
+  speaker: string;
+  seconds: number;
+  percent: number;
+  turns: number;
+  longest_monologue_seconds: number;
+}
+
+export interface TalkStats {
+  speakers: TalkSpeaker[];
+  total_speaking_seconds: number;
+}
+
+/** Keyword tracker. */
+export interface Tracker {
+  id: string;
+  name: string;
+  keywords: string[];
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TrackerHit {
+  id: number;
+  tracker_id: string;
+  meeting_id: string;
+  segment_index: number;
+  matched_keyword: string;
+  matched_text: string;
+  start_time: number;
+  created_at: number;
+  tracker_name?: string;
+  meeting_title?: string;
+  meeting_started_at?: number;
+}
+
+export interface EmailDraft {
+  subject: string;
+  body: string;
 }
