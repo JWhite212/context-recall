@@ -29,7 +29,12 @@ router = APIRouter()
 _repo = None  # MeetingRepository
 _person_repo = None  # PersonRepository
 
-_SPEAKER_ID_RE = re.compile(r"^[a-zA-Z0-9_ -]+$")
+# Speaker labels are only ever used as parameterised SQL binds and dict keys
+# (no injection surface), so this is a permissive sanity check: any non-empty
+# run of printable characters up to 200 chars. It must accept real diariser
+# labels like "Me + Remote" (overlapping speech) and names with punctuation
+# or accents (e.g. "O'Brien", "María").
+_SPEAKER_ID_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,200}$")
 
 
 def init(repo, person_repo) -> None:
