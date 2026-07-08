@@ -1084,3 +1084,80 @@ def test_short_transcript_clears_stale_summary_fields(tmp_path, loop_thread):
     kwargs = repo.update_meeting.call_args.kwargs
     assert kwargs["summary_markdown"] is None
     assert kwargs["tags"] == []
+
+
+def _meeting_record(**kw):
+    from src.db.repository import MeetingRecord
+
+    base = dict(
+        id="m1",
+        title="",
+        started_at=1.0,
+        ended_at=None,
+        duration_seconds=None,
+        status="complete",
+        audio_path=None,
+        transcript_json=None,
+        summary_markdown=None,
+        tags=[],
+        language=None,
+        word_count=None,
+        created_at=1.0,
+        updated_at=1.0,
+    )
+    base.update(kw)
+    return MeetingRecord(**base)
+
+
+def test_select_template_prefers_manual(tmp_path, loop_thread):
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(
+        return_value=_meeting_record(template_source="manual", template_name="standup")
+    )
+    bridge = DbBridge(repo, loop_thread)
+    runner = _make_runner(_make_config(tmp_path), db=bridge)
+
+    tpl, source = runner._select_template_with_source(
+        "m1", _make_transcript(texts=("hello",)), [], None
+    )
+    assert tpl.name == "standup"
+    assert source == "manual"
+
+
+def test_select_template_auto_uses_selector(tmp_path, loop_thread, monkeypatch):
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_meeting_record())
+    bridge = DbBridge(repo, loop_thread)
+    config = _make_config(tmp_path)
+    config.summarisation.auto_select_template = True
+
+    class _FakeSelector:
+        def __init__(self, _cfg):
+            pass
+
+        def select(self, **_kw):
+            return "retro"
+
+    monkeypatch.setattr("src.pipeline_runner.TemplateSelector", _FakeSelector)
+    runner = _make_runner(config, db=bridge)
+
+    tpl, source = runner._select_template_with_source(
+        "m1", _make_transcript(texts=("hello",)), [], None
+    )
+    assert tpl.name == "retro"
+    assert source == "auto"
+
+
+def test_select_template_default_when_auto_off(tmp_path, loop_thread):
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_meeting_record())
+    bridge = DbBridge(repo, loop_thread)
+    config = _make_config(tmp_path)
+    config.summarisation.auto_select_template = False
+    runner = _make_runner(config, db=bridge)
+
+    tpl, source = runner._select_template_with_source(
+        "m1", _make_transcript(texts=("hello",)), [], None
+    )
+    assert tpl.name == config.summarisation.default_template
+    assert source == "default"
