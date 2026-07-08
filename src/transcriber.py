@@ -11,6 +11,7 @@ in ~/.cache/huggingface/hub/ by default.
 """
 
 import logging
+import re
 import time as _time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -21,6 +22,22 @@ import mlx_whisper
 from src.utils.config import TranscriptionConfig
 
 logger = logging.getLogger(__name__)
+
+# Canonical short phrases Whisper hallucinates over silence. Only suppressed
+# when the segment is short AND the model reports a high no-speech probability
+# (see Transcriber.transcribe), so a genuine mid-meeting "thank you" survives.
+KNOWN_HALLUCINATION_PHRASES = frozenset(
+    {
+        "thank you",
+        "thank you very much",
+        "thank you for watching",
+        "thanks for watching",
+        "please subscribe",
+        "you",
+        "bye",
+        "bye bye",
+    }
+)
 
 
 @dataclass
@@ -120,6 +137,32 @@ class Transcriber:
         if unique == 0:
             return 0.0
         return len(text) / unique
+
+    @staticmethod
+    def _is_phrase_repetition(text: str, min_repeats: int = 3) -> bool:
+        """Detect a short phrase repeated back-to-back (e.g. 'thank you.
+        thank you. thank you.') that the single-word filter misses."""
+        parts = [p.strip().lower() for p in re.split(r"[.!?]+", text) if p.strip()]
+        if len(parts) >= min_repeats and len(set(parts)) == 1:
+            return True
+        # Also catch whitespace-separated n-gram repeats without punctuation.
+        words = text.lower().split()
+        for n in (1, 2, 3):
+            if len(words) < n * min_repeats:
+                continue
+            grams = [tuple(words[i : i + n]) for i in range(0, len(words) - n + 1, n)]
+            run = 1
+            for i in range(1, len(grams)):
+                run = run + 1 if grams[i] == grams[i - 1] else 1
+                if run >= min_repeats:
+                    return True
+        return False
+
+    @staticmethod
+    def _is_known_hallucination_phrase(text: str) -> bool:
+        """True if the whole segment is a canonical silence hallucination."""
+        normalised = text.strip().lower().strip(".,!?").strip()
+        return normalised in KNOWN_HALLUCINATION_PHRASES
 
     def transcribe(
         self,
