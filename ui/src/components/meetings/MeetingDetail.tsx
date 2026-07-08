@@ -18,6 +18,7 @@ import {
 import { ActionItemCard } from "../action-items/ActionItemCard";
 import { AssignmentSelect } from "../clients/AssignmentSelect";
 import { MeetingInsights } from "./MeetingInsights";
+import { TemplateBadge } from "./TemplateBadge";
 import { AssignSpeakerMenu } from "../people/AssignSpeakerMenu";
 import { API_BASE } from "../../lib/constants";
 import { canRetryMeeting } from "../../lib/meetingStatus";
@@ -451,7 +452,7 @@ export function MeetingDetail() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [resummariseOpen, setResummariseOpen] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState("standard");
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const resummariseMenuRef = useRef<HTMLDivElement>(null);
   const audioSeekRef = useRef<AudioSeekHandle | null>(null);
@@ -820,8 +821,11 @@ export function MeetingDetail() {
               <div className="absolute left-0 mt-1 w-56 rounded-lg bg-surface-raised border border-border shadow-lg z-10 p-3 flex flex-col gap-2">
                 <label className="text-xs text-text-muted">Template</label>
                 <select
-                  value={selectedTemplate}
+                  value={
+                    selectedTemplate ?? meeting.template_name ?? "standard"
+                  }
                   onChange={(e) => setSelectedTemplate(e.target.value)}
+                  aria-label="template"
                   className="w-full bg-surface border border-border rounded-lg px-2 py-1.5 text-sm text-text-primary focus:outline-none focus:border-accent appearance-none cursor-pointer"
                 >
                   {templates.map((t) => (
@@ -838,7 +842,11 @@ export function MeetingDetail() {
                     Cancel
                   </button>
                   <button
-                    onClick={() => resummarise.mutate(selectedTemplate)}
+                    onClick={() =>
+                      resummarise.mutate(
+                        selectedTemplate ?? meeting.template_name ?? "standard",
+                      )
+                    }
                     disabled={resummarise.isPending}
                     className="px-2 py-1 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
                   >
@@ -849,6 +857,10 @@ export function MeetingDetail() {
             )}
           </div>
         )}
+        <TemplateBadge
+          name={meeting.template_name}
+          source={meeting.template_source}
+        />
         {resummarise.isError && (
           <span className="text-xs text-status-error">
             {resummarise.error instanceof Error
