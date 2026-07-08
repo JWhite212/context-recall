@@ -104,3 +104,35 @@ async def test_list_meetings_search_query(client):
     titles = [m["title"] for m in data["meetings"]]
     assert "Sprint Planning Alpha" in titles
     assert "Budget Review Beta" not in titles
+
+
+@pytest.mark.asyncio
+async def test_get_meeting_tags_returns_distinct(client):
+    c, repo = client
+    m1 = await repo.create_meeting(started_at=1000.0)
+    await repo.update_meeting(m1, tags=["acme", "budget"])
+    resp = c.get("/api/meetings/tags", headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.json()["tags"] == ["acme", "budget"]
+
+
+@pytest.mark.asyncio
+async def test_patch_meeting_tags_persists_and_normalises(client):
+    c, repo = client
+    m1 = await repo.create_meeting(started_at=1000.0)
+    resp = c.patch(
+        f"/api/meetings/{m1}/tags",
+        headers=_auth_headers(),
+        json={"tags": ["  budget ", "budget", "", "planning"]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["tags"] == ["budget", "planning"]
+    meeting = await repo.get_meeting(m1)
+    assert meeting.tags == ["budget", "planning"]
+
+
+@pytest.mark.asyncio
+async def test_patch_meeting_tags_missing_meeting_404s(client):
+    c, _ = client
+    resp = c.patch("/api/meetings/nope/tags", headers=_auth_headers(), json={"tags": ["x"]})
+    assert resp.status_code == 404
