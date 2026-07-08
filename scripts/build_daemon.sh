@@ -62,28 +62,64 @@ if [ -n "$LIBMLX" ] && [ -n "$METALLIB" ]; then
     echo "==> Ensured mlx.metallib sits next to libmlx.dylib"
 fi
 
-# Sign the daemon bundle AD-HOC by default. Counter-intuitive but
-# evidence-forced (2026-07-07): signing with an Apple Development
-# certificate WITHOUT an embedded provisioning profile makes tccd
-# reject the whole bundle — it cannot read the sealed
-# NSMicrophoneUsageDescription, silently zeroes every input stream, and
-# KILLS the process on an explicit permission request (OS_REASON_TCC).
-# The identical bundle signed ad-hoc prompts and records normally.
-# The cost: an ad-hoc cdhash changes per rebuild, so macOS re-prompts
-# for the microphone once after each deploy. Set
-# CONTEXT_RECALL_SIGN_IDENTITY to a PROPERLY PROVISIONED identity
-# (Developer ID, or Apple Development plus embedded.provisionprofile)
-# to make grants survive rebuilds.
-SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:--}"
+# Choose the signing identity (self-detecting, ad-hoc fallback). Resolution:
+#   1) explicit CONTEXT_RECALL_SIGN_IDENTITY=<name>  (Developer ID, etc.)
+#   2) auto-detected per-machine self-signed cert     (setup_signing_cert.sh)
+#   3) ad-hoc "-"                                      (CI, fresh clones, others)
+#
+# WHY cert over ad-hoc: an ad-hoc cdhash Designated Requirement changes every
+# rebuild, so the macOS microphone (TCC) grant dies on each deploy — recording
+# then silently captures zeros (RMS -100 dBFS on BOTH mic and BlackHole, since
+# a denied mic makes CoreAudio zero all input streams). A self-signed cert
+# yields a STABLE cert-leaf DR, so the grant survives. Run
+# scripts/setup_signing_cert.sh ONCE per machine to create it. A self-signed
+# cert is untrusted, so it is INVISIBLE to `security find-identity -p
+# codesigning` — probe with find-certificate, never find-identity.
+#
+# Do NOT use an "Apple Development" identity without an embedded provisioning
+# profile: tccd then rejects the bundle, zeroes the inputs, and KILLS the
+# daemon on an explicit permission request (OS_REASON_TCC, observed
+# 2026-07-07). Only ad-hoc / self-signed work for TCC here.
+SELF_SIGNED_CN="Context Recall Self-Signed"
 SIGN_IDENTIFIER="dev.jamiewhite.contextrecall.daemon"
-if [ "$SIGN_IDENTITY" = "-" ]; then
+SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:-}"
+
+if [ -z "$SIGN_IDENTITY" ]; then
+    if security find-certificate -c "$SELF_SIGNED_CN" >/dev/null 2>&1; then
+        SIGN_IDENTITY="$SELF_SIGNED_CN"
+        echo "==> Detected stable self-signed identity '$SELF_SIGNED_CN'"
+    else
+        SIGN_IDENTITY="-"
+    fi
+fi
+
+sign_adhoc() {
     echo "==> Ad-hoc signing daemon app bundle (identifier $SIGN_IDENTIFIER)"
+    echo "    NOTE: ad-hoc cdhash changes per rebuild -> macOS re-prompts for the"
+    echo "    microphone after each deploy. Run scripts/setup_signing_cert.sh once"
+    echo "    to make the grant survive rebuilds."
     codesign --force --sign - --identifier "$SIGN_IDENTIFIER" "$APP_DIR"
+}
+
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    sign_adhoc
 else
-    echo "==> Codesigning daemon app bundle with '$SIGN_IDENTITY'"
-    codesign --force --sign "$SIGN_IDENTITY" --identifier "$SIGN_IDENTIFIER" --timestamp=none "$APP_DIR"
+    echo "==> Codesigning daemon app bundle with '$SIGN_IDENTITY' (stable DR)"
+    # Attempt-and-fallback: a missing/renamed/locked identity degrades to ad-hoc
+    # instead of aborting the build under `set -euo pipefail`. Load-bearing for
+    # CI and fresh clones, which have no cert.
+    if ! codesign --force --sign "$SIGN_IDENTITY" \
+            --identifier "$SIGN_IDENTIFIER" --timestamp=none "$APP_DIR" 2>/dev/null; then
+        echo "    WARNING: signing with '$SIGN_IDENTITY' failed; falling back to ad-hoc."
+        sign_adhoc
+    fi
 fi
 codesign --verify --verbose=1 "$APP_DIR"
+
+# Echo the resulting DR so deploy logs confirm it is cert-leaf (stable) not
+# cdhash (volatile).
+echo "==> Daemon Designated Requirement:"
+codesign -d -r- "$APP_DIR" 2>&1 | sed 's/^/    /' || true
 
 # Report size.
 SIZE=$(du -sh "$BINARY" | cut -f1)

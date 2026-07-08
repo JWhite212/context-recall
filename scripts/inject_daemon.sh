@@ -41,6 +41,15 @@ if [ "$LINKS" -eq 0 ]; then
     exit 1
 fi
 
+# Warn (do not fail) if the injected daemon lost its stable cert-leaf DR — a
+# regression tripwire in case a future change re-signs the daemon ad-hoc and
+# silently resets the microphone grant. Ad-hoc builds (no cert) legitimately
+# have a cdhash DR, so this is informational only.
+if ! codesign -d -r- "$DEST_DIR/Context Recall Daemon.app" 2>&1 | grep -q 'certificate leaf'; then
+    echo "==> NOTE: injected daemon DR is cdhash-based (ad-hoc). The mic grant will"
+    echo "    reset on each rebuild. Run scripts/setup_signing_cert.sh for a stable grant."
+fi
+
 # Replacing resources invalidates the outer app's seal; re-sign ad-hoc
 # (the nested daemon bundle keeps its own stable-identity signature).
 echo "==> Re-sealing outer app"
