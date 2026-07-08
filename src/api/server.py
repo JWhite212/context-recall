@@ -145,7 +145,7 @@ class ApiServer:
         calendar_routes.init(self.repo)
         export_routes.init(self.repo)
         resummarise_routes.init(self.repo, self.event_bus)
-        reprocess_routes.init(self.repo, self.event_bus)
+        reprocess_routes.init(self.repo, self.event_bus, db=self.db)
         models_routes.init(self.event_bus, config_path=DEFAULT_CONFIG_PATH)
 
         # Initialise embedder for semantic search (if available).
