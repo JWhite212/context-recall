@@ -5,6 +5,7 @@ import {
   ApiError,
   createAutomationRule,
   createInsightDefinition,
+  describeApiError,
   exportMeeting,
   generatePrepForEvent,
   getCalendarEvents,
@@ -412,5 +413,22 @@ describe("meeting tags", () => {
     ) as unknown as typeof fetch;
 
     expect(await getMeetingTags()).toEqual(["x", "y"]);
+  });
+});
+
+describe("describeApiError", () => {
+  it("appends the backend detail for an ApiError", () => {
+    expect(
+      describeApiError(
+        new ApiError(422, "Invalid speaker_id format"),
+        "Failed to assign person",
+      ),
+    ).toBe("Failed to assign person: Invalid speaker_id format");
+  });
+
+  it("falls back to the message for a non-ApiError", () => {
+    expect(describeApiError(new Error("boom"), "Failed to assign person")).toBe(
+      "Failed to assign person",
+    );
   });
 });
