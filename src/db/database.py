@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 _vec_available = False
 
@@ -275,6 +275,35 @@ CREATE INDEX IF NOT EXISTS idx_projects_client ON projects(client_id);
 CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
 """
 
+TRACKERS_SQL = """
+CREATE TABLE IF NOT EXISTS trackers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    keywords_json TEXT DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+"""
+
+TRACKER_HITS_SQL = """
+CREATE TABLE IF NOT EXISTS tracker_hits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tracker_id TEXT NOT NULL,
+    meeting_id TEXT NOT NULL,
+    segment_index INTEGER NOT NULL,
+    matched_keyword TEXT NOT NULL,
+    matched_text TEXT DEFAULT '',
+    start_time REAL DEFAULT 0,
+    created_at REAL NOT NULL,
+    FOREIGN KEY (tracker_id) REFERENCES trackers(id) ON DELETE CASCADE,
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracker_hits_tracker ON tracker_hits(tracker_id);
+CREATE INDEX IF NOT EXISTS idx_tracker_hits_meeting ON tracker_hits(meeting_id);
+"""
+
 VOICE_PROFILES_SQL = """
 CREATE TABLE IF NOT EXISTS voice_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -308,6 +337,8 @@ _ALLOWED_TABLES = frozenset(
         "voice_profiles",
         "clients",
         "projects",
+        "trackers",
+        "tracker_hits",
     }
 )
 _ALLOWED_COL_TYPES = frozenset({"TEXT", "REAL", "INTEGER", "BLOB"})
@@ -621,9 +652,17 @@ class Database:
             await _safe_add_column(self.conn, "meetings", "project_id", "TEXT", "NULL")
             await _safe_add_column(self.conn, "meetings", "assignment_source", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "assignment_confidence", "REAL", "0.0")
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 13")
             await self.conn.commit()
             logger.info("Database migrated to version 13 (clients + projects)")
             current_version = 13
+        if current_version < 14:
+            # Keyword trackers: user-defined topics watched across meetings.
+            await self.conn.executescript(TRACKERS_SQL)
+            await self.conn.executescript(TRACKER_HITS_SQL)
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 14 (keyword trackers)")
+            current_version = 14
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

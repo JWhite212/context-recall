@@ -669,6 +669,19 @@ class Summariser:
         )
         return MeetingSummary.from_markdown(raw_markdown)
 
+    def chat(self, system: str, user: str) -> str:
+        """One-shot chat completion on the configured backend.
+
+        The public seam for features that need an LLM call outside
+        summarisation (ask-your-meetings, follow-up drafts, action-item
+        extraction, auto-tagging) — so they stop reaching into the
+        private backend methods.
+        """
+        if self._config.backend.lower() == "claude":
+            return self._claude_chat(system, user)
+        base_url = self._validate_ollama_url(self._config.ollama_base_url)
+        return self._ollama_chat(base_url, self._config.ollama_model, system, user)
+
     def summarise(
         self,
         transcript: Transcript,

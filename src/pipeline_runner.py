@@ -712,6 +712,10 @@ class PipelineRunner:
         except Exception:
             logger.warning("Client/project auto-assignment failed", exc_info=True)
         try:
+            await self._scan_trackers(meeting_id, transcript)
+        except Exception:
+            logger.warning("Tracker scan failed", exc_info=True)
+        try:
             await self._refresh_analytics(started_at)
         except Exception:
             logger.warning("Analytics refresh failed", exc_info=True)
@@ -825,6 +829,31 @@ class PipelineRunner:
             project_id=assignment.project_id,
             confidence=assignment.confidence,
         )
+
+    async def _scan_trackers(self, meeting_id: str, transcript) -> None:
+        """Match enabled keyword trackers against the fresh transcript."""
+        from src.trackers.repository import TrackerRepository
+        from src.trackers.scanner import scan_transcript
+
+        if self._db.database is None:
+            return
+        tracker_repo = TrackerRepository(self._db.database)
+        trackers = await tracker_repo.list_trackers(enabled_only=True)
+        if not trackers:
+            return
+        hits = scan_transcript(transcript, trackers)
+        await tracker_repo.replace_hits_for_meeting(meeting_id, hits)
+        if hits:
+            by_tracker: dict[str, int] = {}
+            for hit in hits:
+                by_tracker[hit["tracker_id"]] = by_tracker.get(hit["tracker_id"], 0) + 1
+            names = {t["id"]: t["name"] for t in trackers}
+            summary = [
+                {"tracker_id": tid, "name": names.get(tid, ""), "count": count}
+                for tid, count in by_tracker.items()
+            ]
+            logger.info("Tracker hits in meeting %s: %s", meeting_id, summary)
+            self._emit("tracker.hits", meeting_id=meeting_id, trackers=summary)
 
     async def _refresh_analytics(self, started_at: float) -> None:
         from src.action_items.repository import ActionItemRepository

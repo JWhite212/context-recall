@@ -989,3 +989,36 @@ def test_llm_auto_assignment_skipped_when_already_assigned(tmp_path, loop_thread
     asyncio.run(runner._post_process_async("m1", _make_transcript(), 1000.0, False))
 
     assigner_cls.assert_not_called()
+
+
+def test_tracker_scan_runs_in_post_processing(tmp_path, loop_thread, monkeypatch):
+    import src.trackers.repository as tracker_repo_mod
+
+    stored = {}
+
+    class FakeTrackerRepo:
+        def __init__(self, database):
+            pass
+
+        async def list_trackers(self, enabled_only=False):
+            return [{"id": "t1", "name": "Pricing", "enabled": True, "keywords": ["hello"]}]
+
+        async def replace_hits_for_meeting(self, meeting_id, hits):
+            stored["meeting_id"] = meeting_id
+            stored["hits"] = hits
+            return len(hits)
+
+    monkeypatch.setattr(tracker_repo_mod, "TrackerRepository", FakeTrackerRepo)
+
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_unassigned_meeting(client_id="c1"))
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    events, emit = _collect_events()
+    runner = _make_runner(_make_config(tmp_path), emit=emit, db=bridge)
+
+    asyncio.run(runner._post_process_async("m1", _make_transcript(), 1000.0, False))
+
+    assert stored["meeting_id"] == "m1"
+    assert stored["hits"][0]["matched_keyword"] == "hello"
+    hit_events = [e for e in events if e["type"] == "tracker.hits"]
+    assert hit_events and hit_events[0]["trackers"][0]["count"] == 1

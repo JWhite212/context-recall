@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.auth import _get_token, verify_token
 from src.api.events import EventBus
 from src.api.middleware import BodySizeLimitMiddleware, RateLimitMiddleware
+from src.api.routes import ask as ask_routes
 from src.api.routes import auth as auth_routes
 from src.api.routes import calendar as calendar_routes
 from src.api.routes import clients as clients_routes
@@ -26,6 +27,7 @@ from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
 from src.api.routes import diagnostics as diagnostics_routes
 from src.api.routes import export as export_routes
+from src.api.routes import meeting_insights as meeting_insights_routes
 from src.api.routes import meetings as meetings_routes
 from src.api.routes import models as models_routes
 from src.api.routes import people as people_routes
@@ -38,6 +40,7 @@ from src.api.routes import speakers as speakers_routes
 from src.api.routes import status as status_routes
 from src.api.routes import support_bundle as support_bundle_routes
 from src.api.routes import templates as templates_routes
+from src.api.routes import trackers as trackers_routes
 from src.api.websocket import ConnectionManager
 from src.db.database import Database
 from src.db.repository import MeetingRepository
@@ -166,6 +169,11 @@ class ApiServer:
 
         people_routes.init(self.repo, PersonRepository(self.db))
         clients_routes.init(self.repo, ClientProjectRepository(self.db))
+        ask_routes.init(self.repo, embedder)
+
+        from src.trackers.repository import TrackerRepository
+
+        trackers_routes.init(self.repo, TrackerRepository(self.db))
 
         # Register REST routers with auth dependency.
         auth_deps = [Depends(verify_token)]
@@ -186,6 +194,9 @@ class ApiServer:
         app.include_router(speakers_routes.router, dependencies=auth_deps)
         app.include_router(people_routes.router, dependencies=auth_deps)
         app.include_router(clients_routes.router, dependencies=auth_deps)
+        app.include_router(ask_routes.router, dependencies=auth_deps)
+        app.include_router(trackers_routes.router, dependencies=auth_deps)
+        app.include_router(meeting_insights_routes.router, dependencies=auth_deps)
         app.include_router(calendar_routes.router, dependencies=auth_deps)
         app.include_router(auth_routes.router, dependencies=auth_deps)
 
@@ -216,6 +227,7 @@ class ApiServer:
         )
 
         action_items_routes.init(ai_repo)
+        meeting_insights_routes.init(self.repo, ai_repo)
         series_routes.init(series_repo)
         analytics_routes.init(analytics_engine)
         notifications_routes.init(notif_repo)
