@@ -125,6 +125,8 @@ async def resummarise_meeting(meeting_id: str, template_name: str | None = None)
         summary_markdown=summary.raw_markdown,
         tags=summary.tags,
         status="complete",
+        template_name=template.name if template else meeting.template_name,
+        template_source="manual" if template else meeting.template_source,
     )
     await _repo.update_fts(meeting_id)
     if _event_bus:
