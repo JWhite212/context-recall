@@ -392,16 +392,6 @@ export async function mergeMeetings(
   });
 }
 
-export async function setMeetingLabel(
-  id: string,
-  label: string,
-): Promise<void> {
-  await request(`/api/meetings/${encodeURIComponent(id)}/label`, {
-    method: "PATCH",
-    body: JSON.stringify({ label }),
-  });
-}
-
 export async function getMeetingLabels(): Promise<string[]> {
   const data = await request<{ labels: string[] }>("/api/meetings/labels");
   return data.labels;
