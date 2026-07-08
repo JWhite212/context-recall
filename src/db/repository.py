@@ -450,6 +450,16 @@ class MeetingRepository:
         rows = await cursor.fetchall()
         return [row[0] for row in rows]
 
+    async def get_distinct_tags(self) -> list[str]:
+        """Return all unique non-empty tags across meetings, sorted."""
+        cursor = await self._db.conn.execute(
+            "SELECT DISTINCT je.value FROM meetings, json_each(meetings.tags) je "
+            "WHERE meetings.tags IS NOT NULL AND je.value != '' "
+            "ORDER BY je.value"
+        )
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
+
     async def cleanup_old_meetings(
         self, audio_retention_days: int, record_retention_days: int
     ) -> dict[str, int]:
