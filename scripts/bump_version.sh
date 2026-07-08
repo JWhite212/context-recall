@@ -14,8 +14,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$REPO_ROOT/ui/src-tauri/tauri.conf.json"
 echo "Updated ui/src-tauri/tauri.conf.json -> ${VERSION}"
 
-# Update ui/src-tauri/Cargo.toml (only the package version, not dependency versions)
-sed -i '' "/^\[package\]/,/^\[/{s/^version = \"[^\"]*\"/version = \"${VERSION}\"/}" "$REPO_ROOT/ui/src-tauri/Cargo.toml"
+# Update ui/src-tauri/Cargo.toml (only the package version, not dependency
+# versions). No brace group: BSD sed rejects `{s/…/…/}` on one line.
+sed -i '' "/^\[package\]/,/^\[/ s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" "$REPO_ROOT/ui/src-tauri/Cargo.toml"
 echo "Updated ui/src-tauri/Cargo.toml -> ${VERSION}"
 
 # Update ui/package.json
