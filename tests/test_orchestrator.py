@@ -2091,3 +2091,26 @@ def test_auto_arm_absent_when_calendar_import_disabled(tmp_path):
     app._maybe_start_auto_arm()
 
     assert app._auto_arm is None
+
+
+def test_ensure_audio_routing_emits_warning_on_router_error(app_with_mocked_api):
+    """A router that reports the switch did not take effect must surface a
+    pipeline.warning (source=routing), not fail silently (Bug #5)."""
+    from src.audio_routing import RoutingResult
+
+    app = app_with_mocked_api
+    app._config.audio.auto_route_system_audio = True
+    app._audio_router = MagicMock()
+    app._audio_router.ensure_routed.return_value = RoutingResult(
+        error="System audio routing did not take effect."
+    )
+    app._emit = MagicMock()
+
+    app._ensure_audio_routing()
+
+    routing_warnings = [
+        c
+        for c in app._emit.call_args_list
+        if c.args and c.args[0] == "pipeline.warning" and c.kwargs.get("source") == "routing"
+    ]
+    assert routing_warnings
