@@ -35,6 +35,20 @@ npm run build        # tsc + vite build (production bundle)
 
 The Tauri bundle ships a PyInstaller-built daemon as a sidecar at `ui/src-tauri/resources/context-recall-daemon/`. Locally that directory is empty (only `.gitkeep`); CI and `npm run tauri build` populate it. If `cargo check` complains about the missing path during a fresh clone, `mkdir -p ui/src-tauri/resources/context-recall-daemon && touch ui/src-tauri/resources/context-recall-daemon/.gitkeep` is the same stub CI uses.
 
+### Stable microphone grant across rebuilds (self-signed daemon signing)
+
+The daemon's macOS mic (TCC) grant is pinned to its code **Designated Requirement**. Ad-hoc signing produces a `cdhash` DR that changes every rebuild, so the grant dies on each deploy and recording silently captures zeros (RMS −100 dBFS on **both** mic and the BlackHole loopback — a denied mic makes CoreAudio zero all input streams). Run **once per machine**:
+
+```bash
+./scripts/setup_signing_cert.sh          # idempotent; --rotate to deliberately replace
+```
+
+This creates a per-machine self-signed identity (`CN="Context Recall Self-Signed"`) in your login keychain — the private key never leaves the keychain and nothing is committed. `build_daemon.sh` then auto-detects it (via `security find-certificate`, **not** `find-identity` — an untrusted cert is invisible to the latter) and signs the daemon with a **stable cert-leaf DR** (`identifier "dev.jamiewhite.contextrecall.daemon" and certificate leaf = H"…"`), so the grant survives all future rebuilds. Absent the cert (CI, fresh clones), the build **falls back to ad-hoc** — it never hard-fails. `CONTEXT_RECALL_SIGN_IDENTITY=<name>` still overrides.
+
+Deploy sequence that preserves the stable signature: `build_daemon.sh` (stable-signs the daemon) → `npm run tauri build` (mangles the bundled copy) → `scripts/inject_daemon.sh "<app>"` (restores the pristine stable-signed daemon, re-seals **only** the outer app). Nothing after `build_daemon.sh` re-signs the daemon. After installing, `launchctl bootout` then `bootstrap` (not `kickstart`), then click **Allow** once — the grant persists thereafter. Because switching from the old ad-hoc cdhash DR to the cert-leaf DR is a new identity, seed the grant once: if a stale entry lingers, `tccutil reset Microphone dev.jamiewhite.contextrecall.daemon` then re-Allow (a reboot reliably re-seats the prompt).
+
+Do **not** sign with the keychain's "Apple Development" identity — without an embedded provisioning profile tccd rejects the bundle and kills the daemon (`OS_REASON_TCC`). GitHub-released daemons stay ad-hoc (`release.yml` builds via raw `pyinstaller`; CI has no cert) — the stable grant is a local-deploy benefit.
+
 ### Tests and lint
 
 ```bash
@@ -86,7 +100,7 @@ TeamsDetector  ──►  AudioCapture  ──►  Transcriber  ──►  Diari
 
 **`src/audio_devices.py`** — Shared input-device resolution used by capture and pre-flight: never auto-selects a loopback/virtual device (BlackHole, Teams Audio, aggregates) as the microphone, `resolve_named_input_index()` fuzzy-matches a typoed configured device name (never onto a virtual device), and `refresh_input_devices()` re-initialises PortAudio so the long-running daemon sees current hardware (PortAudio otherwise freezes its device table at process start).
 
-**`src/mic_permission.py`** — macOS microphone TCC introspection/request via ctypes AVFoundation (no pyobjc). The daemon is a bare launchd binary, so macOS never shows the permission prompt implicitly — opening input streams just yields zeros (RMS −100 dBFS) or `PortAudioError -9986`, and grants are path-bound (the MeetingMind→Context Recall rename silently orphaned the old grant). Every recording start is gated on `ensure_microphone_access()`; the boot path requests the prompt explicitly. `build_daemon.sh` signs the binary with a stable identifier so grants survive rebuilds. Tests must never fire the real prompt — `tests/conftest.py` forces `authorized`.
+**`src/mic_permission.py`** — macOS microphone TCC introspection/request via ctypes AVFoundation (no pyobjc). The daemon is a bare launchd binary, so macOS never shows the permission prompt implicitly — opening input streams just yields zeros (RMS −100 dBFS) or `PortAudioError -9986`, and grants are path-bound (the MeetingMind→Context Recall rename silently orphaned the old grant). Every recording start is gated on `ensure_microphone_access()`; the boot path requests the prompt explicitly. The TCC grant is pinned to the daemon's code **Designated Requirement**: ad-hoc signing gives a `cdhash` DR that changes every rebuild (grant dies on each deploy), so `scripts/setup_signing_cert.sh` establishes a per-machine self-signed identity whose **cert-leaf DR is stable** — see "Stable microphone grant" below. Tests must never fire the real prompt — `tests/conftest.py` forces `authorized`.
 
 **`src/audio_cleanup.py`** — Temp-audio sweeper: removes 44-byte header-only stubs (any age) and `meeting_*.wav` older than `audio.temp_retention_days` from `temp_audio_dir`, sparing the in-flight capture. Runs at daemon boot and after each pipeline run.
 
