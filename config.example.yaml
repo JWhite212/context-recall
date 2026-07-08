@@ -119,6 +119,15 @@ transcription:
   # Helps with proper nouns, acronyms, or jargon the model may not know.
   # initial_prompt: ""
 
+  # Drop a segment that is a short phrase repeated back-to-back this many
+  # times (silence hallucination like "thank you. thank you. thank you.").
+  # phrase_repetition_min_repeats: 3
+  # Only treat a known filler phrase ("thank you", "thanks for watching") as a
+  # hallucination when the segment is short and the model reports at least this
+  # no-speech probability (i.e. it was emitted during silence).
+  # hallucination_phrase_no_speech_threshold: 0.6
+  # hallucination_phrase_max_words: 4
+
   # VAD threshold (kept for backward compatibility).
   # MLX Whisper handles voice activity detection internally.
   vad_threshold: 0.35

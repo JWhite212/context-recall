@@ -211,6 +211,7 @@ class Transcriber:
 
             start = seg_dict["start"]
             end = seg_dict["end"]
+            no_speech = seg_dict.get("no_speech_prob", 0.0)
             ts = TranscriptSegment(start=start, end=end, text=text)
 
             # Timestamp monotonicity: skip segments that jump backwards.
@@ -239,6 +240,32 @@ class Transcriber:
             if self._text_compression_ratio(text) > 15.0 and len(text) > 20:
                 logger.warning(
                     "Skipping high-compression segment [%.1f-%.1f]: %s",
+                    start,
+                    end,
+                    text[:80],
+                )
+                dropped.append(ts)
+                continue
+
+            # Phrase-level repetition (e.g. "thank you. thank you. thank you.").
+            if self._is_phrase_repetition(text, self._config.phrase_repetition_min_repeats):
+                logger.warning(
+                    "Skipping phrase-repetition hallucination [%.1f-%.1f]: %s",
+                    start,
+                    end,
+                    text[:80],
+                )
+                dropped.append(ts)
+                continue
+
+            # Known filler phrase emitted during silence.
+            if (
+                len(text.split()) <= self._config.hallucination_phrase_max_words
+                and self._is_known_hallucination_phrase(text)
+                and no_speech >= self._config.hallucination_phrase_no_speech_threshold
+            ):
+                logger.warning(
+                    "Skipping silence hallucination [%.1f-%.1f]: %s",
                     start,
                     end,
                     text[:80],
