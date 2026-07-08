@@ -675,7 +675,7 @@ class Database:
             # Per-meeting summary template + its source (auto/manual/default).
             await _safe_add_column(self.conn, "meetings", "template_name", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "template_source", "TEXT", "''")
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 15")
             await self.conn.commit()
             logger.info("Database migrated to version 15 (per-meeting template)")
             current_version = 15

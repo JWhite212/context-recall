@@ -47,11 +47,12 @@ Selection precedence at summarise time: **manual override (if set) → LLM class
 
 **4. Config** — `src/utils/config.py` `SummarisationConfig`: add `auto_select_template: bool = True`. Documented (commented) in `config.example.yaml`. `_build_dataclass` ignores unknown keys, so old configs still load.
 
-**5. API** — `src/api/routes/meetings.py` (or resummarise): `PATCH /api/meetings/{id}/template` with body `{"template": "<name>"}`.
+**5. API** — manual override reuses the **existing** `POST /api/meetings/{id}/resummarise?template_name=<name>` route (`src/api/routes/resummarise.py`) rather than a new endpoint — it already validates the template (404 unknown), re-runs summarisation synchronously, and returns **200**. The only change is that it now also persists `template_name` + `template_source="manual"` on success.
 
-- 404 if the meeting is missing; 422 if the template name isn't known to `TemplateManager`.
-- Sets `template_name` + `template_source="manual"`, then re-runs summarisation with that template (reuse the resummarise background-task machinery) and returns 202/the updated meeting.
-- `GET /api/templates` already lists templates for the dropdown (verify shape; reuse).
+- 404 if the meeting is missing / no transcript; the route already 404s an unknown template name.
+- `GET /api/templates` already lists templates for the dropdown (reuse as-is).
+
+> Implementation note (reconciled 2026-07-09): the original draft proposed a new `PATCH /api/meetings/{id}/template`. The context map showed `resummarise` already accepts `template_name` and returns 200 synchronously, so it was reused — simpler and avoids a duplicate summarise path. There is no `PATCH /template` endpoint and no 202 flow.
 
 **6. UI** — `ui/src/components/meetings/MeetingDetail.tsx`.
 
