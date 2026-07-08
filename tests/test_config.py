@@ -208,3 +208,11 @@ def test_missing_config_warns_only_once_per_path(tmp_path: Path, caplog):
 
     warnings = [r for r in caplog.records if "No config found" in r.getMessage()]
     assert len(warnings) == 1
+
+
+def test_summarisation_config_has_template_auto_select_defaults():
+    from src.utils.config import SummarisationConfig
+
+    cfg = SummarisationConfig()
+    assert cfg.auto_select_template is True
+    assert cfg.template_select_min_confidence == 0.6
