@@ -40,5 +40,11 @@ pyobjc-framework-EventKit>=10.0; sys_platform == "darwin"
 # Semantic search (optional — vector search disabled without it)
 sentence-transformers>=2.2.0
 
+# Voice identification (ECAPA speaker embeddings for the people
+# directory; torch already comes in via sentence-transformers, and
+# voice ID degrades gracefully when these are missing)
+speechbrain>=1.0
+torchaudio>=2.0
+
 # ML-based speaker diarisation (optional — energy-based diarisation works without it)
 # pyannote.audio>=3.1

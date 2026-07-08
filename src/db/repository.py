@@ -987,23 +987,35 @@ class MeetingRepository:
     # ------------------------------------------------------------------
 
     async def set_speaker_name(
-        self, meeting_id: str, speaker_id: str, display_name: str, source: str = "manual"
+        self,
+        meeting_id: str,
+        speaker_id: str,
+        display_name: str,
+        source: str = "manual",
+        person_id: str | None = None,
+        confidence: float | None = None,
     ) -> None:
         """Set or update the display name for a speaker in a meeting.
 
         Also updates the transcript_json to replace speaker labels.
+        ``person_id`` links the mapping to a people-directory entry;
+        ``confidence`` records how sure an automatic source (voice
+        matching) was.
         """
         now = time.time()
         async with self._db.write_lock:
             await self._db.conn.execute(
                 """INSERT INTO speaker_mappings
-                   (meeting_id, speaker_id, display_name, source, created_at)
-                   VALUES (?, ?, ?, ?, ?)
+                   (meeting_id, speaker_id, display_name, source, person_id,
+                    confidence, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(meeting_id, speaker_id) DO UPDATE SET
                        display_name = excluded.display_name,
                        source = excluded.source,
+                       person_id = excluded.person_id,
+                       confidence = excluded.confidence,
                        created_at = excluded.created_at""",
-                (meeting_id, speaker_id, display_name, source, now),
+                (meeting_id, speaker_id, display_name, source, person_id, confidence, now),
             )
             await self._db.conn.commit()
 
@@ -1026,7 +1038,7 @@ class MeetingRepository:
     async def get_speaker_names(self, meeting_id: str) -> list[dict]:
         """Get all speaker name mappings for a meeting."""
         cursor = await self._db.conn.execute(
-            "SELECT speaker_id, display_name, source, created_at "
+            "SELECT speaker_id, display_name, source, person_id, confidence, created_at "
             "FROM speaker_mappings WHERE meeting_id = ? ORDER BY created_at",
             (meeting_id,),
         )
@@ -1036,6 +1048,8 @@ class MeetingRepository:
                 "speaker_id": row["speaker_id"],
                 "display_name": row["display_name"],
                 "source": row["source"],
+                "person_id": row["person_id"],
+                "confidence": row["confidence"],
                 "created_at": row["created_at"],
             }
             for row in rows

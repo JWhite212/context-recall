@@ -27,6 +27,7 @@ from src.api.routes import diagnostics as diagnostics_routes
 from src.api.routes import export as export_routes
 from src.api.routes import meetings as meetings_routes
 from src.api.routes import models as models_routes
+from src.api.routes import people as people_routes
 from src.api.routes import preflight as preflight_routes
 from src.api.routes import recording as recording_routes
 from src.api.routes import reprocess as reprocess_routes
@@ -159,6 +160,10 @@ class ApiServer:
         search_routes.init(self.repo, embedder)
         speakers_routes.init(self.repo)
 
+        from src.people.repository import PersonRepository
+
+        people_routes.init(self.repo, PersonRepository(self.db))
+
         # Register REST routers with auth dependency.
         auth_deps = [Depends(verify_token)]
         app.include_router(status_routes.router, dependencies=auth_deps)
@@ -176,6 +181,7 @@ class ApiServer:
         app.include_router(templates_routes.router, dependencies=auth_deps)
         app.include_router(search_routes.router, dependencies=auth_deps)
         app.include_router(speakers_routes.router, dependencies=auth_deps)
+        app.include_router(people_routes.router, dependencies=auth_deps)
         app.include_router(calendar_routes.router, dependencies=auth_deps)
         app.include_router(auth_routes.router, dependencies=auth_deps)
 

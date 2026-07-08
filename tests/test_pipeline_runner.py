@@ -624,3 +624,179 @@ def test_derive_source_paths_when_nothing_survives(tmp_path):
     sources = derive_source_paths(audio, tmp_path)
 
     assert sources == {"mic": None, "system": None}
+
+
+# ----------------------------------------------------------------------
+# Voice identification stage
+# ----------------------------------------------------------------------
+
+
+def _patch_voice(monkeypatch, profiles, matches):
+    """Wire fake voice modules into the runner's lazy imports."""
+    import src.people.repository as people_repo_mod
+    import src.voice.embedder as embedder_mod
+    import src.voice.recognition as recognition_mod
+
+    monkeypatch.setattr(embedder_mod, "is_voice_id_available", lambda: True)
+    monkeypatch.setattr(embedder_mod, "VoiceEmbedder", lambda *a, **k: MagicMock())
+
+    class FakePersonRepository:
+        def __init__(self, database):
+            self.database = database
+
+        async def get_all_voice_profiles(self):
+            return profiles
+
+    monkeypatch.setattr(people_repo_mod, "PersonRepository", FakePersonRepository)
+
+    recogniser_calls = []
+
+    class FakeRecogniser:
+        def __init__(self, embedder, config):
+            self.config = config
+
+        def identify(self, transcript, audio_path, received_profiles):
+            recogniser_calls.append({"transcript": transcript, "profiles": received_profiles})
+            for match in matches:
+                for i in match.segment_indices:
+                    transcript.segments[i].speaker = match.new_label
+            return matches
+
+    monkeypatch.setattr(recognition_mod, "VoiceRecogniser", FakeRecogniser)
+    return recogniser_calls
+
+
+def test_voice_identification_stores_person_linked_mapping(tmp_path, loop_thread, monkeypatch):
+    from src.voice.recognition import VoiceMatch
+
+    profiles = [{"person_id": "p1", "name": "Sarah", "embedding": [1.0, 0.0]}]
+    match = VoiceMatch(
+        original_label="Remote",
+        new_label="Sarah",
+        person_id="p1",
+        confidence=0.87,
+        segment_indices=[1],
+    )
+    calls = _patch_voice(monkeypatch, profiles, [match])
+
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    transcript = _make_transcript(
+        texts=("hello there team", "hi and welcome everyone"), speakers=["Me", "Remote"]
+    )
+    runner = _make_runner(
+        _make_config(tmp_path), db=bridge, transcriber=FakeTranscriber(transcript=transcript)
+    )
+
+    result = runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    assert result.status == "complete"
+    assert len(calls) == 1
+    assert calls[0]["profiles"] == profiles
+    assert transcript.segments[1].speaker == "Sarah"
+    _drain(loop_thread)
+    voice_calls = [
+        c for c in repo.set_speaker_name.await_args_list if c.kwargs.get("source") == "voice"
+    ]
+    assert len(voice_calls) == 1
+    assert voice_calls[0].args == ("m1", "Remote", "Sarah")
+    assert voice_calls[0].kwargs["person_id"] == "p1"
+    assert voice_calls[0].kwargs["confidence"] == 0.87
+
+
+def test_voice_identification_skipped_when_disabled(tmp_path, loop_thread, monkeypatch):
+    profiles = [{"person_id": "p1", "name": "Sarah", "embedding": [1.0, 0.0]}]
+    calls = _patch_voice(monkeypatch, profiles, [])
+
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    config.voice_id.enabled = False
+    runner = _make_runner(config, db=bridge)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    assert calls == []
+
+
+def test_voice_identification_skipped_without_profiles(tmp_path, loop_thread, monkeypatch):
+    calls = _patch_voice(monkeypatch, [], [])
+
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    runner = _make_runner(_make_config(tmp_path), db=bridge)
+
+    result = runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    assert result.status == "complete"
+    assert calls == []
+
+
+def test_voice_match_beats_attendee_auto_rename(tmp_path, loop_thread, monkeypatch):
+    """A voice match consumes the Remote label before attendee enrichment,
+    so the calendar's single-attendee heuristic cannot override it."""
+    from src.voice.recognition import VoiceMatch
+
+    profiles = [{"person_id": "p1", "name": "Sarah", "embedding": [1.0, 0.0]}]
+    match = VoiceMatch(
+        original_label="Remote",
+        new_label="Sarah",
+        person_id="p1",
+        confidence=0.9,
+        segment_indices=[1],
+    )
+    _patch_voice(monkeypatch, profiles, [match])
+
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    transcript = _make_transcript(
+        texts=("hello there team", "hi and welcome everyone"), speakers=["Me", "Remote"]
+    )
+    runner = _make_runner(
+        _make_config(tmp_path), db=bridge, transcriber=FakeTranscriber(transcript=transcript)
+    )
+
+    runner.run(
+        tmp_path / "a.wav",
+        "m1",
+        started_at=1000.0,
+        attendees=[{"name": "Wrong Person", "email": "w@x.com"}],
+    )
+
+    assert transcript.segments[1].speaker == "Sarah"
+
+
+def test_speaker_suggestions_stored_as_candidates(tmp_path, loop_thread, monkeypatch):
+    import src.people.suggester as suggester_mod
+
+    class FakeSuggester:
+        def __init__(self, config):
+            pass
+
+        def suggest(self, transcript, remote_label="Remote"):
+            return [
+                {
+                    "speaker_label": "Remote",
+                    "suggested_name": "Marcus",
+                    "evidence": "This is Marcus",
+                }
+            ]
+
+    monkeypatch.setattr(suggester_mod, "SpeakerSuggester", FakeSuggester)
+
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    runner = _make_runner(config, db=bridge)
+
+    events, emit = _collect_events()
+    runner._emit_cb = emit
+    asyncio.run(runner._post_process_async("m1", _make_transcript(), 1000.0, is_reprocess=False))
+
+    candidate_calls = [
+        c for c in repo.set_speaker_name.await_args_list if c.kwargs.get("source") == "transcript"
+    ]
+    assert len(candidate_calls) == 1
+    assert candidate_calls[0].args == ("m1", "candidate:Marcus", "Marcus")
+    suggested = [e for e in events if e["type"] == "speakers.suggested"]
+    assert suggested and suggested[0]["suggestions"][0]["suggested_name"] == "Marcus"

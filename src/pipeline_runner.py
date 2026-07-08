@@ -289,7 +289,10 @@ class PipelineRunner:
         if preserve_mappings:
             self._reapply_speaker_mappings(transcript, meeting_id)
 
-        # Step 2c: Enrich speaker labels from calendar attendees.
+        # Step 2c: Voice identification against enrolled people profiles.
+        self._identify_voices(transcript, audio_path, meeting_id)
+
+        # Step 2d: Enrich speaker labels from calendar attendees.
         self._enrich_speakers_from_attendees(transcript, attendees or [], meeting_id)
 
         # Step 3: Summarise.
@@ -412,6 +415,63 @@ class PipelineRunner:
             for seg in transcript.segments:
                 if seg.speaker == speaker_id:
                     seg.speaker = display_name
+
+    def _identify_voices(self, transcript, audio_path: Path, meeting_id: str | None) -> None:
+        """Match still-unresolved speakers against enrolled voice profiles.
+
+        Runs after stored renames (a manual label always wins) and before
+        attendee enrichment (a voice match is stronger evidence than "the
+        calendar says one other person was invited"). Non-fatal.
+        """
+        cfg = getattr(self._config, "voice_id", None)
+        if not cfg or not cfg.enabled:
+            return
+        if not self._db_available() or self._db.database is None:
+            return
+        try:
+            from src.people.repository import PersonRepository
+            from src.voice.embedder import VoiceEmbedder, is_voice_id_available
+            from src.voice.recognition import VoiceRecogniser
+
+            if not is_voice_id_available():
+                return
+            person_repo = PersonRepository(self._db.database)
+            profiles = self._db.try_call(
+                person_repo.get_all_voice_profiles(),
+                timeout=10.0,
+                what="voice profiles fetch",
+            )
+            if not profiles:
+                return
+            logger.info("Running voice identification (%d profile samples)...", len(profiles))
+
+            # The recogniser needs the diarisation labels + voice_id knobs.
+            class _RecogniserConfig:
+                remote_label = self._config.diarisation.remote_label
+                match_threshold = cfg.match_threshold
+                cluster_threshold = cfg.cluster_threshold
+                min_segment_seconds = cfg.min_segment_seconds
+                split_unmatched_speakers = cfg.split_unmatched_speakers
+
+            recogniser = VoiceRecogniser(VoiceEmbedder(cfg.model_source), _RecogniserConfig())
+            matches = recogniser.identify(transcript, audio_path, profiles)
+            for match in matches:
+                if not match.person_id or not meeting_id:
+                    continue
+                self._db.try_call(
+                    self._db.repo.set_speaker_name(
+                        meeting_id,
+                        match.original_label,
+                        match.new_label,
+                        source="voice",
+                        person_id=match.person_id,
+                        confidence=match.confidence,
+                    ),
+                    timeout=5.0,
+                    what="voice speaker mapping",
+                )
+        except Exception as e:
+            logger.warning("Voice identification failed (continuing without): %s", e)
 
     def _enrich_speakers_from_attendees(
         self, transcript, attendees: list[dict], meeting_id: str | None
@@ -543,6 +603,12 @@ class PipelineRunner:
         except Exception:
             logger.warning("Action item extraction failed", exc_info=True)
         try:
+            voice_cfg = getattr(self._config, "voice_id", None)
+            if voice_cfg and voice_cfg.suggest_from_transcript:
+                await self._suggest_speaker_names(meeting_id, transcript)
+        except Exception:
+            logger.warning("Speaker-name suggestion failed", exc_info=True)
+        try:
             await self._refresh_analytics(started_at)
         except Exception:
             logger.warning("Analytics refresh failed", exc_info=True)
@@ -578,6 +644,33 @@ class PipelineRunner:
             )
         logger.info("Extracted %d action items from meeting %s", len(items), meeting_id)
         self._emit("action_items.extracted", meeting_id=meeting_id, count=len(items))
+
+    async def _suggest_speaker_names(self, meeting_id: str, transcript) -> None:
+        """Store transcript-evidence name suggestions as candidate mappings."""
+        from src.people.suggester import SpeakerSuggester
+
+        suggester = SpeakerSuggester(self._config.summarisation)
+        remote_label = self._config.diarisation.remote_label
+        # The LLM call is blocking HTTP — keep it off the API event loop.
+        suggestions = await asyncio.to_thread(suggester.suggest, transcript, remote_label)
+        for suggestion in suggestions:
+            name = suggestion["suggested_name"]
+            await self._db.repo.set_speaker_name(
+                meeting_id,
+                f"candidate:{name}",
+                name,
+                source="transcript",
+            )
+        if suggestions:
+            logger.info(
+                "Stored %d speaker-name suggestion(s) from transcript evidence",
+                len(suggestions),
+            )
+            self._emit(
+                "speakers.suggested",
+                meeting_id=meeting_id,
+                suggestions=suggestions,
+            )
 
     async def _refresh_analytics(self, started_at: float) -> None:
         from src.action_items.repository import ActionItemRepository
