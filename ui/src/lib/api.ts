@@ -121,6 +121,14 @@ export class ApiError extends Error {
   }
 }
 
+/** Build a user-facing message from a thrown error, surfacing the API detail. */
+export function describeApiError(error: unknown, fallback: string): string {
+  if (error instanceof ApiError && error.detail) {
+    return `${fallback}: ${error.detail}`;
+  }
+  return fallback;
+}
+
 export interface RequestOptions extends RequestInit {
   /** Override the default 30s timeout. Set to 0 to disable. */
   timeoutMs?: number;
