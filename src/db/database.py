@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _vec_available = False
 
@@ -524,6 +524,9 @@ class Database:
             await _safe_add_column(self.conn, "meetings", "project_id", "TEXT", "NULL")
             await _safe_add_column(self.conn, "meetings", "assignment_source", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "assignment_confidence", "REAL", "0.0")
+            # Per-meeting summary template (v15).
+            await _safe_add_column(self.conn, "meetings", "template_name", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "template_source", "TEXT", "''")
             # Keyword trackers (v14).
             await self.conn.executescript(TRACKERS_SQL)
             await self.conn.executescript(TRACKER_HITS_SQL)
@@ -663,9 +666,18 @@ class Database:
             # Keyword trackers: user-defined topics watched across meetings.
             await self.conn.executescript(TRACKERS_SQL)
             await self.conn.executescript(TRACKER_HITS_SQL)
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 14")
             await self.conn.commit()
             logger.info("Database migrated to version 14 (keyword trackers)")
             current_version = 14
+
+        if current_version < 15:
+            # Per-meeting summary template + its source (auto/manual/default).
+            await _safe_add_column(self.conn, "meetings", "template_name", "TEXT", "''")
+            await _safe_add_column(self.conn, "meetings", "template_source", "TEXT", "''")
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 15 (per-meeting template)")
+            current_version = 15
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

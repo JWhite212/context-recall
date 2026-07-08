@@ -44,6 +44,8 @@ _MUTABLE_COLUMNS = frozenset(
         "project_id",
         "assignment_source",
         "assignment_confidence",
+        "template_name",
+        "template_source",
         "updated_at",
     }
 )
@@ -79,6 +81,8 @@ class MeetingRecord:
     project_id: str | None = None
     assignment_source: str = ""
     assignment_confidence: float = 0.0
+    template_name: str = ""
+    template_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +110,8 @@ class MeetingRecord:
             "project_id": self.project_id,
             "assignment_source": self.assignment_source,
             "assignment_confidence": self.assignment_confidence,
+            "template_name": self.template_name,
+            "template_source": self.template_source,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -154,6 +160,14 @@ class MeetingRecord:
         except (IndexError, KeyError):
             pass
 
+        template_name = ""
+        template_source = ""
+        try:
+            template_name = row["template_name"] or ""
+            template_source = row["template_source"] or ""
+        except (IndexError, KeyError):
+            pass
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -181,6 +195,8 @@ class MeetingRecord:
             project_id=project_id,
             assignment_source=assignment_source,
             assignment_confidence=assignment_confidence,
+            template_name=template_name,
+            template_source=template_source,
         )
 
 
