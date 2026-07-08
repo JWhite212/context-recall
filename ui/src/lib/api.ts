@@ -10,6 +10,9 @@ import type {
   AnalyticsSummaryResponse,
   AnalyticsTrendsResponse,
   AppConfig,
+  AssignPersonResponse,
+  Person,
+  VoiceSample,
   CalendarMeetingsResponse,
   DevicesResponse,
   HealthResponse,
@@ -441,6 +444,80 @@ export async function setSpeakerName(
     {
       method: "PATCH",
       body: JSON.stringify({ display_name: displayName }),
+    },
+  );
+}
+
+// --- People directory ---
+
+export async function getPeople(): Promise<Person[]> {
+  return request<Person[]>("/api/people");
+}
+
+export async function createPerson(person: {
+  name: string;
+  email?: string;
+  aliases?: string[];
+  notes?: string;
+  is_me?: boolean;
+}): Promise<Person> {
+  return request<Person>("/api/people", {
+    method: "POST",
+    body: JSON.stringify(person),
+  });
+}
+
+export async function updatePerson(
+  personId: string,
+  fields: Partial<
+    Pick<Person, "name" | "email" | "aliases" | "notes" | "is_me">
+  >,
+): Promise<Person> {
+  return request<Person>(`/api/people/${encodeURIComponent(personId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deletePerson(personId: string): Promise<void> {
+  await request(`/api/people/${encodeURIComponent(personId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getVoiceSamples(
+  personId: string,
+): Promise<VoiceSample[]> {
+  return request<VoiceSample[]>(
+    `/api/people/${encodeURIComponent(personId)}/voice-samples`,
+  );
+}
+
+export async function deleteVoiceSample(
+  personId: string,
+  sampleId: number,
+): Promise<void> {
+  await request(
+    `/api/people/${encodeURIComponent(personId)}/voice-samples/${sampleId}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * Label a transcript speaker as a known person and (optionally) enrol
+ * their voice from this meeting so future meetings auto-recognise them.
+ */
+export async function assignPersonToSpeaker(
+  meetingId: string,
+  speakerId: string,
+  personId: string,
+  enrolVoice = true,
+): Promise<AssignPersonResponse> {
+  return request<AssignPersonResponse>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/speakers/${encodeURIComponent(speakerId)}/assign-person`,
+    {
+      method: "POST",
+      body: JSON.stringify({ person_id: personId, enrol_voice: enrolVoice }),
     },
   );
 }

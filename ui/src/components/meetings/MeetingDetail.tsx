@@ -16,6 +16,7 @@ import {
   getMeetingActionItems,
 } from "../../lib/api";
 import { ActionItemCard } from "../action-items/ActionItemCard";
+import { AssignSpeakerMenu } from "../people/AssignSpeakerMenu";
 import { API_BASE } from "../../lib/constants";
 import { canRetryMeeting } from "../../lib/meetingStatus";
 import type { TranscriptSegment } from "../../lib/types";
@@ -233,7 +234,7 @@ function TranscriptView({
             </span>
             {seg.speaker && (
               <span
-                className="w-14 shrink-0 pt-0.5"
+                className="w-20 shrink-0 pt-0.5 flex items-center gap-1"
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
                 role="presentation"
@@ -244,6 +245,13 @@ function TranscriptView({
                   color={getSpeakerColor(seg.speaker, uniqueSpeakers)}
                   onRenamed={onRenamed}
                 />
+                <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                  <AssignSpeakerMenu
+                    speaker={seg.speaker}
+                    meetingId={meetingId}
+                    onAssigned={onRenamed}
+                  />
+                </span>
               </span>
             )}
             <span className="text-sm text-text-primary leading-relaxed">

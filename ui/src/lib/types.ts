@@ -8,11 +8,7 @@ export interface SummaryTemplate {
 }
 
 export type DaemonState =
-  | "idle"
-  | "detecting"
-  | "recording"
-  | "processing"
-  | "unknown";
+  "idle" | "detecting" | "recording" | "processing" | "unknown";
 
 export type MeetingStatus =
   | "recording"
@@ -94,7 +90,44 @@ export interface SpeakerMapping {
   speaker_id: string;
   display_name: string;
   source: string;
+  person_id?: string | null;
+  confidence?: number | null;
   created_at: number;
+}
+
+/** A person in the persistent people directory. */
+export interface Person {
+  id: string;
+  name: string;
+  email: string;
+  aliases: string[];
+  notes: string;
+  is_me: boolean;
+  sample_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Metadata for one enrolled voice-profile sample (no embedding blob). */
+export interface VoiceSample {
+  id: number;
+  person_id: string;
+  dim: number;
+  source_meeting_id: string | null;
+  speaker_label: string;
+  segment_count: number;
+  duration_seconds: number;
+  created_at: number;
+}
+
+export interface AssignPersonResponse {
+  meeting_id: string;
+  speaker_id: string;
+  person_id: string;
+  display_name: string;
+  enrolled: boolean;
+  reason: string | null;
+  sample_count: number;
 }
 
 /** Application config sections matching config.yaml. */
