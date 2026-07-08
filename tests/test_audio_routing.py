@@ -200,6 +200,19 @@ class TestEnsureRouted:
         assert result.error is not None
         assert result.changed is False
 
+    def test_routing_that_does_not_stick_returns_error(self, backend):
+        class NonSticky(FakeBackend):
+            def set_default_output_device(self, device_id: int) -> None:
+                # Record the request but leave the default unchanged, as if
+                # CoreAudio accepted the set without it taking effect.
+                self.requested = device_id
+
+        result = _router(NonSticky(_standard_devices(), default_output=1)).ensure_routed()
+
+        assert result.changed is False
+        assert result.error is not None
+        assert "did not take effect" in result.error.lower()
+
 
 class TestRestore:
     def test_restore_switches_back_to_previous_output(self, backend):
