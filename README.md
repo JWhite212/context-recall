@@ -834,9 +834,9 @@ Contributions and issue-tracked suggestions welcome.
 **Jamie White** — early-career software engineer building Context Recall as a personal product focused on local-first, privacy-conscious meeting recall.
 
 <p>
-  <a href="https://jamie-white-portfolio.vercel.app">Portfolio</a> ·
+  <a href="https://portfolio.jamiewhite.site/">Portfolio</a> ·
   <a href="https://github.com/JWhite212">GitHub</a> ·
-  <a href="https://www.linkedin.com/in/jamie-white-swe/">LinkedIn</a>
+  <a href="https://www.linkedin.com/in/jamie--white/">LinkedIn</a>
 </p>
 
 Context Recall is a local-first macOS meeting assistant built with a Python daemon, Tauri v2, React, TypeScript, FastAPI, SQLite/FTS5, and MLX Whisper. It captures configured local audio sources for consented meetings, transcribes on-device using Apple Silicon acceleration, and provides searchable meeting history, summaries, action items, and exports.
