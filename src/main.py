@@ -41,9 +41,9 @@ from src.diariser import EnergyDiariser, create_diariser
 from src.mic_permission import ensure_microphone_access
 from src.output.markdown_writer import MarkdownWriter
 from src.output.notion_writer import NotionWriter
+from src.pipeline_runner import DbBridge, PipelineRunner
 from src.silent_input_detector import SilentInputDetector
 from src.summariser import Summariser
-from src.templates import TemplateManager
 from src.transcriber import Transcriber
 from src.utils.config import load_config, materialise_default_config
 from src.utils.paths import audio_dir as default_audio_dir
@@ -55,6 +55,27 @@ except ImportError:
     CalendarMatch = None
 
 logger = logging.getLogger("contextrecall")
+
+
+class _OrchestratorDbBridge(DbBridge):
+    """DbBridge that routes meeting updates through ContextRecall._db_update.
+
+    Keeps the orchestrator's C3 closed-loop logging (and the test seam
+    that spies on ``_db_update``) authoritative for the live path while
+    the shared PipelineRunner performs the actual pipeline work.
+    """
+
+    def __init__(self, app: "ContextRecall") -> None:
+        server = app._api_server
+        super().__init__(
+            getattr(server, "repo", None) if server else None,
+            getattr(server, "loop", None) if server else None,
+            database=getattr(server, "db", None) if server else None,
+        )
+        self._app = app
+
+    def update_meeting(self, meeting_id: str | None, **fields) -> None:
+        self._app._db_update(meeting_id, **fields)
 
 
 class ContextRecall:
@@ -682,308 +703,47 @@ class ContextRecall:
             self._db_update(meeting_id, status="error")
             return
 
-        # Step 1: Transcribe.
-        logger.info("Transcribing audio...")
-        self._emit("pipeline.stage", meeting_id=meeting_id, stage="transcribing")
+        # Everything from transcription onward is shared with the
+        # reprocess route via PipelineRunner. The orchestrator only
+        # contributes its live-session context: the calendar match, the
+        # surviving mic source WAV, and a DB bridge that routes meeting
+        # updates through _db_update (C3 logging + test seam).
+        attendees: list[dict] = []
+        calendar_fields = None
+        if self._calendar_match:
+            attendees = self._calendar_match.attendees or []
+            calendar_fields = {
+                "calendar_event_title": self._calendar_match.event_title,
+                "attendees_json": json.dumps(self._calendar_match.attendees),
+                "calendar_confidence": self._calendar_match.confidence,
+                "teams_join_url": self._calendar_match.teams_join_url,
+                "teams_meeting_id": self._calendar_match.teams_meeting_id,
+            }
 
-        def on_segment(seg):
-            self._emit(
-                "transcript.segment",
-                meeting_id=meeting_id,
-                segment=asdict(seg),
-            )
+        mic_path = self._capture.mic_audio_path if self._config.audio.keep_source_files else None
 
-        try:
-            transcript = self._transcriber.transcribe(audio_path, on_segment=on_segment)
-        except Exception as e:
-            logger.error("Transcription failed: %s", e, exc_info=True)
-            self._emit("pipeline.error", meeting_id=meeting_id, stage="transcribing", error=str(e))
-            self._db_update(meeting_id, status="error")
-            return
-
-        # If we got nothing usable from transcription, that's a real failure
-        # (silent capture, MLX returned nothing). Mark as error.
-        if not transcript.segments:
-            logger.warning("Transcript is empty — marking meeting as error.")
-            self._emit(
-                "pipeline.error",
-                meeting_id=meeting_id,
-                stage="transcribing",
-                error="Transcript is empty. The audio may be silent or corrupted.",
-            )
-            self._db_update(meeting_id, status="error")
-            return
-
-        if duration_seconds == 0.0:
-            duration_seconds = transcript.duration_seconds
-
-        # If the transcript is real but very short, summarisation would just
-        # generate garbage. Persist what we got with status='complete' so
-        # the user can at least see the captured content (Bug B1) — no more
-        # losing real "hi bye" meetings to a < 5 word threshold.
-        if transcript.word_count < 5:
-            logger.warning(
-                "Transcript too short (%d words). Persisting without summarisation.",
-                transcript.word_count,
-            )
-            self._db_update(
-                meeting_id,
-                title="Untitled Meeting (short)",
-                ended_at=started_at + duration_seconds,
-                duration_seconds=duration_seconds,
-                status="complete",
-                transcript_json=json.dumps(transcript.to_dict()),
-                language=transcript.language,
-                word_count=transcript.word_count,
-            )
-            self._emit("pipeline.complete", meeting_id=meeting_id, title="Untitled Meeting (short)")
-            return
-
-        # Step 2: Diarise (if enabled).
-        if self._diariser:
-            logger.info("Running speaker diarisation...")
-            self._emit("pipeline.stage", meeting_id=meeting_id, stage="diarising")
-            mic_path = (
-                self._capture.mic_audio_path if self._config.audio.keep_source_files else None
-            )
-            try:
-                transcript = self._diariser.diarise(transcript, audio_path, mic_audio_path=mic_path)
-            except Exception as e:
-                logger.error("Diarisation failed: %s", e, exc_info=True)
-
-        # Step 2b: Enrich speaker labels from calendar attendees.
-        if self._calendar_match and self._calendar_match.attendees:
-            speakers = {seg.speaker for seg in transcript.segments}
-            remote_label = self._config.diarisation.remote_label
-            my_name = self._config.diarisation.speaker_name
-            other_attendees = [
-                a for a in self._calendar_match.attendees if a.get("name") and a["name"] != my_name
-            ]
-            # Auto-rename in 2-speaker meetings with exactly 1 other attendee.
-            if len(speakers) == 2 and remote_label in speakers and len(other_attendees) == 1:
-                new_name = other_attendees[0]["name"]
-                for seg in transcript.segments:
-                    if seg.speaker == remote_label:
-                        seg.speaker = new_name
-                logger.info("Speaker enrichment: renamed '%s' to '%s'", remote_label, new_name)
-            # Store all attendees as candidate speaker mappings for the UI.
-            if meeting_id and self._api_server and self._api_server.repo and self._api_server.loop:
-                for attendee in other_attendees:
-                    try:
-                        asyncio.run_coroutine_threadsafe(
-                            self._api_server.repo.set_speaker_name(
-                                meeting_id,
-                                f"candidate:{attendee['name']}",
-                                attendee["name"],
-                                source="calendar",
-                            ),
-                            self._api_server.loop,
-                        ).result(timeout=5)
-                    except Exception:
-                        pass
-
-        # Load default template for summarisation.
-        template = None
-        try:
-            tm = TemplateManager()
-            template = tm.get_template(self._config.summarisation.default_template)
-        except Exception as e:
-            logger.warning("Failed to load template: %s", e)
-
-        # Step 3: Summarise.
-        logger.info("Generating summary...")
-        self._emit("pipeline.stage", meeting_id=meeting_id, stage="summarising")
-        summary_start = time.monotonic()
-        try:
-            summary = self._summariser.summarise(transcript, template=template)
-        except Exception as e:
-            elapsed = time.monotonic() - summary_start
-            logger.error("Summarisation failed after %.1fs: %s", elapsed, e, exc_info=True)
-            self._emit("pipeline.error", meeting_id=meeting_id, stage="summarising", error=str(e))
-            self._db_update(meeting_id, status="error")
-            return
-
-        summary_elapsed = time.monotonic() - summary_start
-        logger.info("Summary generated in %.1fs", summary_elapsed)
-
-        # Persist transcript and summary to DB.
-        self._db_update(
-            meeting_id,
-            title=summary.title or "Untitled Meeting",
-            ended_at=started_at + duration_seconds,
-            duration_seconds=duration_seconds,
-            status="complete",
-            transcript_json=json.dumps(transcript.to_dict()),
-            summary_markdown=summary.raw_markdown,
-            tags=summary.tags,
-            language=transcript.language,
-            word_count=transcript.word_count,
+        runner = PipelineRunner(
+            self._config,
+            emit=self._emit,
+            db=_OrchestratorDbBridge(self),
+            transcriber=self._transcriber,
+            summariser=self._summariser,
+            diariser=self._diariser,
+            md_writer=self._md_writer,
+            notion_writer=self._notion_writer,
         )
-
-        # Attach calendar data to meeting record.
-        if self._calendar_match and meeting_id:
-            try:
-                self._db_update(
-                    meeting_id,
-                    calendar_event_title=self._calendar_match.event_title,
-                    attendees_json=json.dumps(self._calendar_match.attendees),
-                    calendar_confidence=self._calendar_match.confidence,
-                    teams_join_url=self._calendar_match.teams_join_url,
-                    teams_meeting_id=self._calendar_match.teams_meeting_id,
-                )
-            except Exception as e:
-                logger.warning("Failed to save calendar data: %s", e)
-
-        # Step 3b: Embed transcript segments for semantic search (background).
-        try:
-            from src.embeddings import Embedder, is_embeddings_available
-
-            if is_embeddings_available():
-                logger.info("Embedding transcript segments for search...")
-                self._emit("pipeline.stage", meeting_id=meeting_id, stage="embedding")
-                embedder = Embedder()
-                texts = [seg.text.strip() for seg in transcript.segments if seg.text.strip()]
-                if texts:
-                    vectors = embedder.embed(texts)
-                    emb_records = []
-                    text_idx = 0
-                    for i, seg in enumerate(transcript.segments):
-                        if seg.text.strip():
-                            emb_records.append(
-                                {
-                                    "segment_index": i,
-                                    "embedding": vectors[text_idx],
-                                    "text": seg.text.strip(),
-                                    "speaker": seg.speaker,
-                                    "start_time": seg.start,
-                                }
-                            )
-                            text_idx += 1
-
-                    if meeting_id and self._api_server and self._api_server.repo:
-                        loop = self._api_server.loop
-                        if loop and not loop.is_closed():
-                            future = asyncio.run_coroutine_threadsafe(
-                                self._api_server.repo.store_embeddings(meeting_id, emb_records),
-                                loop,
-                            )
-
-                            emb_count = len(emb_records)
-
-                            def _on_embedding_done(fut):
-                                try:
-                                    fut.result()
-                                    logger.info("Stored %d segment embeddings", emb_count)
-                                except Exception as exc:
-                                    logger.warning("Embedding storage failed: %s", exc)
-
-                            future.add_done_callback(_on_embedding_done)
-        except Exception as e:
-            logger.warning("Embedding failed (search will still work without it): %s", e)
-
-        # Step 4: Write outputs.
-        self._emit("pipeline.stage", meeting_id=meeting_id, stage="writing")
-
-        # Each writer stashes recoverable failures on its `last_error`
-        # attribute (filesystem errors for markdown; 4xx or exhausted-retry
-        # 5xx/429 for notion). Surface those as pipeline.warning so the UI
-        # can show "<source> output skipped: <reason>" instead of failing
-        # silently.
-        for source, writer in (
-            ("markdown", self._md_writer),
-            ("notion", self._notion_writer),
-        ):
-            if writer is None:
-                continue
-            try:
-                result = writer.write(summary, transcript, started_at, duration_seconds)
-                logger.info("%s output: %s", source.capitalize(), result)
-            except Exception as e:
-                logger.error("%s write failed: %s", source.capitalize(), e, exc_info=True)
-            if writer.last_error:
-                self._emit(
-                    "pipeline.warning",
-                    meeting_id=meeting_id,
-                    source=source,
-                    message=str(writer.last_error),
-                )
-
-        self._emit("pipeline.complete", meeting_id=meeting_id, title=summary.title)
-
-        # Post-processing: intelligence features (non-fatal).
-        self._run_post_processing(meeting_id, transcript)
+        runner.run(
+            audio_path,
+            meeting_id,
+            started_at,
+            duration_seconds,
+            attendees=attendees,
+            mic_audio_path=mic_path,
+            calendar_fields=calendar_fields,
+        )
 
         self._active_meeting_id = None
         logger.info("Processing complete.")
-
-    def _run_post_processing(self, meeting_id: str | None, transcript) -> None:
-        """Run intelligence post-processing after pipeline completes. Non-fatal."""
-        if not meeting_id or not self._api_server or not self._api_server.repo:
-            return
-        loop = self._api_server.loop
-        if not loop or loop.is_closed():
-            return
-        try:
-            asyncio.run_coroutine_threadsafe(self._post_process_async(meeting_id, transcript), loop)
-        except Exception:
-            logger.warning("Post-processing dispatch failed", exc_info=True)
-
-    async def _post_process_async(self, meeting_id: str, transcript) -> None:
-        """Async post-processing: action items, analytics."""
-        try:
-            if self._config.action_items.auto_extract:
-                await self._extract_action_items(meeting_id, transcript)
-        except Exception:
-            logger.warning("Action item extraction failed", exc_info=True)
-        try:
-            await self._refresh_analytics()
-        except Exception:
-            logger.warning("Analytics refresh failed", exc_info=True)
-
-    async def _extract_action_items(self, meeting_id: str, transcript) -> None:
-        """Extract and store action items from transcript."""
-        from src.action_items.extractor import ActionItemExtractor
-        from src.action_items.repository import ActionItemRepository
-
-        extractor = ActionItemExtractor(
-            summarisation_config=self._config.summarisation,
-            config=self._config.action_items,
-        )
-        items = extractor.extract(transcript)
-        if not items:
-            return
-        ai_repo = ActionItemRepository(self._api_server.db)
-        for item in items:
-            await ai_repo.create(
-                meeting_id=meeting_id,
-                title=item["title"],
-                assignee=item.get("assignee"),
-                due_date=item.get("due_date"),
-                priority=item.get("priority", "medium"),
-                source="extracted",
-                extracted_text=item.get("extracted_text"),
-            )
-        logger.info("Extracted %d action items from meeting %s", len(items), meeting_id)
-        self._emit("action_items.extracted", meeting_id=meeting_id, count=len(items))
-
-    async def _refresh_analytics(self) -> None:
-        """Refresh current day analytics after meeting completes."""
-        from datetime import datetime, timezone
-
-        from src.action_items.repository import ActionItemRepository
-        from src.analytics.engine import AnalyticsEngine
-        from src.analytics.repository import AnalyticsRepository
-
-        analytics_repo = AnalyticsRepository(self._api_server.db)
-        ai_repo = ActionItemRepository(self._api_server.db)
-        engine = AnalyticsEngine(
-            config=self._config.analytics,
-            meeting_repo=self._api_server.repo,
-            analytics_repo=analytics_repo,
-            action_item_repo=ai_repo,
-        )
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        await engine.refresh_period("daily", today)
 
     def _db_update(self, meeting_id: str | None, **fields) -> None:
         """Update a meeting record in the database (fire-and-forget).

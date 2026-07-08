@@ -96,12 +96,18 @@ def app_with_mocked_api(tmp_config):
         write is introspectable.
     """
     from src.main import ContextRecall
+    from src.pipeline_runner import PipelineRunner
 
     patches = [
         patch("src.main.AudioCapture"),
         patch("src.main.TeamsDetector"),
         patch("src.main.Transcriber"),
         patch("src.main.Summariser"),
+        # Suppress post-processing: the mocked loop never awaits the
+        # runner's _post_process_async coroutine, which would produce a
+        # RuntimeWarning at gc time. None of the X6 tests are about
+        # post-processing behaviour.
+        patch.object(PipelineRunner, "_dispatch_post_processing", MagicMock()),
     ]
     for p in patches:
         p.start()
@@ -122,11 +128,6 @@ def app_with_mocked_api(tmp_config):
         # with as the pipeline progresses.
         app._persist_audio = MagicMock(return_value=(Path("/tmp/audio.wav"), "test-meeting-id"))
         app._db_update = MagicMock()
-
-        # Suppress post-processing: _post_process_async is a coroutine the
-        # mocked loop never awaits, which produces a RuntimeWarning at gc
-        # time. None of the X6 tests are about post-processing behaviour.
-        app._run_post_processing = MagicMock()
 
         yield app
     finally:
@@ -454,16 +455,19 @@ def test_audio_persistence_fallback_to_copy(
     mock_server.loop = mock_loop
     app._api_server = mock_server
 
-    # Suppress post-processing: _post_process_async is a coroutine the
-    # patched run_coroutine_threadsafe never awaits, which produces a
-    # RuntimeWarning at gc time. This test is about audio persistence.
-    app._run_post_processing = MagicMock()
-
     # Create source audio file.
     audio_file = tmp_path / "source.wav"
     audio_file.write_bytes(b"RIFF" + b"\x00" * 40)
 
-    with patch("asyncio.run_coroutine_threadsafe", return_value=mock_future):
+    from src.pipeline_runner import PipelineRunner
+
+    # Suppress post-processing: the patched run_coroutine_threadsafe
+    # never awaits the runner's coroutine, which produces a
+    # RuntimeWarning at gc time. This test is about audio persistence.
+    with (
+        patch.object(PipelineRunner, "_dispatch_post_processing"),
+        patch("asyncio.run_coroutine_threadsafe", return_value=mock_future),
+    ):
         with patch("os.link", side_effect=OSError("cross-device link")):
             with patch("shutil.copy2") as mock_copy:
                 app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
