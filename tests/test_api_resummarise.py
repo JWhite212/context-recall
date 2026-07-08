@@ -132,15 +132,17 @@ async def test_resummarise_success(client):
 
 def test_reconstruct_transcript():
     """Test _reconstruct_transcript directly."""
-    transcript_json = json.dumps({
-        "segments": [
-            {"start": 0, "end": 5, "text": "Hello.", "speaker": "Me"},
-            {"start": 5, "end": 10, "text": "Hi there.", "speaker": "Remote"},
-        ],
-        "language": "en",
-        "language_probability": 0.95,
-        "duration_seconds": 10.0,
-    })
+    transcript_json = json.dumps(
+        {
+            "segments": [
+                {"start": 0, "end": 5, "text": "Hello.", "speaker": "Me"},
+                {"start": 5, "end": 10, "text": "Hi there.", "speaker": "Remote"},
+            ],
+            "language": "en",
+            "language_probability": 0.95,
+            "duration_seconds": 10.0,
+        }
+    )
 
     transcript = resummarise_routes._reconstruct_transcript(transcript_json, duration=10.0)
     assert isinstance(transcript, Transcript)
@@ -150,3 +152,29 @@ def test_reconstruct_transcript():
     assert transcript.segments[1].text == "Hi there."
     assert transcript.language == "en"
     assert transcript.duration_seconds == 10.0
+
+
+@pytest.mark.asyncio
+async def test_resummarise_persists_manual_template(client):
+    c, repo = client
+    mid = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(
+        mid,
+        transcript_json=json.dumps(
+            {"segments": [{"start": 0, "end": 1, "text": "hi"}], "language": "en"}
+        ),
+        status="complete",
+        duration_seconds=1.0,
+    )
+    mock_summary = MeetingSummary(raw_markdown="# T", title="T", tags=[])
+    with patch("src.api.routes.resummarise._load_summarisation_config"):
+        with patch("src.api.routes.resummarise.Summariser") as mock_cls:
+            mock_cls.return_value.summarise.return_value = mock_summary
+            resp = c.post(
+                f"/api/meetings/{mid}/resummarise?template_name=standup",
+                headers=_auth_headers(),
+            )
+    assert resp.status_code == 200
+    meeting = await repo.get_meeting(mid)
+    assert meeting.template_name == "standup"
+    assert meeting.template_source == "manual"
