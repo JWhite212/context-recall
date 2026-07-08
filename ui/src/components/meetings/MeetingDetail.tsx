@@ -17,6 +17,7 @@ import {
 } from "../../lib/api";
 import { ActionItemCard } from "../action-items/ActionItemCard";
 import { AssignmentSelect } from "../clients/AssignmentSelect";
+import { MeetingInsights } from "./MeetingInsights";
 import { AssignSpeakerMenu } from "../people/AssignSpeakerMenu";
 import { API_BASE } from "../../lib/constants";
 import { canRetryMeeting } from "../../lib/meetingStatus";
@@ -685,6 +686,12 @@ export function MeetingDetail() {
         <div className="mt-2">
           <AssignmentSelect meeting={meeting} />
         </div>
+
+        {/* Talk time, tracker mentions, follow-up email */}
+        <MeetingInsights
+          meetingId={meeting.id}
+          hasSummary={Boolean(meeting.summary_markdown)}
+        />
 
         {/* Calendar info */}
         {meeting.calendar_event_title && (

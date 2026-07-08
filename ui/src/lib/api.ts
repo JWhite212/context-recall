@@ -10,8 +10,10 @@ import type {
   AnalyticsSummaryResponse,
   AnalyticsTrendsResponse,
   AppConfig,
+  AskResponse,
   AssignPersonResponse,
   Client,
+  EmailDraft,
   Person,
   Project,
   VoiceSample,
@@ -34,6 +36,9 @@ import type {
   SpeakerMapping,
   StatusResponse,
   SummaryTemplate,
+  TalkStats,
+  Tracker,
+  TrackerHit,
   UnreadCountResponse,
 } from "./types";
 
@@ -781,5 +786,81 @@ export async function generatePrep(meetingId: string): Promise<PrepBriefing> {
   return request<PrepBriefing>(
     `/api/prep/${encodeURIComponent(meetingId)}/generate`,
     { method: "POST" },
+  );
+}
+
+// --- Ask, insights & trackers ---
+
+/** Ask a question across meeting history. LLM answers can take a while. */
+export async function askMeetings(question: string): Promise<AskResponse> {
+  return request<AskResponse>("/api/ask", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+    timeoutMs: 180_000,
+  });
+}
+
+export async function getTalkStats(meetingId: string): Promise<TalkStats> {
+  return request<TalkStats>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/talk-stats`,
+  );
+}
+
+export async function draftFollowupEmail(
+  meetingId: string,
+  instructions = "",
+): Promise<EmailDraft> {
+  return request<EmailDraft>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/draft-email`,
+    {
+      method: "POST",
+      body: JSON.stringify({ instructions }),
+      timeoutMs: 180_000,
+    },
+  );
+}
+
+export async function getTrackers(): Promise<Tracker[]> {
+  return request<Tracker[]>("/api/trackers");
+}
+
+export async function createTracker(tracker: {
+  name: string;
+  keywords: string[];
+  enabled?: boolean;
+}): Promise<Tracker> {
+  return request<Tracker>("/api/trackers", {
+    method: "POST",
+    body: JSON.stringify(tracker),
+  });
+}
+
+export async function updateTracker(
+  trackerId: string,
+  fields: Partial<Pick<Tracker, "name" | "keywords" | "enabled">>,
+): Promise<Tracker> {
+  return request<Tracker>(`/api/trackers/${encodeURIComponent(trackerId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export async function deleteTracker(trackerId: string): Promise<void> {
+  await request(`/api/trackers/${encodeURIComponent(trackerId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getTrackerHits(trackerId: string): Promise<TrackerHit[]> {
+  return request<TrackerHit[]>(
+    `/api/trackers/${encodeURIComponent(trackerId)}/hits`,
+  );
+}
+
+export async function getMeetingTrackerHits(
+  meetingId: string,
+): Promise<TrackerHit[]> {
+  return request<TrackerHit[]>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/tracker-hits`,
   );
 }
