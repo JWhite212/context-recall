@@ -104,3 +104,28 @@ def test_pyannote_labels_count_as_unresolved():
     with patch.object(suggester, "_call_llm", return_value=response):
         suggestions = suggester.suggest(transcript)
     assert suggestions[0]["speaker_label"] == "SPEAKER_00"
+
+
+def test_long_transcript_truncation_preserves_line_structure():
+    """Truncation must keep whole [Speaker] lines, not flatten to words."""
+    long_line = "word " * 200
+    specs = [("Remote" if i % 2 else "Me", long_line.strip()) for i in range(60)]
+    transcript = _transcript(specs)
+
+    suggester = _suggester()
+    captured = {}
+
+    def capture(text):
+        captured["text"] = text
+        return "[]"
+
+    with patch.object(suggester, "_call_llm", side_effect=capture):
+        suggester.suggest(transcript)
+
+    text = captured["text"]
+    assert "..." in text, "long transcript must be truncated"
+    lines = [line for line in text.splitlines() if line and line != "..."]
+    assert all("[" in line and "]" in line for line in lines), (
+        "every kept line must retain its [speaker] prefix"
+    )
+    assert len(text.split()) < 60 * 200

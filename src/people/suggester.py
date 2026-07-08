@@ -38,6 +38,18 @@ return an empty array: []"""
 _MAX_WORDS = 6000
 
 
+def _take_lines(lines: list[str], word_budget: int) -> list[str]:
+    """Whole lines from the start of *lines* up to ~word_budget words."""
+    taken: list[str] = []
+    count = 0
+    for line in lines:
+        count += len(line.split())
+        if taken and count > word_budget:
+            break
+        taken.append(line)
+    return taken
+
+
 class SpeakerSuggester:
     """Suggests real names for unresolved speaker labels."""
 
@@ -55,12 +67,17 @@ class SpeakerSuggester:
             return []
 
         text = transcript.timestamped_text
-        words = text.split()
-        if len(words) > _MAX_WORDS:
+        lines = text.splitlines()
+        total_words = sum(len(line.split()) for line in lines)
+        if total_words > _MAX_WORDS:
             # Introductions cluster at the start; sign-offs at the end.
-            head = " ".join(words[: _MAX_WORDS // 2])
-            tail = " ".join(words[-_MAX_WORDS // 2 :])
-            text = f"{head}\n...\n{tail}"
+            # Truncate by whole lines so the [Speaker] per-line structure
+            # the prompt depends on survives.
+            text = "\n".join(
+                _take_lines(lines, _MAX_WORDS // 2)
+                + ["..."]
+                + list(reversed(_take_lines(list(reversed(lines)), _MAX_WORDS // 2)))
+            )
 
         try:
             response = self._call_llm(text)
