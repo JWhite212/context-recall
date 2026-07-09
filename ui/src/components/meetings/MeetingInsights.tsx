@@ -2,12 +2,31 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   draftFollowupEmail,
+  getMeetingAutomations,
   getMeetingInsights,
   getMeetingTrackerHits,
   getTalkStats,
 } from "../../lib/api";
 import { useToast } from "../common/Toast";
 import type { EmailDraft, MeetingInsightResult } from "../../lib/types";
+
+/** Pills naming the automation rules that fired on a meeting. */
+export function AutomationBadges({ names }: { names: string[] }) {
+  if (names.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {names.map((name, i) => (
+        <span
+          key={`${name}-${i}`}
+          className="text-xs px-2 py-0.5 rounded-full bg-purple-400/20 text-purple-400"
+          title="Automation rule that fired for this meeting"
+        >
+          {name}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 /** Custom insight results grouped by definition, rendered as labelled lists. */
 export function InsightResults({
@@ -90,6 +109,11 @@ export function MeetingInsights({
     queryFn: () => getMeetingInsights(meetingId),
   });
 
+  const { data: firedAutomations = [] } = useQuery({
+    queryKey: ["meeting-automations", meetingId],
+    queryFn: () => getMeetingAutomations(meetingId),
+  });
+
   const email = useMutation({
     mutationFn: () => draftFollowupEmail(meetingId),
     onSuccess: setDraft,
@@ -112,6 +136,7 @@ export function MeetingInsights({
     speakers.length === 0 &&
     hitsByTracker.size === 0 &&
     insightResults.length === 0 &&
+    firedAutomations.length === 0 &&
     !hasSummary
   ) {
     return null;
@@ -173,6 +198,9 @@ export function MeetingInsights({
 
       {/* Custom insights */}
       <InsightResults results={insightResults} />
+
+      {/* Fired automation rules */}
+      <AutomationBadges names={firedAutomations.map((a) => a.name)} />
 
       {/* Follow-up email */}
       {hasSummary && (
