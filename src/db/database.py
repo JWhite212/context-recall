@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 _vec_available = False
 
@@ -331,6 +331,32 @@ CREATE INDEX IF NOT EXISTS idx_insight_results_meeting ON insight_results(meetin
 CREATE INDEX IF NOT EXISTS idx_insight_results_definition ON insight_results(definition_id);
 """
 
+AUTOMATION_RULES_SQL = """
+CREATE TABLE IF NOT EXISTS automation_rules (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    match_mode TEXT NOT NULL DEFAULT 'all',
+    conditions_json TEXT NOT NULL DEFAULT '[]',
+    actions_json TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+"""
+
+AUTOMATION_DISPATCHES_SQL = """
+CREATE TABLE IF NOT EXISTS automation_dispatches (
+    rule_id TEXT NOT NULL,
+    meeting_id TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (rule_id, meeting_id),
+    FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_dispatches_meeting
+    ON automation_dispatches(meeting_id);
+"""
+
 VOICE_PROFILES_SQL = """
 CREATE TABLE IF NOT EXISTS voice_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -560,6 +586,9 @@ class Database:
             # Custom insights (v16).
             await self.conn.executescript(INSIGHT_DEFINITIONS_SQL)
             await self.conn.executescript(INSIGHT_RESULTS_SQL)
+            # Automations (v17).
+            await self.conn.executescript(AUTOMATION_RULES_SQL)
+            await self.conn.executescript(AUTOMATION_DISPATCHES_SQL)
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -718,5 +747,14 @@ class Database:
             await self.conn.commit()
             logger.info("Database migrated to version 16 (custom insights)")
             current_version = 16
+
+        if current_version < 17:
+            # Automations: user-defined condition→action rules.
+            await self.conn.executescript(AUTOMATION_RULES_SQL)
+            await self.conn.executescript(AUTOMATION_DISPATCHES_SQL)
+            await self.conn.execute("PRAGMA user_version = 17")
+            await self.conn.commit()
+            logger.info("Database migrated to version 17 (automations)")
+            current_version = 17
         else:
             logger.debug("Database schema up to date (version %d)", current_version)
