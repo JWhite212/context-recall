@@ -232,6 +232,38 @@ export interface ApiConfig {
   port: number;
 }
 
+export interface CalendarAttendee {
+  name: string;
+  email: string;
+}
+
+export interface CalendarEvent {
+  event_uid: string;
+  title: string;
+  start_ts: number;
+  end_ts: number;
+  attendees: CalendarAttendee[];
+  organizer: CalendarAttendee | null;
+  join_url: string;
+  meeting_id: string;
+  calendar_name: string;
+}
+
+export interface CalendarEventsResponse {
+  events: CalendarEvent[];
+  count: number;
+}
+
+export interface CalendarConfig {
+  enabled: boolean;
+  time_window_minutes: number;
+  min_confidence: number;
+  import_enabled: boolean;
+  sync_interval_minutes: number;
+  sync_horizon_days: number;
+  excluded_calendars: string[];
+}
+
 export interface RetentionConfig {
   audio_retention_days: number;
   record_retention_days: number;
@@ -274,6 +306,7 @@ export interface AppConfig {
   notion: NotionConfig;
   logging: LoggingConfig;
   api: ApiConfig;
+  calendar: CalendarConfig;
   retention: RetentionConfig;
   notifications: NotificationsConfig;
 }
