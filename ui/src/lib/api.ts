@@ -37,6 +37,10 @@ import type {
   StatusResponse,
   InsightDefinition,
   MeetingInsightResult,
+  AutomationRule,
+  AutomationCondition,
+  AutomationAction,
+  MeetingAutomation,
   SummaryTemplate,
   TalkStats,
   Tracker,
@@ -903,5 +907,51 @@ export async function getMeetingInsights(
 ): Promise<MeetingInsightResult[]> {
   return request<MeetingInsightResult[]>(
     `/api/meetings/${encodeURIComponent(meetingId)}/insights`,
+  );
+}
+
+export async function getAutomationRules(): Promise<AutomationRule[]> {
+  return request<AutomationRule[]>("/api/automation-rules");
+}
+
+export async function createAutomationRule(rule: {
+  name: string;
+  match_mode: "all" | "any";
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  enabled?: boolean;
+}): Promise<AutomationRule> {
+  return request<AutomationRule>("/api/automation-rules", {
+    method: "POST",
+    body: JSON.stringify(rule),
+  });
+}
+
+export async function updateAutomationRule(
+  id: string,
+  fields: Partial<
+    Pick<
+      AutomationRule,
+      "name" | "match_mode" | "conditions" | "actions" | "enabled"
+    >
+  >,
+): Promise<AutomationRule> {
+  return request<AutomationRule>(
+    `/api/automation-rules/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: JSON.stringify(fields) },
+  );
+}
+
+export async function deleteAutomationRule(id: string): Promise<void> {
+  await request(`/api/automation-rules/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getMeetingAutomations(
+  meetingId: string,
+): Promise<MeetingAutomation[]> {
+  return request<MeetingAutomation[]>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/automations`,
   );
 }

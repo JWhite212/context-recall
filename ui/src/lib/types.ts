@@ -616,6 +616,41 @@ export interface MeetingInsightResult {
   speaker: string;
 }
 
+export type AutomationConditionField =
+  "tag" | "client" | "project" | "title_contains" | "attendee_domain";
+
+export interface AutomationCondition {
+  field: AutomationConditionField;
+  value: string;
+}
+
+export type AutomationActionType = "apply_tag" | "webhook" | "notify";
+
+export interface AutomationAction {
+  type: AutomationActionType;
+  tags?: string[];
+  url?: string;
+  format?: string;
+  message?: string;
+}
+
+export interface AutomationRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  match_mode: "all" | "any";
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  created_at: number;
+  updated_at: number;
+}
+
+/** An automation rule that fired for a meeting. */
+export interface MeetingAutomation {
+  id: string;
+  name: string;
+}
+
 export interface EmailDraft {
   subject: string;
   body: string;

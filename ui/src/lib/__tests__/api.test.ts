@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import {
   ApiError,
+  createAutomationRule,
   createInsightDefinition,
   exportMeeting,
   getHealth,
@@ -235,5 +236,31 @@ describe("insight definitions", () => {
       name: "Risks",
       prompt: "p",
     });
+  });
+});
+
+describe("automation rules", () => {
+  it("createAutomationRule POSTs the body", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: input.toString(), init });
+        return new Response(JSON.stringify({ id: "r1" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    ) as unknown as typeof fetch;
+
+    await createAutomationRule({
+      name: "R",
+      match_mode: "all",
+      conditions: [{ field: "tag", value: "Type/Discovery" }],
+      actions: [{ type: "apply_tag", tags: ["Reviewed"] }],
+    });
+
+    const call = calls.find((c) => c.init?.method === "POST");
+    expect(call?.url).toContain("/api/automation-rules");
+    expect(JSON.parse(call?.init?.body as string).name).toBe("R");
   });
 });
