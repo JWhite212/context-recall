@@ -224,6 +224,10 @@ class CalendarConfig:
     enabled: bool = False
     time_window_minutes: int = 15
     min_confidence: float = 0.7
+    import_enabled: bool = True
+    sync_interval_minutes: int = 15
+    sync_horizon_days: int = 21
+    excluded_calendars: list[str] = field(default_factory=list)
 
 
 @dataclass
