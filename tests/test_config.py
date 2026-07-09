@@ -57,6 +57,13 @@ def test_unknown_keys_ignored():
     assert not hasattr(result, "some_future_key")
 
 
+def test_build_dataclass_tolerates_none_section():
+    """An empty YAML section (e.g. ``insights:`` with commented-out keys)
+    parses as ``None`` — build the dataclass with defaults rather than crash."""
+    result = _build_dataclass(DetectionConfig, None)
+    assert result == DetectionConfig()
+
+
 def test_expand_path_tilde():
     expanded = _expand_path("~/Documents/test")
     assert "~" not in expanded

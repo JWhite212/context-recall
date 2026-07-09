@@ -366,6 +366,9 @@ def _build_dataclass(cls, raw: dict):
     don't correspond to fields. This makes the config forward-compatible:
     old configs won't break if new fields are added.
     """
+    # An empty YAML section (e.g. ``insights:`` with every key commented
+    # out) parses as ``None`` — treat it as absent and use the defaults.
+    raw = raw or {}
     valid_fields = {f.name for f in dataclasses.fields(cls)}
     filtered = {k: v for k, v in raw.items() if k in valid_fields}
     return cls(**filtered)
