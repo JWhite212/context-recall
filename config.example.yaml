@@ -263,6 +263,15 @@ action_items:
   # Items with title similarity above this are flagged rather than auto-created.
   duplicate_threshold: 0.85
 
+# --- Custom Insights ---
+# User-defined LLM extractions (managed in Settings → Insights) run after each
+# meeting; each definition yields a list of items shown on the meeting.
+insights:
+  # Master switch for the custom-insights feature.
+  # enabled: true
+  # Extract enabled insight definitions from each meeting's transcript.
+  # auto_extract: true
+
 # --- Recurring Meeting Detection ---
 # Automatically group meetings into recurring series for trend analysis.
 series:

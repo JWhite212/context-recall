@@ -216,3 +216,11 @@ def test_summarisation_config_has_template_auto_select_defaults():
     cfg = SummarisationConfig()
     assert cfg.auto_select_template is True
     assert cfg.template_select_min_confidence == 0.6
+
+
+def test_insights_config_defaults():
+    from src.utils.config import InsightsConfig
+
+    cfg = InsightsConfig()
+    assert cfg.enabled is True
+    assert cfg.auto_extract is True

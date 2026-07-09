@@ -234,6 +234,12 @@ class ActionItemsConfig:
 
 
 @dataclass
+class InsightsConfig:
+    enabled: bool = True
+    auto_extract: bool = True
+
+
+@dataclass
 class SeriesConfig:
     heuristic_enabled: bool = True
     min_meetings_for_series: int = 3
@@ -346,6 +352,7 @@ class AppConfig:
     prep: PrepConfig = field(default_factory=PrepConfig)
     voice_id: VoiceIdConfig = field(default_factory=VoiceIdConfig)
     tagging: TaggingConfig = field(default_factory=TaggingConfig)
+    insights: InsightsConfig = field(default_factory=InsightsConfig)
 
 
 def _expand_path(path_str: str) -> str:
@@ -447,6 +454,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         prep=_build_dataclass(PrepConfig, raw.get("prep", {})),
         voice_id=_build_dataclass(VoiceIdConfig, raw.get("voice_id", {})),
         tagging=_build_dataclass(TaggingConfig, raw.get("tagging", {})),
+        insights=_build_dataclass(InsightsConfig, raw.get("insights", {})),
     )
 
     # Handle nested notification channel configs.
