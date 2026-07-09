@@ -12,7 +12,7 @@ import logging
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger("contextrecall.api.automations")
 
@@ -44,6 +44,16 @@ class Action(BaseModel):
     url: str | None = None
     format: str | None = None
     message: str | None = None
+
+    @model_validator(mode="after")
+    def _require_type_params(self) -> "Action":
+        # Reject semantically-invalid actions at the edge: an apply_tag with
+        # no tags or a webhook with no URL would silently never do anything.
+        if self.type == "apply_tag" and not [t for t in (self.tags or []) if t.strip()]:
+            raise ValueError("apply_tag requires at least one non-empty tag")
+        if self.type == "webhook" and not (self.url or "").strip():
+            raise ValueError("webhook requires a url")
+        return self
 
 
 class RuleCreate(BaseModel):

@@ -72,6 +72,51 @@ async def test_create_rejects_empty_conditions(api):
 
 
 @pytest.mark.asyncio
+async def test_create_rejects_webhook_without_url(api):
+    with TestClient(api["app"]) as c:
+        r = c.post(
+            "/api/automation-rules",
+            headers=_auth_headers(),
+            json={
+                "name": "R",
+                "conditions": [{"field": "tag", "value": "x"}],
+                "actions": [{"type": "webhook"}],
+            },
+        )
+        assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_apply_tag_without_tags(api):
+    with TestClient(api["app"]) as c:
+        r = c.post(
+            "/api/automation-rules",
+            headers=_auth_headers(),
+            json={
+                "name": "R",
+                "conditions": [{"field": "tag", "value": "x"}],
+                "actions": [{"type": "apply_tag", "tags": []}],
+            },
+        )
+        assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_allows_notify_without_message(api):
+    with TestClient(api["app"]) as c:
+        r = c.post(
+            "/api/automation-rules",
+            headers=_auth_headers(),
+            json={
+                "name": "R",
+                "conditions": [{"field": "tag", "value": "x"}],
+                "actions": [{"type": "notify"}],
+            },
+        )
+        assert r.status_code == 201
+
+
+@pytest.mark.asyncio
 async def test_meeting_automations_404_for_unknown_meeting(api):
     with TestClient(api["app"]) as c:
         assert c.get("/api/meetings/nope/automations", headers=_auth_headers()).status_code == 404
