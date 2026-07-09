@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 _vec_available = False
 
@@ -374,6 +374,24 @@ CREATE TABLE IF NOT EXISTS voice_profiles (
 CREATE INDEX IF NOT EXISTS idx_voice_profiles_person ON voice_profiles(person_id);
 """
 
+CALENDAR_EVENTS_SQL = """
+CREATE TABLE IF NOT EXISTS calendar_events (
+    event_uid TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    start_ts REAL NOT NULL,
+    end_ts REAL NOT NULL,
+    attendees_json TEXT NOT NULL DEFAULT '[]',
+    organizer_json TEXT,
+    join_url TEXT NOT NULL DEFAULT '',
+    meeting_id TEXT NOT NULL DEFAULT '',
+    calendar_name TEXT NOT NULL DEFAULT '',
+    recorded_meeting_id TEXT,
+    synced_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calendar_events_start ON calendar_events(start_ts);
+"""
+
 
 _ALLOWED_TABLES = frozenset(
     {
@@ -589,6 +607,8 @@ class Database:
             # Automations (v17).
             await self.conn.executescript(AUTOMATION_RULES_SQL)
             await self.conn.executescript(AUTOMATION_DISPATCHES_SQL)
+            # Calendar import (v18).
+            await self.conn.executescript(CALENDAR_EVENTS_SQL)
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -756,5 +776,13 @@ class Database:
             await self.conn.commit()
             logger.info("Database migrated to version 17 (automations)")
             current_version = 17
+
+        if current_version < 18:
+            # Calendar import: mirrored upcoming calendar events.
+            await self.conn.executescript(CALENDAR_EVENTS_SQL)
+            await self.conn.execute("PRAGMA user_version = 18")
+            await self.conn.commit()
+            logger.info("Database migrated to version 18 (calendar import)")
+            current_version = 18
         else:
             logger.debug("Database schema up to date (version %d)", current_version)
