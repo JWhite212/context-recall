@@ -598,6 +598,24 @@ export interface TrackerHit {
   meeting_started_at?: number;
 }
 
+/** A user-defined insight (LLM extraction) definition. */
+export interface InsightDefinition {
+  id: string;
+  name: string;
+  prompt: string;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+/** One extracted insight item on a meeting. */
+export interface MeetingInsightResult {
+  definition_id: string;
+  definition_name: string;
+  content: string;
+  speaker: string;
+}
+
 export interface EmailDraft {
   subject: string;
   body: string;
