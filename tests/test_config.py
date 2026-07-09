@@ -238,3 +238,13 @@ def test_automations_config_defaults():
 
     cfg = AutomationsConfig()
     assert cfg.enabled is True
+
+
+def test_calendar_config_import_defaults():
+    from src.utils.config import CalendarConfig
+
+    cfg = CalendarConfig()
+    assert cfg.import_enabled is True
+    assert cfg.sync_interval_minutes == 15
+    assert cfg.sync_horizon_days == 21
+    assert cfg.excluded_calendars == []
