@@ -177,6 +177,7 @@ def _make_config(tmp_path):
     config.markdown.vault_path = str(tmp_path / "vault")
     config.action_items.auto_extract = False
     config.insights.enabled = False
+    config.automations.enabled = False
     return config
 
 
@@ -1194,3 +1195,50 @@ def test_post_processing_extracts_insights(tmp_path, loop_thread):
         )
 
     ins_repo.replace_results_for_meeting.assert_awaited_once()
+
+
+def test_post_processing_runs_automations(tmp_path, loop_thread):
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(
+        return_value=MagicMock(
+            tags=["Type/Discovery"],
+            client_id=None,
+            project_id=None,
+            title="Disco",
+            attendees_json="[]",
+        )
+    )
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    config.automations.enabled = True
+    runner = _make_runner(config, db=bridge)
+
+    auto_repo = MagicMock()
+    auto_repo.list_rules = AsyncMock(
+        return_value=[
+            {
+                "id": "r1",
+                "name": "R",
+                "enabled": True,
+                "match_mode": "all",
+                "conditions": [{"field": "tag", "value": "Type/Discovery"}],
+                "actions": [{"type": "apply_tag", "tags": ["Reviewed"]}],
+            }
+        ]
+    )
+    auto_repo.has_dispatched = AsyncMock(return_value=False)
+    auto_repo.record_dispatch = AsyncMock()
+
+    with (
+        patch("src.automations.repository.AutomationRepository", return_value=auto_repo),
+        patch("src.analytics.engine.AnalyticsEngine") as engine_cls,
+    ):
+        engine_cls.return_value.refresh_period = AsyncMock()
+        asyncio.run(
+            runner._post_process_async(
+                "m1", _make_transcript(), started_at=1000.0, is_reprocess=False
+            )
+        )
+
+    auto_repo.record_dispatch.assert_awaited_once_with("r1", "m1")
+    repo.update_meeting.assert_any_await("m1", tags=["Type/Discovery", "Reviewed"])

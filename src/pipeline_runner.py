@@ -799,6 +799,12 @@ class PipelineRunner:
         except Exception:
             logger.warning("Insight extraction failed", exc_info=True)
         try:
+            autos_cfg = getattr(self._config, "automations", None)
+            if autos_cfg and autos_cfg.enabled:
+                await self._run_automations(meeting_id)
+        except Exception:
+            logger.warning("Automations run failed", exc_info=True)
+        try:
             await self._refresh_analytics(started_at)
         except Exception:
             logger.warning("Analytics refresh failed", exc_info=True)
@@ -931,6 +937,37 @@ class PipelineRunner:
         await repo.replace_results_for_meeting(meeting_id, results)
         if results:
             self._emit("insights.extracted", meeting_id=meeting_id, count=len(results))
+
+    async def _run_automations(self, meeting_id: str) -> None:
+        from src.automations.evaluator import build_meeting_context, matches
+        from src.automations.executor import ActionExecutor
+        from src.automations.repository import AutomationRepository
+
+        if self._db.database is None:
+            return
+        auto_repo = AutomationRepository(self._db.database)
+        rules = await auto_repo.list_rules(enabled_only=True)
+        if not rules:
+            return
+        meeting = await self._db.repo.get_meeting(meeting_id)
+        if meeting is None:
+            return
+        # One snapshot for the whole run — match all rules before executing so
+        # an apply_tag cannot cascade into another rule's match.
+        context = build_meeting_context(meeting)
+        matched = [r for r in rules if matches(context, r)]
+        if not matched:
+            return
+        executor = ActionExecutor(self._db.repo, self._emit)
+        for rule in matched:
+            already = await auto_repo.has_dispatched(rule["id"], meeting_id)
+            await executor.run_rule(rule, context, meeting_id, run_side_effects=not already)
+            await auto_repo.record_dispatch(rule["id"], meeting_id)
+        self._emit(
+            "automations.fired",
+            meeting_id=meeting_id,
+            rules=[{"id": r["id"], "name": r["name"]} for r in matched],
+        )
 
     async def _scan_trackers(self, meeting_id: str, transcript) -> None:
         """Match enabled keyword trackers against the fresh transcript."""
