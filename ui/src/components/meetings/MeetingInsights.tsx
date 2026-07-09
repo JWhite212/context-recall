@@ -2,11 +2,57 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   draftFollowupEmail,
+  getMeetingInsights,
   getMeetingTrackerHits,
   getTalkStats,
 } from "../../lib/api";
 import { useToast } from "../common/Toast";
-import type { EmailDraft } from "../../lib/types";
+import type { EmailDraft, MeetingInsightResult } from "../../lib/types";
+
+/** Custom insight results grouped by definition, rendered as labelled lists. */
+export function InsightResults({
+  results,
+}: {
+  results: MeetingInsightResult[];
+}) {
+  if (results.length === 0) return null;
+  const groups = new Map<string, MeetingInsightResult[]>();
+  for (const r of results) {
+    const items = groups.get(r.definition_name);
+    if (items) items.push(r);
+    else groups.set(r.definition_name, [r]);
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      {[...groups.entries()].map(([name, items]) => (
+        <div key={name}>
+          <p className="text-[10px] uppercase tracking-wide text-text-muted mb-1">
+            {name}
+          </p>
+          <ul className="flex flex-col gap-0.5">
+            {items.map((item, i) => (
+              <li
+                key={`${name}-${i}`}
+                className="text-xs text-text-secondary flex gap-1.5"
+              >
+                <span className="text-text-muted/60">•</span>
+                <span>
+                  {item.content}
+                  {item.speaker && (
+                    <span className="text-text-muted/60">
+                      {" "}
+                      — {item.speaker}
+                    </span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const BAR_COLORS = [
   "bg-blue-400",
@@ -39,6 +85,11 @@ export function MeetingInsights({
     queryFn: () => getMeetingTrackerHits(meetingId),
   });
 
+  const { data: insightResults = [] } = useQuery({
+    queryKey: ["meeting-insights", meetingId],
+    queryFn: () => getMeetingInsights(meetingId),
+  });
+
   const email = useMutation({
     mutationFn: () => draftFollowupEmail(meetingId),
     onSuccess: setDraft,
@@ -57,7 +108,12 @@ export function MeetingInsights({
     hitsByTracker.set(name, (hitsByTracker.get(name) ?? 0) + 1);
   }
 
-  if (speakers.length === 0 && hitsByTracker.size === 0 && !hasSummary) {
+  if (
+    speakers.length === 0 &&
+    hitsByTracker.size === 0 &&
+    insightResults.length === 0 &&
+    !hasSummary
+  ) {
     return null;
   }
 
@@ -114,6 +170,9 @@ export function MeetingInsights({
           ))}
         </div>
       )}
+
+      {/* Custom insights */}
+      <InsightResults results={insightResults} />
 
       {/* Follow-up email */}
       {hasSummary && (
