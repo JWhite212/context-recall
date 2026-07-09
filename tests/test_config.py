@@ -231,3 +231,10 @@ def test_insights_config_defaults():
     cfg = InsightsConfig()
     assert cfg.enabled is True
     assert cfg.auto_extract is True
+
+
+def test_automations_config_defaults():
+    from src.utils.config import AutomationsConfig
+
+    cfg = AutomationsConfig()
+    assert cfg.enabled is True
