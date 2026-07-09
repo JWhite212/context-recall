@@ -21,6 +21,7 @@ from src.api.events import EventBus
 from src.api.middleware import BodySizeLimitMiddleware, RateLimitMiddleware
 from src.api.routes import ask as ask_routes
 from src.api.routes import auth as auth_routes
+from src.api.routes import automations as automations_routes
 from src.api.routes import calendar as calendar_routes
 from src.api.routes import clients as clients_routes
 from src.api.routes import config as config_routes
@@ -172,11 +173,13 @@ class ApiServer:
         clients_routes.init(self.repo, ClientProjectRepository(self.db))
         ask_routes.init(self.repo, embedder)
 
+        from src.automations.repository import AutomationRepository
         from src.insights.repository import InsightRepository
         from src.trackers.repository import TrackerRepository
 
         insights_routes.init(self.repo, InsightRepository(self.db))
         trackers_routes.init(self.repo, TrackerRepository(self.db))
+        automations_routes.init(self.repo, AutomationRepository(self.db))
 
         # Register REST routers with auth dependency.
         auth_deps = [Depends(verify_token)]
@@ -200,6 +203,7 @@ class ApiServer:
         app.include_router(ask_routes.router, dependencies=auth_deps)
         app.include_router(insights_routes.router, dependencies=auth_deps)
         app.include_router(trackers_routes.router, dependencies=auth_deps)
+        app.include_router(automations_routes.router, dependencies=auth_deps)
         app.include_router(meeting_insights_routes.router, dependencies=auth_deps)
         app.include_router(calendar_routes.router, dependencies=auth_deps)
         app.include_router(auth_routes.router, dependencies=auth_deps)
