@@ -176,6 +176,7 @@ def _make_config(tmp_path):
     config.markdown.enabled = False
     config.markdown.vault_path = str(tmp_path / "vault")
     config.action_items.auto_extract = False
+    config.insights.enabled = False
     return config
 
 
@@ -1161,3 +1162,35 @@ def test_select_template_default_when_auto_off(tmp_path, loop_thread):
     )
     assert tpl.name == config.summarisation.default_template
     assert source == "default"
+
+
+def test_post_processing_extracts_insights(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    config.insights.enabled = True
+    config.insights.auto_extract = True
+    runner = _make_runner(config, db=bridge)
+
+    ins_repo = MagicMock()
+    ins_repo.list_definitions = AsyncMock(
+        return_value=[{"id": "d1", "name": "Risks", "prompt": "p"}]
+    )
+    ins_repo.replace_results_for_meeting = AsyncMock()
+
+    with (
+        patch("src.insights.extractor.InsightExtractor") as ext_cls,
+        patch("src.insights.repository.InsightRepository", return_value=ins_repo),
+        patch("src.analytics.engine.AnalyticsEngine") as engine_cls,
+    ):
+        ext_cls.return_value.extract.return_value = [
+            {"definition_id": "d1", "definition_name": "Risks", "content": "a", "speaker": ""}
+        ]
+        engine_cls.return_value.refresh_period = AsyncMock()
+        asyncio.run(
+            runner._post_process_async(
+                "m1", _make_transcript(), started_at=1000.0, is_reprocess=False
+            )
+        )
+
+    ins_repo.replace_results_for_meeting.assert_awaited_once()
