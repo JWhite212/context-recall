@@ -41,14 +41,27 @@ const ACTION_TYPES: {
 ];
 
 interface CondRow {
+  id: number;
   field: AutomationConditionField;
   value: string;
 }
 
 interface ActionRow {
+  id: number;
   type: AutomationActionType;
   value: string;
 }
+
+// Stable per-row ids so React keys survive mid-list removal (index keys would
+// leave stale input values in the wrong row when a middle row is deleted).
+let _rowSeq = 0;
+const nextRowId = () => (_rowSeq += 1);
+const blankCond = (): CondRow => ({ id: nextRowId(), field: "tag", value: "" });
+const blankAction = (): ActionRow => ({
+  id: nextRowId(),
+  type: "apply_tag",
+  value: "",
+});
 
 function buildAction(row: ActionRow): AutomationAction | null {
   if (row.type === "apply_tag") {
@@ -112,10 +125,8 @@ export function AutomationsSection({ id }: { id?: string }) {
   const toast = useToast();
   const [name, setName] = useState("");
   const [matchMode, setMatchMode] = useState<"all" | "any">("all");
-  const [conds, setConds] = useState<CondRow[]>([{ field: "tag", value: "" }]);
-  const [actions, setActions] = useState<ActionRow[]>([
-    { type: "apply_tag", value: "" },
-  ]);
+  const [conds, setConds] = useState<CondRow[]>([blankCond()]);
+  const [actions, setActions] = useState<ActionRow[]>([blankAction()]);
 
   const { data: rules = [], isLoading } = useQuery({
     queryKey: ["automation-rules"],
@@ -147,8 +158,8 @@ export function AutomationsSection({ id }: { id?: string }) {
     onSuccess: () => {
       setName("");
       setMatchMode("all");
-      setConds([{ field: "tag", value: "" }]);
-      setActions([{ type: "apply_tag", value: "" }]);
+      setConds([blankCond()]);
+      setActions([blankAction()]);
       void invalidate();
     },
     onError: () => toast.error("Failed to create rule."),
@@ -258,7 +269,7 @@ export function AutomationsSection({ id }: { id?: string }) {
               Conditions
             </p>
             {conds.map((c, i) => (
-              <div key={i} className="flex items-center gap-1.5">
+              <div key={c.id} className="flex items-center gap-1.5">
                 <select
                   value={c.field}
                   onChange={(e) =>
@@ -299,9 +310,7 @@ export function AutomationsSection({ id }: { id?: string }) {
             ))}
             <button
               type="button"
-              onClick={() =>
-                setConds((rows) => [...rows, { field: "tag", value: "" }])
-              }
+              onClick={() => setConds((rows) => [...rows, blankCond()])}
               className="self-start text-xs text-accent hover:underline"
             >
               + Add condition
@@ -315,7 +324,7 @@ export function AutomationsSection({ id }: { id?: string }) {
             {actions.map((a, i) => {
               const meta = ACTION_TYPES.find((t) => t.value === a.type);
               return (
-                <div key={i} className="flex items-center gap-1.5">
+                <div key={a.id} className="flex items-center gap-1.5">
                   <select
                     value={a.type}
                     onChange={(e) =>
@@ -357,12 +366,7 @@ export function AutomationsSection({ id }: { id?: string }) {
             })}
             <button
               type="button"
-              onClick={() =>
-                setActions((rows) => [
-                  ...rows,
-                  { type: "apply_tag", value: "" },
-                ])
-              }
+              onClick={() => setActions((rows) => [...rows, blankAction()])}
               className="self-start text-xs text-accent hover:underline"
             >
               + Add action
