@@ -793,6 +793,12 @@ class PipelineRunner:
         except Exception:
             logger.warning("Tracker scan failed", exc_info=True)
         try:
+            insights_cfg = getattr(self._config, "insights", None)
+            if insights_cfg and insights_cfg.enabled and insights_cfg.auto_extract:
+                await self._extract_insights(meeting_id, transcript)
+        except Exception:
+            logger.warning("Insight extraction failed", exc_info=True)
+        try:
             await self._refresh_analytics(started_at)
         except Exception:
             logger.warning("Analytics refresh failed", exc_info=True)
@@ -906,6 +912,25 @@ class PipelineRunner:
             project_id=assignment.project_id,
             confidence=assignment.confidence,
         )
+
+    async def _extract_insights(self, meeting_id: str, transcript) -> None:
+        from src.insights.extractor import InsightExtractor
+        from src.insights.repository import InsightRepository
+
+        if self._db.database is None:
+            return
+        repo = InsightRepository(self._db.database)
+        definitions = await repo.list_definitions(enabled_only=True)
+        results = []
+        if definitions:
+            extractor = InsightExtractor(self._config.summarisation)
+            # Blocking HTTP — keep it off the API event loop.
+            results = await asyncio.to_thread(extractor.extract, transcript, definitions)
+        # Always replace — a reprocess (or a since-disabled definition) must
+        # clear stale rows even when nothing new is extracted.
+        await repo.replace_results_for_meeting(meeting_id, results)
+        if results:
+            self._emit("insights.extracted", meeting_id=meeting_id, count=len(results))
 
     async def _scan_trackers(self, meeting_id: str, transcript) -> None:
         """Match enabled keyword trackers against the fresh transcript."""
