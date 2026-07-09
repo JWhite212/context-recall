@@ -21,6 +21,7 @@ import { Tooltip } from "../common/Tooltip";
 import type { Theme } from "../../hooks/useTheme";
 import type { AppConfig, WhisperModel, SummaryTemplate } from "../../lib/types";
 import { InsightsSection } from "./InsightsSection";
+import { AutomationsSection } from "./AutomationsSection";
 
 /* ------------------------------------------------------------------ */
 /*  Section navigation definitions                                    */
@@ -41,6 +42,7 @@ const SETTINGS_SECTIONS = [
   { id: "logging", label: "Logging" },
   { id: "templates", label: "Templates" },
   { id: "insights", label: "Insights" },
+  { id: "automations", label: "Automations" },
   { id: "daemon", label: "Daemon" },
   { id: "system", label: "System" },
   { id: "about", label: "About" },
@@ -2033,6 +2035,9 @@ export function Settings() {
 
       {/* Custom Insights */}
       {daemonRunning && <InsightsSection id="insights" />}
+
+      {/* Automations */}
+      {daemonRunning && <AutomationsSection id="automations" />}
 
       {/* Read-only info */}
       <Section id="daemon" title="Daemon">
