@@ -20,6 +20,7 @@ import { useToast } from "../common/Toast";
 import { Tooltip } from "../common/Tooltip";
 import type { Theme } from "../../hooks/useTheme";
 import type { AppConfig, WhisperModel, SummaryTemplate } from "../../lib/types";
+import { InsightsSection } from "./InsightsSection";
 
 /* ------------------------------------------------------------------ */
 /*  Section navigation definitions                                    */
@@ -39,6 +40,7 @@ const SETTINGS_SECTIONS = [
   { id: "notifications", label: "Notifications" },
   { id: "logging", label: "Logging" },
   { id: "templates", label: "Templates" },
+  { id: "insights", label: "Insights" },
   { id: "daemon", label: "Daemon" },
   { id: "system", label: "System" },
   { id: "about", label: "About" },
@@ -2028,6 +2030,9 @@ export function Settings() {
 
       {/* Summary Templates — always visible when daemon is running */}
       {daemonRunning && <TemplatesSection id="templates" />}
+
+      {/* Custom Insights */}
+      {daemonRunning && <InsightsSection id="insights" />}
 
       {/* Read-only info */}
       <Section id="daemon" title="Daemon">
