@@ -27,6 +27,7 @@ from src.api.routes import config as config_routes
 from src.api.routes import devices as devices_routes
 from src.api.routes import diagnostics as diagnostics_routes
 from src.api.routes import export as export_routes
+from src.api.routes import insights as insights_routes
 from src.api.routes import meeting_insights as meeting_insights_routes
 from src.api.routes import meetings as meetings_routes
 from src.api.routes import models as models_routes
@@ -171,8 +172,10 @@ class ApiServer:
         clients_routes.init(self.repo, ClientProjectRepository(self.db))
         ask_routes.init(self.repo, embedder)
 
+        from src.insights.repository import InsightRepository
         from src.trackers.repository import TrackerRepository
 
+        insights_routes.init(self.repo, InsightRepository(self.db))
         trackers_routes.init(self.repo, TrackerRepository(self.db))
 
         # Register REST routers with auth dependency.
@@ -195,6 +198,7 @@ class ApiServer:
         app.include_router(people_routes.router, dependencies=auth_deps)
         app.include_router(clients_routes.router, dependencies=auth_deps)
         app.include_router(ask_routes.router, dependencies=auth_deps)
+        app.include_router(insights_routes.router, dependencies=auth_deps)
         app.include_router(trackers_routes.router, dependencies=auth_deps)
         app.include_router(meeting_insights_routes.router, dependencies=auth_deps)
         app.include_router(calendar_routes.router, dependencies=auth_deps)
