@@ -68,6 +68,8 @@ class ApiServer:
         self.ws_manager = ConnectionManager()
         self.db = Database()
         self.repo: MeetingRepository | None = None
+        self._calendar_reader = None
+        self._calendar_sync = None
 
         self._app: FastAPI | None = None
         self._thread: threading.Thread | None = None
@@ -149,7 +151,17 @@ class ApiServer:
             self._is_recording,
         )
 
-        calendar_routes.init(self.repo)
+        from src.calendar_events.reader import CalendarReader
+        from src.calendar_events.repository import CalendarEventRepository
+        from src.calendar_events.sync import CalendarSyncJob
+
+        _cal_cfg = load_config().calendar
+        if _cal_cfg.enabled or _cal_cfg.import_enabled:
+            self._calendar_reader = CalendarReader(excluded_calendars=_cal_cfg.excluded_calendars)
+        else:
+            self._calendar_reader = None
+        self._calendar_sync = CalendarSyncJob(CalendarEventRepository(self.db))
+        calendar_routes.init(self.repo, self._calendar_reader, self._calendar_sync)
         export_routes.init(self.repo)
         resummarise_routes.init(self.repo, self.event_bus)
         reprocess_routes.init(self.repo, self.event_bus, db=self.db)
@@ -444,6 +456,13 @@ class ApiServer:
                 86400,
             )
 
+        if config.calendar.import_enabled:
+            self._scheduler.register(
+                "calendar_sync",
+                lambda: safe_run("calendar_sync", self._sync_calendar),
+                config.calendar.sync_interval_minutes * 60,
+            )
+
     async def _check_reminders(self) -> None:
         """Check for due reminders and overdue action items."""
         from src.action_items.repository import ActionItemRepository
@@ -513,6 +532,22 @@ class ApiServer:
                 logger.info("Heuristic detection found %d new series", len(new_series))
         except Exception:
             logger.exception("Heuristic series detection failed")
+
+    async def _sync_calendar(self) -> None:
+        """Mirror the rolling calendar window into calendar_events."""
+        import time
+
+        reader = getattr(self, "_calendar_reader", None)
+        sync = getattr(self, "_calendar_sync", None)
+        if reader is None or sync is None or not reader.available:
+            return
+        config = load_config().calendar
+        now = time.time()
+        end = now + config.sync_horizon_days * 86400
+        excluded = config.excluded_calendars
+        loop = asyncio.get_running_loop()
+        events = await loop.run_in_executor(None, reader.list_events, now, end, excluded)
+        await sync.apply(now, end, events)
 
     async def _retention_cleanup_once(self) -> None:
         """One pass of the retention cleanup, intended for ``safe_run``."""
