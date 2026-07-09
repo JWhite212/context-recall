@@ -272,6 +272,13 @@ insights:
   # Extract enabled insight definitions from each meeting's transcript.
   # auto_extract: true
 
+# --- Automations ---
+# User-defined rules (managed in Settings → Automations) run after each meeting;
+# matching conditions trigger apply-tag / webhook / notify actions.
+automations:
+  # Master switch for the automations engine.
+  # enabled: true
+
 # --- Recurring Meeting Detection ---
 # Automatically group meetings into recurring series for trend analysis.
 series:
