@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import {
   ApiError,
+  createInsightDefinition,
   exportMeeting,
   getHealth,
   getStatus,
@@ -210,5 +211,29 @@ describe("requestRaw consumers", () => {
     ) as unknown as typeof fetch;
 
     await expect(getUpcomingPrep()).resolves.toBeNull();
+  });
+});
+
+describe("insight definitions", () => {
+  it("createInsightDefinition POSTs the body", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: input.toString(), init });
+        return new Response(JSON.stringify({ id: "d1" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    ) as unknown as typeof fetch;
+
+    await createInsightDefinition({ name: "Risks", prompt: "p" });
+
+    const call = calls.find((c) => c.init?.method === "POST");
+    expect(call?.url).toContain("/api/insight-definitions");
+    expect(JSON.parse(call?.init?.body as string)).toEqual({
+      name: "Risks",
+      prompt: "p",
+    });
   });
 });

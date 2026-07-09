@@ -35,6 +35,8 @@ import type {
   SeriesTrends,
   SpeakerMapping,
   StatusResponse,
+  InsightDefinition,
+  MeetingInsightResult,
   SummaryTemplate,
   TalkStats,
   Tracker,
@@ -862,5 +864,44 @@ export async function getMeetingTrackerHits(
 ): Promise<TrackerHit[]> {
   return request<TrackerHit[]>(
     `/api/meetings/${encodeURIComponent(meetingId)}/tracker-hits`,
+  );
+}
+
+export async function getInsightDefinitions(): Promise<InsightDefinition[]> {
+  return request<InsightDefinition[]>("/api/insight-definitions");
+}
+
+export async function createInsightDefinition(def: {
+  name: string;
+  prompt: string;
+  enabled?: boolean;
+}): Promise<InsightDefinition> {
+  return request<InsightDefinition>("/api/insight-definitions", {
+    method: "POST",
+    body: JSON.stringify(def),
+  });
+}
+
+export async function updateInsightDefinition(
+  id: string,
+  fields: Partial<Pick<InsightDefinition, "name" | "prompt" | "enabled">>,
+): Promise<InsightDefinition> {
+  return request<InsightDefinition>(
+    `/api/insight-definitions/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: JSON.stringify(fields) },
+  );
+}
+
+export async function deleteInsightDefinition(id: string): Promise<void> {
+  await request(`/api/insight-definitions/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getMeetingInsights(
+  meetingId: string,
+): Promise<MeetingInsightResult[]> {
+  return request<MeetingInsightResult[]>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/insights`,
   );
 }
