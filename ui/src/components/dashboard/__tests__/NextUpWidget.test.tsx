@@ -101,9 +101,13 @@ describe("NextUpWidget", () => {
       activeMeeting: null,
       isLoading: false,
     } as ReturnType<typeof useDaemonStatus>);
-    const { container } = render(<NextUpWidget />, { wrapper: makeWrapper() });
-    // Widget should not render any content (the Shell/div) when daemonRunning is false
-    expect(container.querySelector("div.rounded-xl")).not.toBeInTheDocument();
+    render(<NextUpWidget />, { wrapper: makeWrapper() });
+    // Widget returns null when offline → its "Next up" heading is never rendered.
+    // (container isn't empty: the ToastProvider wrapper always renders its
+    // notifications div, so toBeEmptyDOMElement would be wrong here.)
+    expect(
+      screen.queryByRole("heading", { name: "Next up" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a 'Prep ready' badge when the event is prepared", async () => {
