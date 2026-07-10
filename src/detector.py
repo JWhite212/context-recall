@@ -81,6 +81,10 @@ class TeamsDetector:
         # Callbacks — set these from the orchestrator.
         self.on_meeting_start: Callable[[MeetingEvent], None] = lambda event: None
         self.on_meeting_end: Callable[[MeetingEvent], None] = lambda event: None
+        # Fired once per poll (auto-arm hooks here). Kept separate from the
+        # edge-triggered start/end callbacks and wrapped so a raising hook
+        # can never stop detection.
+        self.on_tick: Callable[[], None] = lambda: None
 
     @property
     def state(self) -> MeetingState:
@@ -117,6 +121,7 @@ class TeamsDetector:
 
     def _tick(self) -> None:
         """Single poll cycle. Advances the state machine with debounce."""
+        self._fire_tick_hook()
         meeting_active = self._is_meeting_active()
 
         if self._state == MeetingState.IDLE:
@@ -196,6 +201,17 @@ class TeamsDetector:
                 # cooldown so a fresh negative sequence starts from zero.
                 self._consecutive_end_detections = 0
                 self._ending_started_at = 0.0
+
+    def _fire_tick_hook(self) -> None:
+        """Invoke the per-poll hook, isolating detection from hook failures."""
+        try:
+            self.on_tick()
+        except Exception:
+            logger.exception("on_tick hook raised — ignoring.")
+
+    def app_using_audio(self, process_names: list[str]) -> bool:
+        """Public passthrough to the platform's active-audio check."""
+        return self._platform.is_app_using_audio(process_names)
 
     # ------------------------------------------------------------------
     # Public interface
