@@ -11,6 +11,8 @@ import {
   getHealth,
   getStatus,
   getUpcomingPrep,
+  getUpcomingPrepList,
+  getPreparedEventUids,
   setAuthToken,
   triggerCalendarSync,
 } from "../api";
@@ -316,5 +318,34 @@ describe("calendar import", () => {
     expect(res.synced).toBe(3);
     const call = calls.find((c) => c.init?.method === "POST");
     expect(call?.url).toContain("/api/calendar/sync");
+  });
+});
+
+describe("auto-prep", () => {
+  it("getUpcomingPrepList requests the list", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(input.toString());
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    await getUpcomingPrepList();
+    expect(calls[0]).toContain("/api/prep/upcoming-list");
+  });
+
+  it("getPreparedEventUids requests prepared-events", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(input.toString());
+      return new Response(JSON.stringify({ event_uids: ["EK1:1000"] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const res = await getPreparedEventUids();
+    expect(res.event_uids).toEqual(["EK1:1000"]);
+    expect(calls[0]).toContain("/api/prep/prepared-events");
   });
 });
