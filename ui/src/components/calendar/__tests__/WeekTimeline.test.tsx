@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WeekTimeline } from "../WeekTimeline";
 import type { CalendarEvent } from "../../../lib/types";
+import { ToastProvider } from "../../common/Toast";
 
 function makeWrapper() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -26,13 +27,15 @@ describe("WeekTimeline with events", () => {
   it("renders upcoming events through the clickable UpcomingEventCard", () => {
     render(
       <QueryClientProvider client={makeWrapper()}>
-        <MemoryRouter>
-          <WeekTimeline
-            currentDate={new Date(EVENT.start_ts * 1000)}
-            meetings={[]}
-            events={[EVENT]}
-          />
-        </MemoryRouter>
+        <ToastProvider>
+          <MemoryRouter>
+            <WeekTimeline
+              currentDate={new Date(EVENT.start_ts * 1000)}
+              meetings={[]}
+              events={[EVENT]}
+            />
+          </MemoryRouter>
+        </ToastProvider>
       </QueryClientProvider>,
     );
     const button = screen.getByRole("button", { name: /Design sync/i });

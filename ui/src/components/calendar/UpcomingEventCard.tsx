@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { CalendarEvent } from "../../lib/types";
 import { generatePrepForEvent, startRecording } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
+import { useToast } from "../common/Toast";
 import { PrepModal } from "./PrepModal";
 
 interface UpcomingEventCardProps {
@@ -23,6 +24,7 @@ export function UpcomingEventCard({
   const [confirmingRecord, setConfirmingRecord] = useState(false);
   const queryClient = useQueryClient();
   const { state } = useDaemonStatus();
+  const toast = useToast();
 
   const title = event.title || "Untitled";
   const start = format(new Date(event.start_ts * 1000), "HH:mm");
@@ -42,18 +44,18 @@ export function UpcomingEventCard({
         end_ts: event.end_ts,
         series_id: null,
       }),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      queryClient.setQueryData(["prep", "by-event", event.event_uid], data);
       void queryClient.invalidateQueries({ queryKey: ["prepared-events"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["prep", "by-event", event.event_uid],
-      });
       setShowPrep(true);
     },
+    onError: () => toast.error("Failed to generate prep."),
   });
 
   const record = useMutation({
     mutationFn: () => startRecording(),
     onSuccess: () => setConfirmingRecord(false),
+    onError: () => toast.error("Failed to start recording."),
   });
 
   return (

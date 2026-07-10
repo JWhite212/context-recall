@@ -43,7 +43,7 @@ async def api(tmp_path):
         series_repo=SeriesRepository(db),
         prep_repo=repo,
     )
-    gen._summariser.chat = lambda system, user: "## Prep\nstub briefing"
+    gen._summariser.chat = lambda system, user: f"stub briefing\n\n{user}"
     prep_routes.init(repo, gen)
     app = FastAPI()
     app.include_router(prep_routes.router, dependencies=[Depends(verify_token)])
@@ -102,4 +102,4 @@ async def test_by_event_regenerate_returns_newest(api):
         got = c.get("/api/prep/by-event/EK3:3000", headers=_headers())
         assert got.status_code == 200
         # newest wins (both rows share the uid; get_by_calendar_event orders by generated_at DESC)
-        assert got.json()["content_markdown"]  # a briefing is returned
+        assert "Renamed" in got.json()["content_markdown"]
