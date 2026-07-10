@@ -2043,3 +2043,51 @@ def test_stop_deferred_returns_meeting_id_and_writes_duration(app_with_mocked_ap
     assert db_call.args[0] == "meet-deferred"
     assert db_call.kwargs["duration_seconds"] == pytest.approx(60, abs=5)
     assert "ended_at" in db_call.kwargs
+
+
+def _auto_arm_config(tmp_path, *, enabled, import_enabled=True):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(exist_ok=True)
+    config = {
+        "audio": {"temp_audio_dir": str(tmp_path / "audio")},
+        "api": {"enabled": False},
+        "diarisation": {"enabled": False},
+        "markdown": {"enabled": False},
+        "notion": {"enabled": False},
+        "calendar": {"import_enabled": import_enabled},
+        "auto_arm": {"enabled": enabled},
+        "logging": {"level": "WARNING", "log_file": str(log_dir / "t.log")},
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.dump(config))
+    return path
+
+
+def test_auto_arm_wired_when_enabled(tmp_path):
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=_auto_arm_config(tmp_path, enabled=True))
+    app._maybe_start_auto_arm()
+
+    assert app._auto_arm is not None
+    assert app._detector.on_tick == app._auto_arm.tick
+
+
+def test_auto_arm_absent_when_disabled(tmp_path):
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=_auto_arm_config(tmp_path, enabled=False))
+    default_hook = app._detector.on_tick
+    app._maybe_start_auto_arm()
+
+    assert app._auto_arm is None
+    assert app._detector.on_tick is default_hook  # unchanged
+
+
+def test_auto_arm_absent_when_calendar_import_disabled(tmp_path):
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=_auto_arm_config(tmp_path, enabled=True, import_enabled=False))
+    app._maybe_start_auto_arm()
+
+    assert app._auto_arm is None
