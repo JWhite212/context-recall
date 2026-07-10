@@ -9,6 +9,7 @@ import { SkeletonCard } from "../common/Skeleton";
 import { useToast } from "../common/Toast";
 import { HealthSummary } from "./HealthSummary";
 import { OverdueItems } from "./OverdueItems";
+import { NextUpWidget } from "./NextUpWidget";
 
 function StatusCard() {
   const { daemonRunning, state, activeMeeting } = useDaemonStatus();
@@ -305,6 +306,7 @@ export function Dashboard() {
     <div className="flex flex-col gap-4 p-6 max-w-3xl">
       <h1 className="text-lg font-semibold text-text-primary">Dashboard</h1>
       <StatusCard />
+      <NextUpWidget />
       <StatsRow />
       <PendingCallout />
       <HealthSummary />
