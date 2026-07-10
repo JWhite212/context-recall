@@ -822,6 +822,16 @@ export async function generatePrep(meetingId: string): Promise<PrepBriefing> {
   );
 }
 
+export async function getUpcomingPrepList(limit = 20): Promise<PrepBriefing[]> {
+  return request<PrepBriefing[]>(`/api/prep/upcoming-list?limit=${limit}`);
+}
+
+export async function getPreparedEventUids(): Promise<{
+  event_uids: string[];
+}> {
+  return request<{ event_uids: string[] }>("/api/prep/prepared-events");
+}
+
 // --- Ask, insights & trackers ---
 
 /** Ask a question across meeting history. LLM answers can take a while. */
