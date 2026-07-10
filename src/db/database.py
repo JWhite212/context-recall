@@ -796,6 +796,17 @@ class Database:
 
         if current_version < 19:
             # Auto-prep: link briefings to upcoming calendar events.
+            # Defensive: a DB that never ran the v9 intelligence step (or a
+            # minimal migration fixture) may lack prep_briefings entirely, and
+            # _safe_add_column's ALTER hard-fails on a missing table. Create it
+            # only when truly absent — running the full DDL against a
+            # pre-existing older table would reference columns it may lack
+            # (e.g. the series_id index).
+            cur = await self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='prep_briefings'"
+            )
+            if await cur.fetchone() is None:
+                await self.conn.executescript(PREP_BRIEFINGS_SQL)
             await _safe_add_column(
                 self.conn, "prep_briefings", "calendar_event_uid", "TEXT", "NULL"
             )
