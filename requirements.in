@@ -34,8 +34,15 @@ websockets>=14.0
 aiosqlite>=0.21.0
 sqlite-vec>=0.1.6
 
-# Calendar integration (macOS EventKit — skipped on non-macOS platforms)
+# Calendar integration (macOS EventKit — skipped on non-macOS platforms).
+# The pyobjc transitives are listed explicitly with the same marker because
+# pip-tools 7.x doesn't propagate markers through dependency chains (same
+# workaround as the mlx block above); without them the lock pins
+# pyobjc-core/-Cocoa unmarked and Linux runners (pip-audit) try to build
+# them from sdist and fail ("PyObjC requires macOS to build").
 pyobjc-framework-EventKit>=10.0; sys_platform == "darwin"
+pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc-core>=10.0; sys_platform == "darwin"
 
 # Semantic search (optional — vector search disabled without it)
 sentence-transformers>=2.2.0
