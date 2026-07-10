@@ -60,6 +60,8 @@ class AutoArmController:
                 # Ended by other means (Teams-end / manual / silence watchdog).
                 self._recording_event = None
             else:
+                # Missing end_ts → fail closed (stop promptly rather than
+                # record unbounded): 0.0 makes now > end_ts + trailing true.
                 end_ts = self._recording_event.get("end_ts", 0.0)
                 if now > end_ts + self._trailing_seconds:
                     self._recording_event = None
