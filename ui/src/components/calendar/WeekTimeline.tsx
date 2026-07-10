@@ -10,6 +10,7 @@ import {
 } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import type { CalendarEvent, Meeting } from "../../lib/types";
+import { UpcomingEventCard } from "./UpcomingEventCard";
 
 interface WeekTimelineProps {
   currentDate: Date;
@@ -166,18 +167,10 @@ export function WeekTimeline({
                   return (
                     <div
                       key={ev.event_uid}
-                      className="absolute left-0.5 right-0.5 rounded px-1.5 py-0.5 border border-dashed border-text-muted/40 bg-surface-hover/40 overflow-hidden"
+                      className="absolute left-0.5 right-0.5"
                       style={{ top: `${top}px`, height: `${height}px` }}
-                      title={ev.title || "Untitled"}
                     >
-                      <p className="text-[10px] font-medium text-text-secondary truncate">
-                        {ev.title || "Untitled"}
-                      </p>
-                      {height > 30 && (
-                        <p className="text-[9px] text-text-muted">
-                          {format(eventDate, "HH:mm")}
-                        </p>
-                      )}
+                      <UpcomingEventCard event={ev} compact />
                     </div>
                   );
                 })}
