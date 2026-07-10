@@ -35,6 +35,21 @@ class _FakeGen:
         return "bid"
 
 
+class _FakeGenRaisingForUid:
+    """Generator that raises for a specific calendar_event_uid, succeeds for others."""
+
+    def __init__(self, raise_for_uid):
+        self.calls = []
+        self._raise_for_uid = raise_for_uid
+
+    async def generate(self, **kwargs):
+        self.calls.append(kwargs)
+        uid = kwargs.get("calendar_event_uid")
+        if uid == self._raise_for_uid:
+            raise ValueError(f"Simulated failure for {uid}")
+        return "bid"
+
+
 class _FakeCalRepo:
     def __init__(self, events):
         self._events = events
@@ -131,3 +146,31 @@ async def test_sweep_skips_already_briefed_and_caps_per_tick():
     n = await sweep.run(now)
     assert n == 2  # capped; and E:1100 was skipped as already briefed
     assert "E:1100" not in {c["calendar_event_uid"] for c in gen.calls}
+
+
+@pytest.mark.asyncio
+async def test_sweep_per_event_exception_does_not_abort():
+    """Verify that one event's generate() failure doesn't stop the sweep."""
+    now = 1000.0
+    events = [
+        _event("GOOD:1100", 1100.0, emails=("a@x.com",)),  # will succeed
+        _event("FAIL:1200", 1200.0, emails=("a@x.com",)),  # will raise
+    ]
+    gen = _FakeGenRaisingForUid(raise_for_uid="FAIL:1200")
+    sweep = PrepSweep(
+        generator=gen,
+        cal_event_repo=_FakeCalRepo(events),
+        meeting_repo=_FakeMeetingRepo([{"attendees_json": '[{"email": "a@x.com"}]'}]),
+        series_repo=_FakeSeriesRepo([]),
+        prep_repo=_FakePrepRepo(),
+        config=_Cfg(),
+    )
+    n = await sweep.run(now)
+    # Only the successful event is counted.
+    assert n == 1
+    # Both events were attempted (generator.calls records all calls).
+    assert len(gen.calls) == 2
+    # Verify the non-raising event was indeed processed (it's in the calls).
+    uids = {c["calendar_event_uid"] for c in gen.calls}
+    assert "GOOD:1100" in uids
+    assert "FAIL:1200" in uids
