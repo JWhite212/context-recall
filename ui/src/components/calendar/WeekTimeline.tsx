@@ -16,6 +16,7 @@ interface WeekTimelineProps {
   currentDate: Date;
   meetings: Meeting[];
   events?: CalendarEvent[];
+  preparedUids?: Set<string>;
 }
 
 const START_HOUR = 7;
@@ -27,6 +28,7 @@ export function WeekTimeline({
   currentDate,
   meetings,
   events = [],
+  preparedUids,
 }: WeekTimelineProps) {
   const navigate = useNavigate();
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
@@ -170,7 +172,11 @@ export function WeekTimeline({
                       className="absolute left-0.5 right-0.5"
                       style={{ top: `${top}px`, height: `${height}px` }}
                     >
-                      <UpcomingEventCard event={ev} compact />
+                      <UpcomingEventCard
+                        event={ev}
+                        compact
+                        preparedUids={preparedUids}
+                      />
                     </div>
                   );
                 })}
