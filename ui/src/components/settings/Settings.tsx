@@ -22,6 +22,7 @@ import type { Theme } from "../../hooks/useTheme";
 import type { AppConfig, WhisperModel, SummaryTemplate } from "../../lib/types";
 import { InsightsSection } from "./InsightsSection";
 import { AutomationsSection } from "./AutomationsSection";
+import { CalendarsSection } from "./CalendarsSection";
 
 /* ------------------------------------------------------------------ */
 /*  Section navigation definitions                                    */
@@ -37,6 +38,7 @@ const SETTINGS_SECTIONS = [
   { id: "diarisation", label: "Diarisation" },
   { id: "markdown", label: "Markdown" },
   { id: "notion", label: "Notion" },
+  { id: "calendars", label: "Calendars" },
   { id: "retention", label: "Retention" },
   { id: "notifications", label: "Notifications" },
   { id: "logging", label: "Logging" },
@@ -2038,6 +2040,9 @@ export function Settings() {
 
       {/* Automations */}
       {daemonRunning && <AutomationsSection id="automations" />}
+
+      {/* Calendars */}
+      {daemonRunning && <CalendarsSection id="calendars" />}
 
       {/* Read-only info */}
       <Section id="daemon" title="Daemon">
