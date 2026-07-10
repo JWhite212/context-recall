@@ -578,6 +578,15 @@ export interface PrepBriefing {
   expires_at: number;
 }
 
+export interface PrepGenerateEventBody {
+  event_uid: string;
+  title: string;
+  attendees: { name: string; email: string }[];
+  attendee_names: string[];
+  end_ts: number;
+  series_id?: string | null;
+}
+
 /** Ask-your-meetings response. */
 export interface AskSource {
   index: number;

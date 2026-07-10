@@ -28,6 +28,7 @@ import type {
   ModelsResponse,
   NotificationsResponse,
   PrepBriefing,
+  PrepGenerateEventBody,
   RecordingStartResponse,
   RecordingStopResponse,
   ReindexResponse,
@@ -830,6 +831,25 @@ export async function getPreparedEventUids(): Promise<{
   event_uids: string[];
 }> {
   return request<{ event_uids: string[] }>("/api/prep/prepared-events");
+}
+
+export async function getPrepByEvent(
+  eventUid: string,
+): Promise<PrepBriefing | null> {
+  const res = await requestRaw(
+    `/api/prep/by-event/${encodeURIComponent(eventUid)}`,
+  );
+  if (res.status === 204) return null;
+  return res.json() as Promise<PrepBriefing>;
+}
+
+export async function generatePrepForEvent(
+  body: PrepGenerateEventBody,
+): Promise<PrepBriefing> {
+  return request<PrepBriefing>("/api/prep/by-event/generate", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 // --- Ask, insights & trackers ---
