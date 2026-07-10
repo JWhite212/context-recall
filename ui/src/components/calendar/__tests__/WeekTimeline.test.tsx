@@ -1,8 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WeekTimeline } from "../WeekTimeline";
 import type { CalendarEvent } from "../../../lib/types";
+
+function makeWrapper() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
 
 // Wednesday, 15:00 UTC — well inside the visible 07:00-22:00 window.
 const EVENT: CalendarEvent = {
@@ -20,13 +25,15 @@ const EVENT: CalendarEvent = {
 describe("WeekTimeline with events", () => {
   it("renders upcoming events through the clickable UpcomingEventCard", () => {
     render(
-      <MemoryRouter>
-        <WeekTimeline
-          currentDate={new Date(EVENT.start_ts * 1000)}
-          meetings={[]}
-          events={[EVENT]}
-        />
-      </MemoryRouter>,
+      <QueryClientProvider client={makeWrapper()}>
+        <MemoryRouter>
+          <WeekTimeline
+            currentDate={new Date(EVENT.start_ts * 1000)}
+            meetings={[]}
+            events={[EVENT]}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
     const button = screen.getByRole("button", { name: /Design sync/i });
     expect(button).toBeInTheDocument();
