@@ -26,7 +26,7 @@ export function CalendarsSection({ id }: { id?: string }) {
 
   const save = useMutation({
     mutationFn: (next: string[]) =>
-      updateConfig({ calendar: { excluded_calendars: next } } as never),
+      updateConfig({ calendar: { excluded_calendars: next } }),
     onSuccess: (data) => {
       queryClient.setQueryData(["config"], data);
       toast.success("Calendar selection saved.");

@@ -305,8 +305,13 @@ export async function getConfig(): Promise<AppConfig> {
   return request<AppConfig>("/api/config");
 }
 
+/** Recursively partial: lets callers PATCH a nested section without the rest of the config. */
+type DeepPartial<T> = {
+  [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
+};
+
 export async function updateConfig(
-  config: Partial<AppConfig>,
+  config: DeepPartial<AppConfig>,
 ): Promise<AppConfig> {
   return request<AppConfig>("/api/config", {
     method: "PUT",
