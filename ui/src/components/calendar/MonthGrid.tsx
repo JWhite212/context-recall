@@ -8,12 +8,14 @@ import {
   isToday,
   format,
 } from "date-fns";
-import type { Meeting } from "../../lib/types";
+import type { CalendarEvent, Meeting } from "../../lib/types";
 import { EventCard } from "./EventCard";
+import { UpcomingEventCard } from "./UpcomingEventCard";
 
 interface MonthGridProps {
   currentDate: Date;
   meetings: Meeting[];
+  events?: CalendarEvent[];
   onDayClick: (date: Date) => void;
 }
 
@@ -22,6 +24,7 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export function MonthGrid({
   currentDate,
   meetings,
+  events = [],
   onDayClick,
 }: MonthGridProps) {
   const monthStart = startOfMonth(currentDate);
@@ -36,6 +39,14 @@ export function MonthGrid({
     const list = meetingsByDay.get(day) ?? [];
     list.push(meeting);
     meetingsByDay.set(day, list);
+  }
+
+  const eventsByDay = new Map<string, CalendarEvent[]>();
+  for (const ev of events) {
+    const day = format(new Date(ev.start_ts * 1000), "yyyy-MM-dd");
+    const list = eventsByDay.get(day) ?? [];
+    list.push(ev);
+    eventsByDay.set(day, list);
   }
 
   return (
@@ -85,6 +96,9 @@ export function MonthGrid({
                     +{dayMeetings.length - 3} more
                   </span>
                 )}
+                {(eventsByDay.get(key) ?? []).slice(0, 2).map((ev) => (
+                  <UpcomingEventCard key={ev.event_uid} event={ev} compact />
+                ))}
               </div>
             </button>
           );

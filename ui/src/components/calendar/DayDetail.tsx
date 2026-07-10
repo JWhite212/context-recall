@@ -1,16 +1,26 @@
 import { format, isSameDay } from "date-fns";
-import type { Meeting } from "../../lib/types";
+import type { CalendarEvent, Meeting } from "../../lib/types";
 import { EventCard } from "./EventCard";
+import { UpcomingEventCard } from "./UpcomingEventCard";
 
 interface DayDetailProps {
   currentDate: Date;
   meetings: Meeting[];
+  events?: CalendarEvent[];
 }
 
-export function DayDetail({ currentDate, meetings }: DayDetailProps) {
+export function DayDetail({
+  currentDate,
+  meetings,
+  events = [],
+}: DayDetailProps) {
   const dayMeetings = meetings
     .filter((m) => isSameDay(new Date(m.started_at * 1000), currentDate))
     .sort((a, b) => a.started_at - b.started_at);
+
+  const dayEvents = events
+    .filter((ev) => isSameDay(new Date(ev.start_ts * 1000), currentDate))
+    .sort((a, b) => a.start_ts - b.start_ts);
 
   return (
     <div className="flex flex-col flex-1 p-4 overflow-auto">
@@ -18,7 +28,7 @@ export function DayDetail({ currentDate, meetings }: DayDetailProps) {
         {format(currentDate, "EEEE, MMMM d, yyyy")}
       </h2>
 
-      {dayMeetings.length === 0 ? (
+      {dayMeetings.length === 0 && dayEvents.length === 0 ? (
         <div className="flex-1 flex items-center justify-center">
           <p className="text-sm text-text-muted">No meetings on this day</p>
         </div>
@@ -50,6 +60,22 @@ export function DayDetail({ currentDate, meetings }: DayDetailProps) {
               </div>
             );
           })}
+          {dayEvents.map((ev) => (
+            <div key={ev.event_uid} className="flex items-start gap-3">
+              <div className="w-16 shrink-0 pt-1 text-right">
+                <p className="text-xs font-medium text-text-secondary">
+                  {format(new Date(ev.start_ts * 1000), "HH:mm")}
+                </p>
+                <p className="text-[10px] text-text-muted">
+                  {format(new Date(ev.end_ts * 1000), "HH:mm")}
+                </p>
+              </div>
+              <div className="w-px bg-border self-stretch shrink-0" />
+              <div className="flex-1">
+                <UpcomingEventCard event={ev} />
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
