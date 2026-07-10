@@ -284,6 +284,32 @@ automations:
   # Master switch for the automations engine.
   # enabled: true
 
+# --- Auto-Arm Recording (Track B) ---
+# Auto-start recording for scheduled join-link calendar meetings. Requires
+# calendar import (calendar.import_enabled). Off by default — it records
+# without an explicit user action, so opt in deliberately.
+auto_arm:
+  # Master switch.
+  enabled: false
+
+  # Arm this many minutes before the event's scheduled start.
+  # lead_minutes: 2
+
+  # Keep recording this many minutes past the event's scheduled end.
+  # trailing_minutes: 5
+
+  # System-audio RMS (dBFS) that counts as "meeting activity".
+  # activity_rms_dbfs: -45.0
+
+  # Seconds the RMS must stay above the threshold before starting.
+  # activity_sustain_seconds: 3
+
+  # Processes whose active audio use also counts as meeting activity.
+  # meeting_process_names:
+  #   - zoom.us
+  #   - Microsoft Teams
+  #   - Google Chrome
+
 # --- Recurring Meeting Detection ---
 # Automatically group meetings into recurring series for trend analysis.
 series:
