@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { format } from "date-fns";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { CalendarEvent } from "../../lib/types";
+import { generatePrepForEvent, startRecording } from "../../lib/api";
+import { useDaemonStatus } from "../../hooks/useDaemonStatus";
+import { PrepModal } from "./PrepModal";
 
 interface UpcomingEventCardProps {
   event: CalendarEvent;
@@ -8,16 +12,49 @@ interface UpcomingEventCardProps {
   preparedUids?: Set<string>;
 }
 
-/** Renders an imported (not-yet-recorded) calendar event, distinct from recorded meetings. */
+/** Renders an imported (not-yet-recorded) calendar event, with interactive prep/record actions. */
 export function UpcomingEventCard({
   event,
   compact = false,
   preparedUids,
 }: UpcomingEventCardProps) {
   const [open, setOpen] = useState(false);
+  const [showPrep, setShowPrep] = useState(false);
+  const [confirmingRecord, setConfirmingRecord] = useState(false);
+  const queryClient = useQueryClient();
+  const { state } = useDaemonStatus();
+
   const title = event.title || "Untitled";
   const start = format(new Date(event.start_ts * 1000), "HH:mm");
   const prepared = preparedUids?.has(event.event_uid) ?? false;
+
+  const isRecording = state === "recording";
+  const nowSec = Date.now() / 1000;
+  const live = event.start_ts - 300 <= nowSec && nowSec <= event.end_ts;
+
+  const generate = useMutation({
+    mutationFn: () =>
+      generatePrepForEvent({
+        event_uid: event.event_uid,
+        title,
+        attendees: event.attendees,
+        attendee_names: event.attendees.map((a) => a.name || a.email),
+        end_ts: event.end_ts,
+        series_id: null,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["prepared-events"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["prep", "by-event", event.event_uid],
+      });
+      setShowPrep(true);
+    },
+  });
+
+  const record = useMutation({
+    mutationFn: () => startRecording(),
+    onSuccess: () => setConfirmingRecord(false),
+  });
 
   return (
     <div className="relative">
@@ -65,7 +102,75 @@ export function UpcomingEventCard({
               Join
             </a>
           )}
+
+          <div className="mt-3 flex flex-col gap-1.5 border-t border-border pt-2">
+            {prepared && (
+              <button
+                type="button"
+                onClick={() => setShowPrep(true)}
+                className="text-left text-accent hover:underline"
+              >
+                View prep
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => generate.mutate()}
+              disabled={generate.isPending}
+              className="text-left text-accent hover:underline disabled:opacity-50"
+            >
+              {generate.isPending
+                ? "Generating..."
+                : prepared
+                  ? "Regenerate prep"
+                  : "Generate prep"}
+            </button>
+
+            {!confirmingRecord ? (
+              <button
+                type="button"
+                onClick={() => setConfirmingRecord(true)}
+                disabled={!live || isRecording}
+                title={
+                  isRecording
+                    ? "Already recording"
+                    : live
+                      ? ""
+                      : "Available when the meeting is live"
+                }
+                className="text-left text-accent hover:underline disabled:opacity-40 disabled:no-underline disabled:text-text-muted"
+              >
+                Record this meeting
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => record.mutate()}
+                  disabled={record.isPending}
+                  className="text-left text-accent hover:underline disabled:opacity-50"
+                >
+                  Start recording?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingRecord(false)}
+                  className="text-text-muted hover:text-text-secondary"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+      )}
+
+      {showPrep && (
+        <PrepModal
+          eventUid={event.event_uid}
+          title={title}
+          onClose={() => setShowPrep(false)}
+        />
       )}
     </div>
   );
