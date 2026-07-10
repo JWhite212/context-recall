@@ -6,9 +6,14 @@ import { UpcomingEventCard } from "./UpcomingEventCard";
 interface AgendaListProps {
   meetings: Meeting[];
   events?: CalendarEvent[];
+  preparedUids?: Set<string>;
 }
 
-export function AgendaList({ meetings, events = [] }: AgendaListProps) {
+export function AgendaList({
+  meetings,
+  events = [],
+  preparedUids,
+}: AgendaListProps) {
   // Group meetings by date (newest first)
   const sorted = [...meetings].sort((a, b) => b.started_at - a.started_at);
 
@@ -76,7 +81,7 @@ export function AgendaList({ meetings, events = [] }: AgendaListProps) {
                     {format(new Date(ev.start_ts * 1000), "HH:mm")}
                   </span>
                   <div className="flex-1">
-                    <UpcomingEventCard event={ev} />
+                    <UpcomingEventCard event={ev} preparedUids={preparedUids} />
                   </div>
                 </div>
               ))}

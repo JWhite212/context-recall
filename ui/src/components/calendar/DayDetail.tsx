@@ -7,12 +7,14 @@ interface DayDetailProps {
   currentDate: Date;
   meetings: Meeting[];
   events?: CalendarEvent[];
+  preparedUids?: Set<string>;
 }
 
 export function DayDetail({
   currentDate,
   meetings,
   events = [],
+  preparedUids,
 }: DayDetailProps) {
   const dayMeetings = meetings
     .filter((m) => isSameDay(new Date(m.started_at * 1000), currentDate))
@@ -74,7 +76,7 @@ export function DayDetail({
               </div>
               <div className="w-px bg-border self-stretch shrink-0" />
               <div className="flex-1">
-                <UpcomingEventCard event={ev} />
+                <UpcomingEventCard event={ev} preparedUids={preparedUids} />
               </div>
             </div>
           ))}

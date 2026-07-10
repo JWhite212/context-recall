@@ -16,7 +16,11 @@ import {
   format,
   getUnixTime,
 } from "date-fns";
-import { getCalendarMeetings, getCalendarEvents } from "../../lib/api";
+import {
+  getCalendarMeetings,
+  getCalendarEvents,
+  getPreparedEventUids,
+} from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { MonthGrid } from "./MonthGrid";
 import { WeekTimeline } from "./WeekTimeline";
@@ -81,6 +85,17 @@ export function CalendarView() {
     enabled: daemonRunning,
     staleTime: 30_000,
   });
+
+  const { data: preparedData } = useQuery({
+    queryKey: ["prepared-events"],
+    queryFn: () => getPreparedEventUids(),
+    enabled: daemonRunning,
+    staleTime: 30_000,
+  });
+  const preparedUids = useMemo(
+    () => new Set(preparedData?.event_uids ?? []),
+    [preparedData],
+  );
 
   // Heatmap needs last 84 days regardless of view
   const heatmapRange = useMemo(() => {
@@ -219,6 +234,7 @@ export function CalendarView() {
             meetings={meetings}
             events={events}
             onDayClick={handleDayClick}
+            preparedUids={preparedUids}
           />
         )}
         {viewMode === "week" && (
@@ -226,6 +242,7 @@ export function CalendarView() {
             currentDate={currentDate}
             meetings={meetings}
             events={events}
+            preparedUids={preparedUids}
           />
         )}
         {viewMode === "day" && (
@@ -233,10 +250,15 @@ export function CalendarView() {
             currentDate={currentDate}
             meetings={meetings}
             events={events}
+            preparedUids={preparedUids}
           />
         )}
         {viewMode === "agenda" && (
-          <AgendaList meetings={meetings} events={events} />
+          <AgendaList
+            meetings={meetings}
+            events={events}
+            preparedUids={preparedUids}
+          />
         )}
       </div>
     </div>

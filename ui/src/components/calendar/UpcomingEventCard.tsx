@@ -5,16 +5,19 @@ import type { CalendarEvent } from "../../lib/types";
 interface UpcomingEventCardProps {
   event: CalendarEvent;
   compact?: boolean;
+  preparedUids?: Set<string>;
 }
 
 /** Renders an imported (not-yet-recorded) calendar event, distinct from recorded meetings. */
 export function UpcomingEventCard({
   event,
   compact = false,
+  preparedUids,
 }: UpcomingEventCardProps) {
   const [open, setOpen] = useState(false);
   const title = event.title || "Untitled";
   const start = format(new Date(event.start_ts * 1000), "HH:mm");
+  const prepared = preparedUids?.has(event.event_uid) ?? false;
 
   return (
     <div className="relative">
@@ -29,6 +32,11 @@ export function UpcomingEventCard({
         <span className="truncate block">
           {!compact && <span className="text-text-muted mr-1">{start}</span>}
           {title}
+          {prepared && (
+            <span className="ml-1 rounded bg-accent/20 text-accent px-1 text-[9px] align-middle">
+              Prep ready
+            </span>
+          )}
         </span>
       </button>
       {open && (

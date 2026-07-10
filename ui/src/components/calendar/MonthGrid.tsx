@@ -17,6 +17,7 @@ interface MonthGridProps {
   meetings: Meeting[];
   events?: CalendarEvent[];
   onDayClick: (date: Date) => void;
+  preparedUids?: Set<string>;
 }
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -26,6 +27,7 @@ export function MonthGrid({
   meetings,
   events = [],
   onDayClick,
+  preparedUids,
 }: MonthGridProps) {
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
@@ -97,7 +99,12 @@ export function MonthGrid({
                   </span>
                 )}
                 {(eventsByDay.get(key) ?? []).slice(0, 2).map((ev) => (
-                  <UpcomingEventCard key={ev.event_uid} event={ev} compact />
+                  <UpcomingEventCard
+                    key={ev.event_uid}
+                    event={ev}
+                    compact
+                    preparedUids={preparedUids}
+                  />
                 ))}
               </div>
             </button>
