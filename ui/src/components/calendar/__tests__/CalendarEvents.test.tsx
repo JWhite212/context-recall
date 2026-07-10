@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AgendaList } from "../AgendaList";
 import type { CalendarEvent } from "../../../lib/types";
+import { ToastProvider } from "../../common/Toast";
 
 function makeWrapper() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -28,9 +29,11 @@ describe("AgendaList with events", () => {
   it("renders upcoming events alongside meetings", () => {
     render(
       <QueryClientProvider client={makeWrapper()}>
-        <MemoryRouter>
-          <AgendaList meetings={[]} events={[EVENT]} />
-        </MemoryRouter>
+        <ToastProvider>
+          <MemoryRouter>
+            <AgendaList meetings={[]} events={[EVENT]} />
+          </MemoryRouter>
+        </ToastProvider>
       </QueryClientProvider>,
     );
     expect(screen.getByText("Upcoming standup")).toBeInTheDocument();
