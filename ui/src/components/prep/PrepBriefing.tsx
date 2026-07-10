@@ -2,10 +2,48 @@ import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Markdown from "react-markdown";
 import {
-  getUpcomingPrep,
+  getUpcomingPrepList,
   getPrepForMeeting,
   generatePrep,
 } from "../../lib/api";
+
+function UpcomingList() {
+  const { data: briefings = [], isLoading } = useQuery({
+    queryKey: ["prep", "upcoming-list"],
+    queryFn: () => getUpcomingPrepList(),
+  });
+
+  if (isLoading) {
+    return (
+      <div className="p-6 max-w-3xl mx-auto">
+        <div className="h-4 w-5/6 bg-surface border border-border rounded animate-pulse" />
+      </div>
+    );
+  }
+  if (briefings.length === 0) {
+    return (
+      <div className="p-6 max-w-3xl mx-auto">
+        <p className="text-sm text-text-muted text-center py-16">
+          No upcoming briefings
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="p-6 max-w-3xl mx-auto space-y-6">
+      {briefings.map((b) => (
+        <div
+          key={b.id}
+          className="rounded-xl border border-border bg-surface-raised p-5"
+        >
+          <div className="prose prose-sm prose-invert max-w-none [&_h1]:text-base [&_h2]:text-sm [&_h2]:mt-4 [&_li]:text-text-secondary [&_p]:text-text-secondary">
+            <Markdown>{b.content_markdown}</Markdown>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function PrepBriefing() {
   const { meetingId } = useParams<{ meetingId: string }>();
@@ -16,9 +54,9 @@ export function PrepBriefing() {
     isLoading,
     refetch,
   } = useQuery({
-    queryKey: meetingId ? ["prep", meetingId] : ["prep", "upcoming"],
-    queryFn: () =>
-      meetingId ? getPrepForMeeting(meetingId) : getUpcomingPrep(),
+    queryKey: ["prep", meetingId],
+    queryFn: () => getPrepForMeeting(meetingId!),
+    enabled: !!meetingId,
   });
 
   const generate = useMutation({
@@ -28,6 +66,10 @@ export function PrepBriefing() {
       refetch();
     },
   });
+
+  if (!meetingId) {
+    return <UpcomingList />;
+  }
 
   // Loading skeleton
   if (isLoading) {
@@ -53,15 +95,13 @@ export function PrepBriefing() {
           <p className="text-sm text-text-muted mb-4">
             No prep briefing available
           </p>
-          {meetingId && (
-            <button
-              onClick={() => generate.mutate()}
-              disabled={generate.isPending}
-              className="px-4 py-2 text-sm bg-accent text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
-              {generate.isPending ? "Generating..." : "Generate Briefing"}
-            </button>
-          )}
+          <button
+            onClick={() => generate.mutate()}
+            disabled={generate.isPending}
+            className="px-4 py-2 text-sm bg-accent text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {generate.isPending ? "Generating..." : "Generate Briefing"}
+          </button>
         </div>
       </div>
     );
