@@ -70,6 +70,7 @@ class ApiServer:
         self.repo: MeetingRepository | None = None
         self._calendar_reader = None
         self._calendar_sync = None
+        self._prep_generator = None
 
         self._app: FastAPI | None = None
         self._thread: threading.Thread | None = None
@@ -251,7 +252,17 @@ class ApiServer:
         series_routes.init(series_repo)
         analytics_routes.init(analytics_engine)
         notifications_routes.init(notif_repo)
-        prep_routes.init(prep_repo)
+        from src.prep.briefing import PrepBriefingGenerator
+
+        self._prep_generator = PrepBriefingGenerator(
+            config=load_config().prep,
+            summarisation_config=load_config().summarisation,
+            meeting_repo=self.repo,
+            action_item_repo=ai_repo,
+            series_repo=series_repo,
+            prep_repo=prep_repo,
+        )
+        prep_routes.init(prep_repo, self._prep_generator)
 
         app.include_router(action_items_routes.router, dependencies=auth_deps)
         app.include_router(series_routes.router, dependencies=auth_deps)
@@ -463,6 +474,13 @@ class ApiServer:
                 config.calendar.sync_interval_minutes * 60,
             )
 
+        if config.prep.auto_generate and config.calendar.import_enabled:
+            self._scheduler.register(
+                "prep_sweep",
+                lambda: safe_run("prep_sweep", self._sweep_prep, timeout=300),
+                config.prep.sweep_interval_minutes * 60,
+            )
+
     async def _check_reminders(self) -> None:
         """Check for due reminders and overdue action items."""
         from src.action_items.repository import ActionItemRepository
@@ -548,6 +566,29 @@ class ApiServer:
         loop = asyncio.get_running_loop()
         events = await loop.run_in_executor(None, reader.list_events, now, end, excluded)
         await sync.apply(now, end, events)
+
+    async def _sweep_prep(self) -> None:
+        """Pre-generate prep briefings for upcoming context-rich events."""
+        import time
+
+        generator = getattr(self, "_prep_generator", None)
+        if generator is None:
+            return
+        from src.calendar_events.repository import CalendarEventRepository
+        from src.prep.repository import PrepRepository
+        from src.prep.sweep import PrepSweep
+        from src.series.repository import SeriesRepository
+
+        config = load_config().prep
+        sweep = PrepSweep(
+            generator=generator,
+            cal_event_repo=CalendarEventRepository(self.db),
+            meeting_repo=self.repo,
+            series_repo=SeriesRepository(self.db),
+            prep_repo=PrepRepository(self.db),
+            config=config,
+        )
+        await sweep.run(time.time())
 
     async def _retention_cleanup_once(self) -> None:
         """One pass of the retention cleanup, intended for ``safe_run``."""
