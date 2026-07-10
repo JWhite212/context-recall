@@ -22,7 +22,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 _vec_available = False
 
@@ -609,6 +609,15 @@ class Database:
             await self.conn.executescript(AUTOMATION_DISPATCHES_SQL)
             # Calendar import (v18).
             await self.conn.executescript(CALENDAR_EVENTS_SQL)
+            # Auto-prep event links (v19).
+            await _safe_add_column(
+                self.conn, "prep_briefings", "calendar_event_uid", "TEXT", "NULL"
+            )
+            await _safe_add_column(self.conn, "prep_briefings", "event_signature", "TEXT", "NULL")
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_prep_briefings_cal_event "
+                "ON prep_briefings(calendar_event_uid)"
+            )
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -784,5 +793,20 @@ class Database:
             await self.conn.commit()
             logger.info("Database migrated to version 18 (calendar import)")
             current_version = 18
+
+        if current_version < 19:
+            # Auto-prep: link briefings to upcoming calendar events.
+            await _safe_add_column(
+                self.conn, "prep_briefings", "calendar_event_uid", "TEXT", "NULL"
+            )
+            await _safe_add_column(self.conn, "prep_briefings", "event_signature", "TEXT", "NULL")
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_prep_briefings_cal_event "
+                "ON prep_briefings(calendar_event_uid)"
+            )
+            await self.conn.execute("PRAGMA user_version = 19")
+            await self.conn.commit()
+            logger.info("Database migrated to version 19 (auto-prep event links)")
+            current_version = 19
         else:
             logger.debug("Database schema up to date (version %d)", current_version)
