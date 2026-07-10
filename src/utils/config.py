@@ -249,6 +249,20 @@ class AutomationsConfig:
 
 
 @dataclass
+class AutoArmConfig:
+    """Calendar-driven auto-start recording for scheduled join-link meetings."""
+
+    enabled: bool = False
+    lead_minutes: int = 2
+    trailing_minutes: int = 5
+    activity_rms_dbfs: float = -45.0
+    activity_sustain_seconds: int = 3
+    meeting_process_names: list[str] = field(
+        default_factory=lambda: ["zoom.us", "Microsoft Teams", "Google Chrome"]
+    )
+
+
+@dataclass
 class SeriesConfig:
     heuristic_enabled: bool = True
     min_meetings_for_series: int = 3
@@ -366,6 +380,7 @@ class AppConfig:
     tagging: TaggingConfig = field(default_factory=TaggingConfig)
     insights: InsightsConfig = field(default_factory=InsightsConfig)
     automations: AutomationsConfig = field(default_factory=AutomationsConfig)
+    auto_arm: AutoArmConfig = field(default_factory=AutoArmConfig)
 
 
 def _expand_path(path_str: str) -> str:
@@ -472,6 +487,7 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         tagging=_build_dataclass(TaggingConfig, raw.get("tagging", {})),
         insights=_build_dataclass(InsightsConfig, raw.get("insights", {})),
         automations=_build_dataclass(AutomationsConfig, raw.get("automations", {})),
+        auto_arm=_build_dataclass(AutoArmConfig, raw.get("auto_arm", {})),
     )
 
     # Handle nested notification channel configs.

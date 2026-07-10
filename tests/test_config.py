@@ -258,3 +258,38 @@ def test_prep_config_sweep_defaults():
     assert cfg.lookahead_hours == 24
     assert cfg.sweep_interval_minutes == 15
     assert cfg.max_per_sweep == 5
+
+
+def test_auto_arm_config_defaults(tmp_path):
+    """auto_arm section defaults to off with the documented values."""
+    from src.utils.config import load_config
+
+    path = tmp_path / "config.yaml"
+    path.write_text("detection:\n  poll_interval_seconds: 3\n")
+    cfg = load_config(path)
+
+    assert cfg.auto_arm.enabled is False
+    assert cfg.auto_arm.lead_minutes == 2
+    assert cfg.auto_arm.trailing_minutes == 5
+    assert cfg.auto_arm.activity_rms_dbfs == -45.0
+    assert cfg.auto_arm.activity_sustain_seconds == 3
+    assert cfg.auto_arm.meeting_process_names == [
+        "zoom.us",
+        "Microsoft Teams",
+        "Google Chrome",
+    ]
+
+
+def test_auto_arm_config_overrides_from_yaml(tmp_path):
+    """Values in config.yaml override the dataclass defaults."""
+    from src.utils.config import load_config
+
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "auto_arm:\n  enabled: true\n  lead_minutes: 5\n  meeting_process_names:\n    - zoom.us\n"
+    )
+    cfg = load_config(path)
+
+    assert cfg.auto_arm.enabled is True
+    assert cfg.auto_arm.lead_minutes == 5
+    assert cfg.auto_arm.meeting_process_names == ["zoom.us"]
