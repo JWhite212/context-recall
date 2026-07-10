@@ -34,8 +34,10 @@ from pathlib import Path
 
 from src.audio_capture import AudioCapture, AudioCaptureError
 from src.audio_cleanup import cleanup_temp_audio
+from src.audio_monitor import AudioMonitor
 from src.audio_preflight import run_preflight
 from src.audio_routing import AudioRouter
+from src.auto_arm import AutoArmController
 from src.detector import MeetingEvent, MeetingState, TeamsDetector
 from src.diariser import EnergyDiariser, create_diariser
 from src.mic_permission import ensure_microphone_access
@@ -125,6 +127,9 @@ class ContextRecall:
         # API server and event system (initialised lazily in run_daemon).
         self._api_server = None
         self._event_bus = None
+
+        # Calendar auto-arm controller (constructed at daemon boot when enabled).
+        self._auto_arm = None
 
         # Shutdown coordination for run_daemon. The signal handler sets the
         # event; a watcher thread translates that into detector.stop() and
@@ -912,6 +917,84 @@ class ContextRecall:
         # Give the server a moment to bind.
         time.sleep(0.5)
 
+    def _calendar_source(self, now: float, lead_seconds: float) -> dict | None:
+        """Resolve the currently-armed join-link event via the API loop.
+
+        Bounded and best-effort: the controller only calls this while NOT
+        recording (the API loop is idle then), so the short blocking wait
+        can't stack behind a running pipeline.
+        """
+        import asyncio
+
+        from src.calendar_events.repository import CalendarEventRepository
+
+        server = self._api_server
+        if server is None:
+            return None
+        loop = server.loop
+        if loop is None or loop.is_closed():
+            return None
+        try:
+            repo = CalendarEventRepository(server.db)
+            future = asyncio.run_coroutine_threadsafe(
+                repo.current_join_link_event(now, lead_seconds), loop
+            )
+            return future.result(timeout=2.0)
+        except Exception:
+            logger.debug("Auto-arm calendar lookup failed", exc_info=True)
+            return None
+
+    def _auto_arm_process_active(self) -> bool:
+        """Meeting-app process signal for auto-arm (best-effort)."""
+        try:
+            return self._detector.app_using_audio(self._config.auto_arm.meeting_process_names)
+        except Exception:
+            logger.debug("Auto-arm process check failed", exc_info=True)
+            return False
+
+    def _auto_arm_start(self, event: dict) -> None:
+        """Start recording for an armed event (mic-gate failures are no-ops)."""
+        try:
+            logger.info("Auto-arm: activity detected — starting recording.")
+            self.api_start_recording()
+        except AudioCaptureError as exc:
+            logger.warning("Auto-arm start blocked: %s", exc)
+
+    def _auto_arm_stop(self) -> None:
+        """Stop an auto-armed recording without blocking the poll thread.
+
+        api_stop_recording() blocks up to 30s on the post-merge; run it on a
+        throwaway daemon thread so detection keeps polling.
+        """
+        threading.Thread(
+            target=self.api_stop_recording,
+            name="auto-arm-stop",
+            daemon=True,
+        ).start()
+
+    def _maybe_start_auto_arm(self) -> None:
+        """Construct + wire the auto-arm controller when opted in."""
+        if not (self._config.auto_arm.enabled and self._config.calendar.import_enabled):
+            return
+        monitor = AudioMonitor(
+            blackhole_device_name=self._config.audio.blackhole_device_name,
+            sample_rate=self._config.audio.sample_rate,
+            threshold_dbfs=self._config.auto_arm.activity_rms_dbfs,
+            sustain_seconds=self._config.auto_arm.activity_sustain_seconds,
+        )
+        self._auto_arm = AutoArmController(
+            config=self._config.auto_arm,
+            calendar_source=self._calendar_source,
+            audio_monitor=monitor,
+            process_active=self._auto_arm_process_active,
+            is_recording=lambda: self._capture.is_recording,
+            start=self._auto_arm_start,
+            stop=self._auto_arm_stop,
+            clock=time.time,
+        )
+        self._detector.on_tick = self._auto_arm.tick
+        logger.info("Calendar auto-arm enabled.")
+
     def _shutdown_watcher(self) -> None:
         """Translate the shutdown event into detector + capture teardown.
 
@@ -980,6 +1063,9 @@ class ContextRecall:
 
         # Start the API server for UI communication.
         self._start_api_server()
+
+        # Wire calendar auto-arm (opt-in) now that the API loop exists.
+        self._maybe_start_auto_arm()
 
         # Trigger the microphone permission dialog at boot (rather than
         # mid-meeting) when macOS has not asked yet. Own thread: the
