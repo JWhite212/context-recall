@@ -703,3 +703,78 @@ class TestDetectorCooldown:
         detector._tick()  # consecutive=2 -> ACTIVE
         assert detector.state == MeetingState.ACTIVE
         assert start_cb.call_count == 1
+
+
+# ------------------------------------------------------------------
+# Per-poll hook and audio passthrough tests
+# ------------------------------------------------------------------
+
+
+def test_on_tick_hook_fires_each_poll():
+    from unittest.mock import Mock
+
+    from src.detector import TeamsDetector
+    from src.utils.config import DetectionConfig
+
+    class _Idle:
+        def is_app_running(self, names):
+            return False
+
+        def is_app_using_audio(self, names):
+            return False
+
+        def is_call_window_active(self):
+            return False
+
+    detector = TeamsDetector(DetectionConfig(), platform=_Idle())
+    hook = Mock()
+    detector.on_tick = hook
+
+    detector._tick()
+    detector._tick()
+
+    assert hook.call_count == 2
+
+
+def test_on_tick_exception_does_not_break_tick():
+    from src.detector import TeamsDetector
+    from src.utils.config import DetectionConfig
+
+    class _Idle:
+        def is_app_running(self, names):
+            return False
+
+        def is_app_using_audio(self, names):
+            return False
+
+        def is_call_window_active(self):
+            return False
+
+    detector = TeamsDetector(DetectionConfig(), platform=_Idle())
+    detector.on_tick = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    detector._tick()  # must not raise
+
+
+def test_app_using_audio_delegates_to_platform():
+    from src.detector import TeamsDetector
+    from src.utils.config import DetectionConfig
+
+    class _Fake:
+        def __init__(self):
+            self.seen = None
+
+        def is_app_running(self, names):
+            return True
+
+        def is_app_using_audio(self, names):
+            self.seen = names
+            return True
+
+        def is_call_window_active(self):
+            return False
+
+    fake = _Fake()
+    detector = TeamsDetector(DetectionConfig(), platform=fake)
+    assert detector.app_using_audio(["zoom.us"]) is True
+    assert fake.seen == ["zoom.us"]
