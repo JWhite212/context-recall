@@ -140,12 +140,15 @@ pydantic-core==2.46.4
     # via pydantic
 pygments==2.20.0
     # via rich
-pyobjc-core==12.1
+pyobjc-core==12.1 ; sys_platform == "darwin"
     # via
+    #   -r requirements.in
     #   pyobjc-framework-cocoa
     #   pyobjc-framework-eventkit
-pyobjc-framework-cocoa==12.1
-    # via pyobjc-framework-eventkit
+pyobjc-framework-cocoa==12.1 ; sys_platform == "darwin"
+    # via
+    #   -r requirements.in
+    #   pyobjc-framework-eventkit
 pyobjc-framework-eventkit==12.1 ; sys_platform == "darwin"
     # via -r requirements.in
 python-dotenv==1.2.2
