@@ -6,12 +6,14 @@ import {
   createAutomationRule,
   createInsightDefinition,
   exportMeeting,
+  generatePrepForEvent,
   getCalendarEvents,
   getCalendars,
   getHealth,
   getStatus,
   getUpcomingPrep,
   getUpcomingPrepList,
+  getPrepByEvent,
   getPreparedEventUids,
   setAuthToken,
   triggerCalendarSync,
@@ -347,5 +349,42 @@ describe("auto-prep", () => {
     const res = await getPreparedEventUids();
     expect(res.event_uids).toEqual(["EK1:1000"]);
     expect(calls[0]).toContain("/api/prep/prepared-events");
+  });
+});
+
+describe("prep by-event", () => {
+  it("getPrepByEvent returns null on 204", async () => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(null, { status: 204 }),
+    ) as unknown as typeof fetch;
+    const res = await getPrepByEvent("EK1:1000");
+    expect(res).toBeNull();
+  });
+
+  it("generatePrepForEvent POSTs the event body", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: input.toString(), init });
+        return new Response(
+          JSON.stringify({ id: "p1", content_markdown: "x" }),
+          {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+    ) as unknown as typeof fetch;
+    await generatePrepForEvent({
+      event_uid: "EK1:1000",
+      title: "Sync",
+      attendees: [{ name: "A", email: "a@x.com" }],
+      attendee_names: ["A"],
+      end_ts: 123,
+      series_id: null,
+    });
+    const call = calls.find((c) => c.init?.method === "POST");
+    expect(call?.url).toContain("/api/prep/by-event/generate");
+    expect(JSON.parse(call?.init?.body as string).event_uid).toBe("EK1:1000");
   });
 });
