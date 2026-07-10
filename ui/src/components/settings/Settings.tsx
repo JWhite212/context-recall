@@ -23,6 +23,7 @@ import type { AppConfig, WhisperModel, SummaryTemplate } from "../../lib/types";
 import { InsightsSection } from "./InsightsSection";
 import { AutomationsSection } from "./AutomationsSection";
 import { CalendarsSection } from "./CalendarsSection";
+import { AutoArmSection } from "./AutoArmSection";
 
 /* ------------------------------------------------------------------ */
 /*  Section navigation definitions                                    */
@@ -39,6 +40,7 @@ const SETTINGS_SECTIONS = [
   { id: "markdown", label: "Markdown" },
   { id: "notion", label: "Notion" },
   { id: "calendars", label: "Calendars" },
+  { id: "auto_arm", label: "Auto-record" },
   { id: "retention", label: "Retention" },
   { id: "notifications", label: "Notifications" },
   { id: "logging", label: "Logging" },
@@ -2043,6 +2045,9 @@ export function Settings() {
 
       {/* Calendars */}
       {daemonRunning && <CalendarsSection id="calendars" />}
+
+      {/* Auto-record */}
+      {daemonRunning && <AutoArmSection id="auto_arm" />}
 
       {/* Read-only info */}
       <Section id="daemon" title="Daemon">

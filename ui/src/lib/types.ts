@@ -264,6 +264,15 @@ export interface CalendarConfig {
   excluded_calendars: string[];
 }
 
+export interface AutoArmConfig {
+  enabled: boolean;
+  lead_minutes: number;
+  trailing_minutes: number;
+  activity_rms_dbfs: number;
+  activity_sustain_seconds: number;
+  meeting_process_names: string[];
+}
+
 export interface RetentionConfig {
   audio_retention_days: number;
   record_retention_days: number;
@@ -307,6 +316,7 @@ export interface AppConfig {
   logging: LoggingConfig;
   api: ApiConfig;
   calendar: CalendarConfig;
+  auto_arm: AutoArmConfig;
   retention: RetentionConfig;
   notifications: NotificationsConfig;
 }
