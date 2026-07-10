@@ -1,5 +1,6 @@
 """Generate meeting prep briefings using LLM."""
 
+import asyncio
 import json
 import logging
 
@@ -72,18 +73,15 @@ class PrepBriefingGenerator:
         attendee_names: list[str],
         series_id: str | None = None,
         meeting_id: str | None = None,
+        calendar_event_uid: str | None = None,
+        event_signature: str | None = None,
+        expires_at: float | None = None,
     ) -> str:
         context = await self.gather_context(attendees, series_id)
         user_msg = self._build_prompt(title, attendee_names, context)
+        loop = asyncio.get_running_loop()
         try:
-            config = self._summariser._config
-            if config.backend == "claude":
-                content = self._summariser._claude_chat(PREP_PROMPT, user_msg)
-            else:
-                base_url = Summariser._validate_ollama_url(config.ollama_base_url)
-                content = self._summariser._ollama_chat(
-                    base_url, config.ollama_model, PREP_PROMPT, user_msg
-                )
+            content = await loop.run_in_executor(None, self._summariser.chat, PREP_PROMPT, user_msg)
         except Exception as e:
             logger.warning("Prep briefing generation failed: %s", e)
             content = self._build_fallback(title, context)
@@ -97,6 +95,9 @@ class PrepBriefingGenerator:
             open_action_items_json=json.dumps(
                 [{"id": i["id"], "title": i["title"]} for i in context["open_action_items"][:10]]
             ),
+            calendar_event_uid=calendar_event_uid,
+            event_signature=event_signature,
+            expires_at=expires_at,
         )
         return briefing_id
 
