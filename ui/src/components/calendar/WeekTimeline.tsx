@@ -9,11 +9,12 @@ import {
   getMinutes,
 } from "date-fns";
 import { useNavigate } from "react-router-dom";
-import type { Meeting } from "../../lib/types";
+import type { CalendarEvent, Meeting } from "../../lib/types";
 
 interface WeekTimelineProps {
   currentDate: Date;
   meetings: Meeting[];
+  events?: CalendarEvent[];
 }
 
 const START_HOUR = 7;
@@ -21,7 +22,11 @@ const END_HOUR = 22;
 const TOTAL_HOURS = END_HOUR - START_HOUR;
 const HOUR_HEIGHT = 48; // px per hour
 
-export function WeekTimeline({ currentDate, meetings }: WeekTimelineProps) {
+export function WeekTimeline({
+  currentDate,
+  meetings,
+  events = [],
+}: WeekTimelineProps) {
   const navigate = useNavigate();
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 });
@@ -51,6 +56,9 @@ export function WeekTimeline({ currentDate, meetings }: WeekTimelineProps) {
           const today = isToday(day);
           const dayMeetings = meetings.filter((m) =>
             isSameDay(new Date(m.started_at * 1000), day),
+          );
+          const dayEvents = events.filter((ev) =>
+            isSameDay(new Date(ev.start_ts * 1000), day),
           );
 
           return (
@@ -135,6 +143,42 @@ export function WeekTimeline({ currentDate, meetings }: WeekTimelineProps) {
                         </p>
                       )}
                     </button>
+                  );
+                })}
+
+                {/* Upcoming event blocks */}
+                {dayEvents.map((ev) => {
+                  const eventDate = new Date(ev.start_ts * 1000);
+                  const startHour =
+                    getHours(eventDate) + getMinutes(eventDate) / 60;
+                  const duration = (ev.end_ts - ev.start_ts) / 3600;
+                  const clampedStart = Math.max(
+                    START_HOUR,
+                    Math.min(startHour, END_HOUR),
+                  );
+                  const clampedEnd = Math.min(END_HOUR, startHour + duration);
+                  const top = (clampedStart - START_HOUR) * HOUR_HEIGHT;
+                  const height = Math.max(
+                    20,
+                    (clampedEnd - clampedStart) * HOUR_HEIGHT,
+                  );
+
+                  return (
+                    <div
+                      key={ev.event_uid}
+                      className="absolute left-0.5 right-0.5 rounded px-1.5 py-0.5 border border-dashed border-text-muted/40 bg-surface-hover/40 overflow-hidden"
+                      style={{ top: `${top}px`, height: `${height}px` }}
+                      title={ev.title || "Untitled"}
+                    >
+                      <p className="text-[10px] font-medium text-text-secondary truncate">
+                        {ev.title || "Untitled"}
+                      </p>
+                      {height > 30 && (
+                        <p className="text-[9px] text-text-muted">
+                          {format(eventDate, "HH:mm")}
+                        </p>
+                      )}
+                    </div>
                   );
                 })}
               </div>

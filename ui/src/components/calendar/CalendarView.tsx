@@ -16,7 +16,7 @@ import {
   format,
   getUnixTime,
 } from "date-fns";
-import { getCalendarMeetings } from "../../lib/api";
+import { getCalendarMeetings, getCalendarEvents } from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { MonthGrid } from "./MonthGrid";
 import { WeekTimeline } from "./WeekTimeline";
@@ -75,6 +75,13 @@ export function CalendarView() {
     staleTime: 30_000,
   });
 
+  const { data: eventsData } = useQuery({
+    queryKey: ["calendar-events", start, end],
+    queryFn: () => getCalendarEvents(start, end),
+    enabled: daemonRunning,
+    staleTime: 30_000,
+  });
+
   // Heatmap needs last 84 days regardless of view
   const heatmapRange = useMemo(() => {
     const today = new Date();
@@ -93,6 +100,7 @@ export function CalendarView() {
   });
 
   const meetings = data?.meetings ?? [];
+  const events = eventsData?.events ?? [];
   const heatmapMeetings = heatmapData?.meetings ?? [];
 
   function navigate(direction: "prev" | "next" | "today") {
@@ -209,16 +217,27 @@ export function CalendarView() {
           <MonthGrid
             currentDate={currentDate}
             meetings={meetings}
+            events={events}
             onDayClick={handleDayClick}
           />
         )}
         {viewMode === "week" && (
-          <WeekTimeline currentDate={currentDate} meetings={meetings} />
+          <WeekTimeline
+            currentDate={currentDate}
+            meetings={meetings}
+            events={events}
+          />
         )}
         {viewMode === "day" && (
-          <DayDetail currentDate={currentDate} meetings={meetings} />
+          <DayDetail
+            currentDate={currentDate}
+            meetings={meetings}
+            events={events}
+          />
         )}
-        {viewMode === "agenda" && <AgendaList meetings={meetings} />}
+        {viewMode === "agenda" && (
+          <AgendaList meetings={meetings} events={events} />
+        )}
       </div>
     </div>
   );

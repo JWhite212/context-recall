@@ -1,12 +1,14 @@
 import { format } from "date-fns";
-import type { Meeting } from "../../lib/types";
+import type { CalendarEvent, Meeting } from "../../lib/types";
 import { EventCard } from "./EventCard";
+import { UpcomingEventCard } from "./UpcomingEventCard";
 
 interface AgendaListProps {
   meetings: Meeting[];
+  events?: CalendarEvent[];
 }
 
-export function AgendaList({ meetings }: AgendaListProps) {
+export function AgendaList({ meetings, events = [] }: AgendaListProps) {
   // Group meetings by date (newest first)
   const sorted = [...meetings].sort((a, b) => b.started_at - a.started_at);
 
@@ -21,6 +23,21 @@ export function AgendaList({ meetings }: AgendaListProps) {
     }
     currentGroup.meetings.push(meeting);
   }
+
+  const eventsByDay = new Map<string, CalendarEvent[]>();
+  for (const ev of events) {
+    const key = format(new Date(ev.start_ts * 1000), "yyyy-MM-dd");
+    const list = eventsByDay.get(key) ?? [];
+    list.push(ev);
+    eventsByDay.set(key, list);
+  }
+  // Ensure days that ONLY have events still get a group
+  for (const key of eventsByDay.keys()) {
+    if (!groups.some((g) => g.date === key)) {
+      groups.push({ date: key, meetings: [] });
+    }
+  }
+  groups.sort((a, b) => (a.date < b.date ? 1 : -1)); // keep newest-first
 
   if (groups.length === 0) {
     return (
@@ -51,6 +68,18 @@ export function AgendaList({ meetings }: AgendaListProps) {
                 </div>
               </div>
             ))}
+            {(eventsByDay.get(group.date) ?? [])
+              .sort((a, b) => a.start_ts - b.start_ts)
+              .map((ev) => (
+                <div key={ev.event_uid} className="flex items-start gap-2">
+                  <span className="text-[11px] text-text-muted w-12 pt-1 text-right shrink-0">
+                    {format(new Date(ev.start_ts * 1000), "HH:mm")}
+                  </span>
+                  <div className="flex-1">
+                    <UpcomingEventCard event={ev} />
+                  </div>
+                </div>
+              ))}
           </div>
         </div>
       ))}
