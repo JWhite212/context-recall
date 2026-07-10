@@ -314,6 +314,9 @@ class PrepConfig:
     max_context_meetings: int = 3
     max_attendee_history: int = 5
     briefing_ttl_hours: int = 2
+    lookahead_hours: int = 24  # NEW — sweep window
+    sweep_interval_minutes: int = 15  # NEW
+    max_per_sweep: int = 5  # NEW — cap generations per tick
 
 
 @dataclass

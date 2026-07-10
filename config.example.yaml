@@ -361,6 +361,15 @@ prep:
   # When false, prep is manual only (click "Prepare" in the UI).
   auto_generate: true
 
+  # How far ahead (hours) the sweep looks for upcoming meetings.
+  lookahead_hours: 24
+
+  # How often (minutes) the prep sweep checks for new meetings to generate briefings for.
+  sweep_interval_minutes: 15
+
+  # Cap on LLM generations per sweep tick (prevents runaway consumption).
+  max_per_sweep: 5
+
   # Max past meetings from the same series to include in briefing.
   max_context_meetings: 3
 
