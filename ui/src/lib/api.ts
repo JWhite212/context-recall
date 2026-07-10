@@ -12,6 +12,7 @@ import type {
   AppConfig,
   AskResponse,
   AssignPersonResponse,
+  CalendarEventsResponse,
   Client,
   EmailDraft,
   Person,
@@ -628,6 +629,27 @@ export async function getCalendarMeetings(
   end: number,
 ): Promise<CalendarMeetingsResponse> {
   return request(`/api/calendar/meetings?start=${start}&end=${end}`);
+}
+
+export async function getCalendarEvents(
+  start: number,
+  end: number,
+): Promise<CalendarEventsResponse> {
+  return request<CalendarEventsResponse>(
+    `/api/calendar/events?start=${start}&end=${end}`,
+  );
+}
+
+export async function getCalendars(): Promise<{
+  calendars: { id: string; title: string }[];
+}> {
+  return request<{ calendars: { id: string; title: string }[] }>(
+    "/api/calendar/calendars",
+  );
+}
+
+export async function triggerCalendarSync(): Promise<{ synced: number }> {
+  return request<{ synced: number }>("/api/calendar/sync", { method: "POST" });
 }
 
 // --- Action Items ---
