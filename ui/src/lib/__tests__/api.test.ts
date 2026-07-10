@@ -6,10 +6,13 @@ import {
   createAutomationRule,
   createInsightDefinition,
   exportMeeting,
+  getCalendarEvents,
+  getCalendars,
   getHealth,
   getStatus,
   getUpcomingPrep,
   setAuthToken,
+  triggerCalendarSync,
 } from "../api";
 
 /**
@@ -262,5 +265,56 @@ describe("automation rules", () => {
     const call = calls.find((c) => c.init?.method === "POST");
     expect(call?.url).toContain("/api/automation-rules");
     expect(JSON.parse(call?.init?.body as string).name).toBe("R");
+  });
+});
+
+describe("calendar import", () => {
+  it("getCalendarEvents requests the range", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(input.toString());
+      return new Response(JSON.stringify({ events: [], count: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    await getCalendarEvents(100, 200);
+    expect(calls[0]).toContain("/api/calendar/events?start=100&end=200");
+  });
+
+  it("getCalendars requests the calendars list", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(input.toString());
+      return new Response(
+        JSON.stringify({ calendars: [{ id: "cal1", title: "Work" }] }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }) as unknown as typeof fetch;
+
+    await getCalendars();
+    expect(calls[0]).toContain("/api/calendar/calendars");
+  });
+
+  it("triggerCalendarSync POSTs", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: input.toString(), init });
+        return new Response(JSON.stringify({ synced: 3 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    ) as unknown as typeof fetch;
+
+    const res = await triggerCalendarSync();
+    expect(res.synced).toBe(3);
+    const call = calls.find((c) => c.init?.method === "POST");
+    expect(call?.url).toContain("/api/calendar/sync");
   });
 });
