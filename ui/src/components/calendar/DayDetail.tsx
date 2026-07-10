@@ -30,7 +30,9 @@ export function DayDetail({
 
       {dayMeetings.length === 0 && dayEvents.length === 0 ? (
         <div className="flex-1 flex items-center justify-center">
-          <p className="text-sm text-text-muted">No meetings on this day</p>
+          <p className="text-sm text-text-muted">
+            Nothing scheduled on this day
+          </p>
         </div>
       ) : (
         <div className="flex flex-col gap-2">
