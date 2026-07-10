@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactNode } from "react";
@@ -118,5 +118,91 @@ describe("NextUpWidget", () => {
     render(<NextUpWidget />, { wrapper: makeWrapper() });
     const join = await screen.findByRole("link", { name: /join/i });
     expect(join).toHaveAttribute("href", "https://teams.microsoft.com/l/xyz");
+  });
+
+  it("opens the prep modal when 'View prep' is clicked (prepared event)", async () => {
+    vi.mocked(api.getPreparedEventUids).mockResolvedValue({
+      event_uids: ["EK1:1000"],
+    });
+    vi.mocked(api.getPrepByEvent).mockResolvedValue(null);
+    render(<NextUpWidget />, { wrapper: makeWrapper() });
+
+    const viewPrep = await screen.findByRole("button", { name: /view prep/i });
+    fireEvent.click(viewPrep);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("fires generatePrepForEvent with the expected body", async () => {
+    vi.mocked(api.getPrepByEvent).mockResolvedValue(null);
+    vi.mocked(api.generatePrepForEvent).mockResolvedValue({
+      id: "p1",
+    } as Awaited<ReturnType<typeof api.generatePrepForEvent>>);
+    render(<NextUpWidget />, { wrapper: makeWrapper() });
+
+    const gen = await screen.findByRole("button", { name: /generate prep/i });
+    fireEvent.click(gen);
+
+    await waitFor(() => {
+      expect(api.generatePrepForEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_uid: "EK1:1000",
+          title: "Weekly Sync",
+          attendee_names: ["Sam", "Kim"],
+          end_ts: NOW + 720 + 1800,
+          series_id: null,
+        }),
+      );
+    });
+  });
+
+  it("disables Record when the event is not live", async () => {
+    // start_ts 12 min out (> 5 min) → not live yet.
+    render(<NextUpWidget />, { wrapper: makeWrapper() });
+    const rec = await screen.findByRole("button", {
+      name: /record this meeting/i,
+    });
+    expect(rec).toBeDisabled();
+  });
+
+  it("disables Record with 'Already recording' when the daemon is recording", async () => {
+    vi.mocked(useDaemonStatus).mockReturnValue({
+      daemonRunning: true,
+      state: "recording",
+      activeMeeting: null,
+      isLoading: false,
+    } as ReturnType<typeof useDaemonStatus>);
+    vi.mocked(api.getCalendarEvents).mockResolvedValue({
+      events: [ev({ start_ts: NOW - 60, end_ts: NOW + 1800 })], // live window
+      count: 1,
+    });
+    render(<NextUpWidget />, { wrapper: makeWrapper() });
+    const rec = await screen.findByRole("button", {
+      name: /record this meeting/i,
+    });
+    expect(rec).toBeDisabled();
+    expect(rec).toHaveAttribute("title", "Already recording");
+  });
+
+  it("records via a 2-step confirm when the event is live", async () => {
+    vi.mocked(api.getCalendarEvents).mockResolvedValue({
+      events: [ev({ start_ts: NOW - 60, end_ts: NOW + 1800 })], // live, not recording
+      count: 1,
+    });
+    vi.mocked(api.startRecording).mockResolvedValue(
+      {} as Awaited<ReturnType<typeof api.startRecording>>,
+    );
+    render(<NextUpWidget />, { wrapper: makeWrapper() });
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /record this meeting/i }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: /start recording\?/i }),
+    );
+
+    await waitFor(() => {
+      expect(api.startRecording).toHaveBeenCalledTimes(1);
+    });
   });
 });

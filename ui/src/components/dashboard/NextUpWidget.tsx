@@ -1,13 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import type { CalendarEvent } from "../../lib/types";
-import { getCalendarEvents, getPreparedEventUids } from "../../lib/api";
+import {
+  getCalendarEvents,
+  getPreparedEventUids,
+  generatePrepForEvent,
+  startRecording,
+} from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
+import { useToast } from "../common/Toast";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
 import { SkeletonCard } from "../common/Skeleton";
+import { PrepModal } from "../calendar/PrepModal";
 
 const DAY_SECONDS = 86_400;
 
@@ -38,11 +45,14 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 export function NextUpWidget() {
   const { daemonRunning, state } = useDaemonStatus();
-  void state;
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const toast = useToast();
 
-  // Re-render every second so the relative countdown stays live.
   const [, setTick] = useState(0);
+  const [showPrep, setShowPrep] = useState(false);
+  const [confirmingRecord, setConfirmingRecord] = useState(false);
+
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
@@ -62,6 +72,41 @@ export function NextUpWidget() {
     queryKey: ["prepared-events"],
     queryFn: getPreparedEventUids,
     enabled: daemonRunning,
+  });
+
+  const event: CalendarEvent | undefined = useMemo(
+    () =>
+      (data?.events ?? [])
+        .filter((e) => e.end_ts >= nowSec)
+        .sort((a, b) => a.start_ts - b.start_ts)[0],
+    [data, nowSec],
+  );
+
+  const generate = useMutation({
+    mutationFn: () => {
+      if (!event) throw new Error("no event");
+      return generatePrepForEvent({
+        event_uid: event.event_uid,
+        title: event.title || "Untitled",
+        attendees: event.attendees,
+        attendee_names: event.attendees.map((a) => a.name || a.email),
+        end_ts: event.end_ts,
+        series_id: null,
+      });
+    },
+    onSuccess: (dataPrep) => {
+      if (!event) return;
+      queryClient.setQueryData(["prep", "by-event", event.event_uid], dataPrep);
+      void queryClient.invalidateQueries({ queryKey: ["prepared-events"] });
+      setShowPrep(true);
+    },
+    onError: () => toast.error("Failed to generate prep."),
+  });
+
+  const record = useMutation({
+    mutationFn: () => startRecording(),
+    onSuccess: () => setConfirmingRecord(false),
+    onError: () => toast.error("Failed to start recording."),
   });
 
   if (!daemonRunning) return null;
@@ -87,10 +132,6 @@ export function NextUpWidget() {
     );
   }
 
-  const event: CalendarEvent | undefined = (data?.events ?? [])
-    .filter((e) => e.end_ts >= nowSec)
-    .sort((a, b) => a.start_ts - b.start_ts)[0];
-
   if (!event) {
     return (
       <Shell>
@@ -103,6 +144,8 @@ export function NextUpWidget() {
   const prepared = new Set(preparedData?.event_uids ?? []).has(event.event_uid);
   const title = event.title || "Untitled";
   const startedMins = Math.max(0, Math.round((nowSec - event.start_ts) / 60));
+  const isRecording = state === "recording";
+  const live = event.start_ts - 300 <= nowSec && nowSec <= event.end_ts;
 
   const metaParts: string[] = [];
   if (event.attendees.length > 0) {
@@ -146,7 +189,29 @@ export function NextUpWidget() {
           <p className="text-xs text-text-muted">{metaParts.join(" · ")}</p>
         )}
 
-        <div className="mt-1 flex items-center gap-3 text-xs">
+        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs border-t border-border pt-3">
+          {prepared && (
+            <button
+              type="button"
+              onClick={() => setShowPrep(true)}
+              className="text-accent hover:underline"
+            >
+              View prep
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => generate.mutate()}
+            disabled={generate.isPending}
+            className="text-accent hover:underline disabled:opacity-50"
+          >
+            {generate.isPending
+              ? "Generating..."
+              : prepared
+                ? "Regenerate prep"
+                : "Generate prep"}
+          </button>
+
           {event.join_url && (
             <a
               href={event.join_url}
@@ -157,15 +222,60 @@ export function NextUpWidget() {
               Join
             </a>
           )}
+
+          {!confirmingRecord ? (
+            <button
+              type="button"
+              onClick={() => setConfirmingRecord(true)}
+              disabled={!live || isRecording}
+              title={
+                isRecording
+                  ? "Already recording"
+                  : live
+                    ? ""
+                    : "Available when the meeting is live"
+              }
+              className="text-accent hover:underline disabled:opacity-40 disabled:no-underline disabled:text-text-muted"
+            >
+              Record this meeting
+            </button>
+          ) : (
+            <span className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => record.mutate()}
+                disabled={record.isPending}
+                className="text-accent hover:underline disabled:opacity-50"
+              >
+                Start recording?
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingRecord(false)}
+                className="text-text-muted hover:text-text-secondary"
+              >
+                Cancel
+              </button>
+            </span>
+          )}
+
           <button
             type="button"
             onClick={() => navigate("/calendar")}
-            className="text-text-muted hover:text-text-secondary"
+            className="ml-auto text-text-muted hover:text-text-secondary"
           >
             Open in calendar
           </button>
         </div>
       </div>
+
+      {showPrep && (
+        <PrepModal
+          eventUid={event.event_uid}
+          title={title}
+          onClose={() => setShowPrep(false)}
+        />
+      )}
     </Shell>
   );
 }
