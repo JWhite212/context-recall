@@ -248,3 +248,13 @@ def test_calendar_config_import_defaults():
     assert cfg.sync_interval_minutes == 15
     assert cfg.sync_horizon_days == 21
     assert cfg.excluded_calendars == []
+
+
+def test_prep_config_sweep_defaults():
+    from src.utils.config import PrepConfig
+
+    cfg = PrepConfig()
+    assert cfg.auto_generate is True
+    assert cfg.lookahead_hours == 24
+    assert cfg.sweep_interval_minutes == 15
+    assert cfg.max_per_sweep == 5
