@@ -51,6 +51,22 @@ class CalendarEventRepository:
         )
         return [self._row_to_dict(r) for r in await cur.fetchall()]
 
+    async def current_join_link_event(self, now: float, lead_seconds: float) -> dict | None:
+        """Return the earliest join-link event whose armed window contains ``now``.
+
+        Armed window is ``[start_ts - lead_seconds, end_ts]``. Only events with
+        a non-empty ``join_url`` (virtual meetings) qualify. Deterministic on
+        overlap via ``ORDER BY start_ts``. Read-only: no write_lock, no commit.
+        """
+        cur = await self._db.conn.execute(
+            "SELECT * FROM calendar_events "
+            "WHERE join_url != '' AND (start_ts - ?) <= ? AND end_ts >= ? "
+            "ORDER BY start_ts LIMIT 1",
+            (lead_seconds, now, now),
+        )
+        row = await cur.fetchone()
+        return self._row_to_dict(row) if row else None
+
     async def prune_window(self, start: float, end: float, keep_uids: set[str]) -> int:
         cur = await self._db.conn.execute(
             "SELECT event_uid FROM calendar_events "

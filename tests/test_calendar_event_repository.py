@@ -64,3 +64,54 @@ async def test_prune_window_removes_absent_but_keeps_recorded(cal_repo):
     assert removed == 1  # EK3 pruned; EK2 still kept
     rows = {r["event_uid"] for r in await cal_repo.list_by_range(0.0, 5000.0)}
     assert rows == {"EK1:1000", "EK2:2000"}
+
+
+@pytest.mark.asyncio
+async def test_current_join_link_event_in_window(cal_repo):
+    # Event runs 1000..2800; lead 120s. now=950 is inside [880, 2800].
+    await cal_repo.upsert(_ev(uid="EK1:1000", start=1000.0))
+    ev = await cal_repo.current_join_link_event(now=950.0, lead_seconds=120.0)
+    assert ev is not None
+    assert ev["event_uid"] == "EK1:1000"
+    assert ev["end_ts"] == 2800.0
+
+
+@pytest.mark.asyncio
+async def test_current_join_link_event_none_before_lead_window(cal_repo):
+    # now=800 is before start-lead (880) — not yet armed.
+    await cal_repo.upsert(_ev(uid="EK1:1000", start=1000.0))
+    ev = await cal_repo.current_join_link_event(now=800.0, lead_seconds=120.0)
+    assert ev is None
+
+
+@pytest.mark.asyncio
+async def test_current_join_link_event_none_after_end(cal_repo):
+    await cal_repo.upsert(_ev(uid="EK1:1000", start=1000.0))
+    ev = await cal_repo.current_join_link_event(now=3000.0, lead_seconds=120.0)
+    assert ev is None
+
+
+@pytest.mark.asyncio
+async def test_current_join_link_event_skips_events_without_join_url(cal_repo):
+    no_link = CalendarEvent(
+        event_uid="EK2:1000",
+        title="In person",
+        start_ts=1000.0,
+        end_ts=2800.0,
+        attendees=[{"name": "A", "email": "a@x.com"}],
+        organizer=None,
+        join_url="",  # no virtual link
+        meeting_id="",
+        calendar_name="Work",
+    )
+    await cal_repo.upsert(no_link)
+    ev = await cal_repo.current_join_link_event(now=1500.0, lead_seconds=120.0)
+    assert ev is None
+
+
+@pytest.mark.asyncio
+async def test_current_join_link_event_picks_earliest_on_overlap(cal_repo):
+    await cal_repo.upsert(_ev(uid="EK_LATE:1500", start=1500.0))
+    await cal_repo.upsert(_ev(uid="EK_EARLY:1000", start=1000.0))
+    ev = await cal_repo.current_join_link_event(now=1600.0, lead_seconds=120.0)
+    assert ev["event_uid"] == "EK_EARLY:1000"  # ORDER BY start_ts
