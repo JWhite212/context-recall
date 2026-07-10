@@ -38,7 +38,17 @@ jobs:
         run: pip install pip-audit
 
       - name: Audit requirements.lock
-        run: pip-audit -r requirements.lock --strict
+        # --no-deps audits the fully-pinned lock by (name, version) against the
+        # advisory DB without building wheels. Without it, pip-audit's resolver
+        # tries to build the macOS-only pyobjc-* wheels on this Linux runner
+        # ("PyObjC requires macOS to build") and errors out before auditing
+        # anything — a false failure, not a reported vulnerability.
+        #
+        # --ignore-vuln CVE-2025-3000: torch has no fixed release upstream for
+        # this advisory yet. torch is a transitive dep (sentence-transformers /
+        # speechbrain / torchaudio) used locally for embeddings + voice-ID, not
+        # exposed to untrusted input. Drop this ignore once a fixed torch ships.
+        run: pip-audit -r requirements.lock --strict --no-deps --ignore-vuln CVE-2025-3000
 
   npm-audit:
     name: Audit npm dependencies (npm audit)
@@ -79,4 +89,14 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Audit Cargo.lock
-        run: cd ui/src-tauri && cargo audit
+        # RUSTSEC-2026-0194 / -0195: quick-xml <0.41 DoS advisories (quadratic
+        # attribute check; unbounded namespace-decl allocation). Pulled in
+        # transitively by the Tauri stack — `plist -> tauri-utils` and the
+        # Windows-only `tauri-winrt-notification` path. Not fixable from our
+        # Cargo.toml (the parent crates pin ^0.37/^0.38, so cargo update cannot
+        # reach 0.41) until an upstream Tauri release bumps quick-xml. Not
+        # attacker-reachable in this macOS-only app: the Windows notification
+        # path is not compiled on macOS, and plist only parses trusted local
+        # files (bundle Info.plist), never attacker-supplied XML.
+        # TODO: drop these ignores once a Tauri release depends on quick-xml >=0.41.
+        run: cd ui/src-tauri && cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
