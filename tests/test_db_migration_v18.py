@@ -36,6 +36,10 @@ async def test_v18_upgrade_from_v17_preserves_data(tmp_path):
     async with aiosqlite.connect(str(db_path)) as conn:
         await conn.execute("CREATE TABLE meetings (id TEXT PRIMARY KEY, started_at REAL)")
         await conn.execute("INSERT INTO meetings (id, started_at) VALUES ('m1', 1.0)")
+        await conn.execute(
+            "CREATE TABLE prep_briefings (id TEXT PRIMARY KEY, meeting_id TEXT, "
+            "content_markdown TEXT, generated_at REAL, expires_at REAL)"
+        )
         await conn.execute("PRAGMA user_version = 17")
         await conn.commit()
     db = Database(db_path=db_path)
