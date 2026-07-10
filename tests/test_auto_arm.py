@@ -198,3 +198,42 @@ def test_tick_swallows_calendar_source_exceptions():
         clock=lambda: 1500.0,
     )
     ctrl.tick()  # must not raise
+
+
+def test_tick_swallows_start_exceptions():
+    # A raising start() (e.g. orchestrator-side failure) must not propagate
+    # into the poll loop, which treats an unexpected Exception as fatal.
+    def boom(ev):
+        raise RuntimeError("start blew up")
+
+    ctrl = AutoArmController(
+        config=AutoArmConfig(enabled=True),
+        calendar_source=lambda now, lead: _event(),
+        audio_monitor=FakeMonitor(active=True),
+        process_active=lambda: False,
+        is_recording=lambda: False,
+        start=boom,
+        stop=lambda: None,
+        clock=lambda: 1500.0,
+    )
+    ctrl.tick()  # must not raise
+
+
+def test_tick_swallows_stop_exceptions():
+    # A raising stop() past end+trailing must also be swallowed.
+    def boom():
+        raise RuntimeError("stop blew up")
+
+    ctrl = AutoArmController(
+        config=AutoArmConfig(enabled=True, trailing_minutes=5),
+        calendar_source=lambda now, lead: _event(end_ts=2800.0),
+        audio_monitor=FakeMonitor(),
+        process_active=lambda: False,
+        is_recording=lambda: True,
+        start=lambda ev: None,
+        stop=boom,
+        clock=lambda: 3200.0,
+    )
+    # Seed an owned recording so the stop branch is reached.
+    ctrl._recording_event = _event(end_ts=2800.0)
+    ctrl.tick()  # must not raise
