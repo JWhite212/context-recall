@@ -31,6 +31,16 @@ async def get_upcoming(response: Response):
     return briefing
 
 
+@router.get("/upcoming-list")
+async def get_upcoming_list(limit: int = 20):
+    return await _get_repo().list_upcoming(limit)
+
+
+@router.get("/prepared-events")
+async def get_prepared_events():
+    return {"event_uids": await _get_repo().prepared_event_uids()}
+
+
 @router.get("/{meeting_id}")
 async def get_briefing(meeting_id: str):
     briefing = await _get_repo().get_by_meeting(meeting_id)
