@@ -28,6 +28,9 @@ function providerLabel(joinUrl: string): string {
 
 function relativeLabel(startSec: number, nowSec: number): string {
   const mins = Math.max(0, Math.round((startSec - nowSec) / 60));
+  // The 60s refetch can lag start_ts by a moment — "in 0 min" reads as a
+  // glitch, so bridge the gap until happeningNow takes over.
+  if (mins === 0) return "starting now";
   if (mins < 60) return `in ${mins} min`;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
