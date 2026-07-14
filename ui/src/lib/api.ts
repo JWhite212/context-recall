@@ -400,11 +400,6 @@ export async function mergeMeetings(
   });
 }
 
-export async function getMeetingLabels(): Promise<string[]> {
-  const data = await request<{ labels: string[] }>("/api/meetings/labels");
-  return data.labels;
-}
-
 export async function setMeetingTags(
   id: string,
   tags: string[],

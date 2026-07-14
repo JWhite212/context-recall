@@ -136,12 +136,6 @@ async def merge_meetings(body: MergeMeetingsRequest):
     return {"meeting_id": new_id, "title": f"Merged: {earliest.title}"}
 
 
-@router.get("/api/meetings/labels", summary="Get distinct meeting labels")
-async def get_meeting_labels():
-    labels = await _repo.get_distinct_labels()
-    return {"labels": labels}
-
-
 @router.get("/api/meetings/tags", summary="Get distinct meeting tags")
 async def get_meeting_tags():
     return {"tags": await _repo.get_distinct_tags()}
