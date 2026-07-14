@@ -68,21 +68,25 @@ class CalendarEventRepository:
         return self._row_to_dict(row) if row else None
 
     async def prune_window(self, start: float, end: float, keep_uids: set[str]) -> int:
-        cur = await self._db.conn.execute(
-            "SELECT event_uid FROM calendar_events "
-            "WHERE start_ts >= ? AND start_ts < ? AND recorded_meeting_id IS NULL",
-            (start, end),
-        )
-        stale = [r[0] for r in await cur.fetchall() if r[0] not in keep_uids]
-        if not stale:
-            return 0
+        """Delete unrecorded window events absent from ``keep_uids``.
+
+        A single DELETE under the write lock: the old SELECT-then-DELETE
+        pair could race a concurrent upsert/recording-link between the two
+        statements (harmless under today's single writer, but atomic is
+        free here). ``keep_uids`` is bounded by the sync window (dozens),
+        so inlining placeholders is safe.
+        """
+        placeholders = ",".join("?" for _ in keep_uids) or "''"
         async with self._db.write_lock:
-            await self._db.conn.executemany(
-                "DELETE FROM calendar_events WHERE event_uid = ?",
-                [(uid,) for uid in stale],
+            cur = await self._db.conn.execute(
+                "DELETE FROM calendar_events "
+                "WHERE start_ts >= ? AND start_ts < ? "
+                "AND recorded_meeting_id IS NULL "
+                f"AND event_uid NOT IN ({placeholders})",
+                (start, end, *keep_uids),
             )
             await self._db.conn.commit()
-        return len(stale)
+        return cur.rowcount or 0
 
     async def set_recorded_meeting(self, event_uid: str, meeting_id: str) -> None:
         async with self._db.write_lock:
@@ -98,12 +102,22 @@ class CalendarEventRepository:
         try:
             d["attendees"] = json.loads(d.pop("attendees_json") or "[]")
         except (ValueError, TypeError):
+            # Coercing to [] keeps reads resilient, but corrupt JSON in the
+            # mirror means a sync bug — surface it instead of hiding it.
+            logger.warning(
+                "Corrupt attendees_json on calendar event %s — coerced to []",
+                d.get("event_uid"),
+            )
             d["attendees"] = []
         try:
             d["organizer"] = (
                 json.loads(d.pop("organizer_json")) if d.get("organizer_json") else None
             )
         except (ValueError, TypeError):
+            logger.warning(
+                "Corrupt organizer_json on calendar event %s — coerced to None",
+                d.get("event_uid"),
+            )
             d["organizer"] = None
         d.pop("organizer_json", None)
         return d
