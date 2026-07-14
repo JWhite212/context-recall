@@ -9,6 +9,7 @@ Location: ~/Library/Application Support/Context Recall/meetings.db
 """
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -22,7 +23,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 _vec_available = False
 
@@ -819,5 +820,30 @@ class Database:
             await self.conn.commit()
             logger.info("Database migrated to version 19 (auto-prep event links)")
             current_version = 19
+
+        if current_version < 20:
+            # Fold the single free-text `label` into the `tags` array so the
+            # UI can present one editable multi-tag control. Pure data move —
+            # the `label` column is retained for back-compat. Guard on the
+            # legacy columns being present so the migration is robust on
+            # partially-constructed schemas.
+            cursor = await self.conn.execute("PRAGMA table_info(meetings)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if {"tags", "label"} <= columns:
+                cursor = await self.conn.execute(
+                    "SELECT id, tags, label FROM meetings WHERE label != ''"
+                )
+                for row in await cursor.fetchall():
+                    existing = json.loads(row["tags"]) if row["tags"] else []
+                    if row["label"] not in existing:
+                        existing.append(row["label"])
+                        await self.conn.execute(
+                            "UPDATE meetings SET tags = ? WHERE id = ?",
+                            (json.dumps(existing), row["id"]),
+                        )
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 20 (fold label into tags)")
+            current_version = 20
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

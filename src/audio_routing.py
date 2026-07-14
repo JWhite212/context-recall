@@ -27,12 +27,18 @@ import logging
 import plistlib
 import sys
 import threading
+import time
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 MANAGED_DEVICE_NAME = "Context Recall Audio"
 MANAGED_DEVICE_UID = "dev.contextrecall.managed-multi-output"
+
+# CoreAudio can take a moment to propagate a default-output change, so the
+# routing verification polls briefly before declaring failure (Bug #5).
+_ROUTING_VERIFY_ATTEMPTS = 5
+_ROUTING_VERIFY_INTERVAL_SECONDS = 0.05
 
 
 def _fourcc(code: str) -> int:
@@ -390,12 +396,34 @@ class AudioRouter:
                 master_uid=real_uids[0],
             )
 
+        current_name = self._backend.device_name(current_id)
         self._backend.set_default_output_device(managed_id)
+        # Verify the switch actually took effect. CoreAudio can accept the set
+        # and take a moment to propagate the new default, so poll briefly
+        # before declaring failure — a silent no-op would capture only the
+        # microphone (Bug #5). Keep the previous-output bookkeeping on the
+        # confirmed-success path so restore() never reverts a switch that
+        # never happened.
+        engaged = False
+        for attempt in range(_ROUTING_VERIFY_ATTEMPTS):
+            if self._backend.default_output_device() == managed_id:
+                engaged = True
+                break
+            if attempt < _ROUTING_VERIFY_ATTEMPTS - 1:
+                time.sleep(_ROUTING_VERIFY_INTERVAL_SECONDS)
+        if not engaged:
+            return RoutingResult(
+                error=(
+                    "System audio routing did not take effect — the default "
+                    f"output is still '{current_name}'; system audio will not "
+                    "be captured. Route output to a Multi-Output Device "
+                    "containing BlackHole in Audio MIDI Setup."
+                )
+            )
         self._previous_output_id = current_id
         self._previous_output_uid = current_uid
         self._managed_id = managed_id
 
-        current_name = self._backend.device_name(current_id)
         message = (
             f"System audio routed through '{MANAGED_DEVICE_NAME}' "
             f"({current_name} + capture) for this recording."

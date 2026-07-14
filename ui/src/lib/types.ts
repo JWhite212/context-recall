@@ -586,6 +586,8 @@ export interface PrepBriefing {
   open_action_items_json: string;
   generated_at: number;
   expires_at: number;
+  calendar_event_uid: string | null;
+  event_signature: string | null;
 }
 
 export interface PrepGenerateEventBody {

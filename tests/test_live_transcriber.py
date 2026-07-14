@@ -228,6 +228,27 @@ def test_transcribe_chunk_returns_normally_when_mlx_succeeds():
     assert emitted[0].text == "hello world"
 
 
+def test_live_suppresses_silence_thank_you():
+    """A short known-hallucination phrase reported during silence must not
+    be emitted to the live UI."""
+    emitted: list = []
+
+    fast_result = {
+        "segments": [
+            {"start": 0.0, "end": 1.0, "text": "Thank you.", "no_speech_prob": 0.95},
+        ]
+    }
+    fake_mlx = type("FakeMLX", (), {"transcribe": staticmethod(lambda *a, **k: fast_result)})
+
+    lt = _make_lt(on_segment=emitted.append)
+    audio = np.zeros(16000, dtype=np.float32)
+
+    with patch.dict("sys.modules", {"mlx_whisper": fake_mlx}):
+        lt._transcribe_chunk(audio)
+
+    assert emitted == []
+
+
 def test_module_constants_are_sensible_defaults():
     """Sanity-check the module-level constants — these are the contract
     the orchestrator depends on."""

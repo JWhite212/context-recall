@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { assignPersonToSpeaker, createPerson, getPeople } from "../../lib/api";
+import {
+  assignPersonToSpeaker,
+  createPerson,
+  describeApiError,
+  getPeople,
+} from "../../lib/api";
 import { useToast } from "../common/Toast";
 
 /**
@@ -56,7 +61,7 @@ export function AssignSpeakerMenu({
       }
       onAssigned();
     },
-    onError: () => toast.error("Failed to assign person"),
+    onError: (e) => toast.error(describeApiError(e, "Failed to assign person")),
   });
 
   const createAndAssign = useMutation({
@@ -70,7 +75,7 @@ export function AssignSpeakerMenu({
       toast.success(`Added ${result.display_name} to People`);
       onAssigned();
     },
-    onError: () => toast.error("Failed to create person"),
+    onError: (e) => toast.error(describeApiError(e, "Failed to create person")),
   });
 
   return (

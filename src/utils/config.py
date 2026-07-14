@@ -120,6 +120,10 @@ class TranscriptionConfig:
     hallucination_silence_threshold: float | None = None
     temperature: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
     initial_prompt: str = ""
+    # Silence-hallucination suppression knobs.
+    phrase_repetition_min_repeats: int = 3
+    hallucination_phrase_no_speech_threshold: float = 0.6
+    hallucination_phrase_max_words: int = 4
     vad_threshold: float = (
         0.35  # Kept for backward compatibility; MLX Whisper handles VAD internally.
     )

@@ -1,21 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { UpcomingEventCard } from "../UpcomingEventCard";
 import type { CalendarEvent } from "../../../lib/types";
-import { ToastProvider } from "../../common/Toast";
+import { makeWrapper } from "../../../test/queryWrapper";
 
-function makeWrapper() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      <ToastProvider>{children}</ToastProvider>
-    </QueryClientProvider>
-  );
-}
 
 const EVENT: CalendarEvent = {
   event_uid: "EK1:1000",

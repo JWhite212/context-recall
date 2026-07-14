@@ -8,8 +8,6 @@ import {
   deleteMeeting,
   exportMeeting,
   resummariseMeeting,
-  setMeetingLabel,
-  getMeetingLabels,
   getTemplates,
   setSpeakerName,
   reprocessMeeting,
@@ -19,6 +17,7 @@ import { ActionItemCard } from "../action-items/ActionItemCard";
 import { AssignmentSelect } from "../clients/AssignmentSelect";
 import { MeetingInsights } from "./MeetingInsights";
 import { TemplateBadge } from "./TemplateBadge";
+import { TagEditor } from "./TagEditor";
 import { AssignSpeakerMenu } from "../people/AssignSpeakerMenu";
 import { API_BASE } from "../../lib/constants";
 import { canRetryMeeting } from "../../lib/meetingStatus";
@@ -312,116 +311,6 @@ function TranscriptView({
   );
 }
 
-function LabelEditor({
-  meetingId,
-  initialLabel,
-}: {
-  meetingId: string;
-  initialLabel: string;
-}) {
-  const queryClient = useQueryClient();
-  const toast = useToast();
-  const [value, setValue] = useState(initialLabel);
-  const [open, setOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-
-  const { data: labels = [] } = useQuery({
-    queryKey: ["meeting-labels"],
-    queryFn: getMeetingLabels,
-    staleTime: 30_000,
-  });
-
-  const saveLabel = useMutation({
-    mutationFn: (label: string) => setMeetingLabel(meetingId, label),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["meeting", meetingId] });
-      queryClient.invalidateQueries({ queryKey: ["meetings"] });
-      queryClient.invalidateQueries({ queryKey: ["meeting-labels"] });
-    },
-    onError: () => {
-      toast.error("Failed to save label.");
-    },
-  });
-
-  const commit = () => {
-    const trimmed = value.trim();
-    if (trimmed !== initialLabel) {
-      saveLabel.mutate(trimmed);
-    }
-    setOpen(false);
-  };
-
-  const filtered = labels.filter(
-    (l) => l.toLowerCase().includes(value.toLowerCase()) && l !== value,
-  );
-
-  // Close dropdown on click outside.
-  useEffect(() => {
-    if (!open) return;
-    const handleClick = (e: MouseEvent) => {
-      if (
-        wrapperRef.current &&
-        !wrapperRef.current.contains(e.target as Node)
-      ) {
-        commit();
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [open]);
-
-  return (
-    <div className="relative inline-block" ref={wrapperRef}>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => {
-          setValue(e.target.value);
-          setOpen(true);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={() => {
-          // Delay to allow dropdown click to fire first.
-          setTimeout(() => commit(), 150);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            commit();
-            (e.target as HTMLInputElement).blur();
-          }
-          if (e.key === "Escape") {
-            setValue(initialLabel);
-            setOpen(false);
-            (e.target as HTMLInputElement).blur();
-          }
-        }}
-        placeholder="Add label..."
-        aria-label="Meeting label"
-        className="px-2 py-1 text-xs rounded-md bg-surface-raised border border-border text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-purple-400 w-40"
-      />
-      {open && filtered.length > 0 && (
-        <div className="absolute left-0 mt-1 w-40 rounded-lg bg-surface-raised border border-border shadow-lg z-10 py-1 max-h-32 overflow-y-auto">
-          {filtered.map((label) => (
-            <button
-              key={label}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setValue(label);
-                saveLabel.mutate(label);
-                setOpen(false);
-              }}
-              className="w-full text-left px-3 py-1.5 text-xs text-text-secondary hover:bg-sidebar-hover transition-colors"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function MeetingActionItems({ meetingId }: { meetingId: string }) {
   const { data } = useQuery({
     queryKey: ["action-items", "meeting", meetingId],
@@ -664,23 +553,9 @@ export function MeetingDetail() {
           </span>
         </div>
 
-        {/* Tags */}
-        {meeting.tags.length > 0 && (
-          <div className="flex gap-1.5 mt-2">
-            {meeting.tags.map((tag) => (
-              <span
-                key={tag}
-                className="text-[11px] px-2 py-0.5 rounded-full bg-accent/10 text-accent"
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* Label */}
+        {/* Tags (editable) */}
         <div className="mt-2">
-          <LabelEditor meetingId={meeting.id} initialLabel={meeting.label} />
+          <TagEditor meetingId={meeting.id} tags={meeting.tags} />
         </div>
 
         {/* Client / project assignment */}

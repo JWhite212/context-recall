@@ -11,6 +11,30 @@ from src.summariser import MeetingSummary
 from src.transcriber import Transcript, TranscriptSegment
 
 
+@pytest.fixture(autouse=True)
+def _closed_db_bridge_try_call():
+    """Close (not run) any repo coroutine handed to DbBridge.try_call.
+
+    Orchestrator tests mock the API server with a MagicMock loop, which
+    swallows call_soon_threadsafe: a real try_call would (a) leak the repo
+    coroutine it was handed — surfacing later as "coroutine ... was never
+    awaited" RuntimeWarnings attributed to whatever test gc runs under —
+    and (b) stall ~10s per call in future.result() before its TimeoutError.
+    Closing the coroutine and returning None is exactly what the real
+    method does when the bridge is unavailable: same semantics, instant,
+    warning-free. try_call's real behaviour is covered by
+    tests/test_pipeline_runner.py.
+    """
+    from src.pipeline_runner import DbBridge
+
+    def _closed_try_call(self, coro, timeout=15.0, what="db call"):
+        coro.close()
+        return None
+
+    with patch.object(DbBridge, "try_call", _closed_try_call):
+        yield
+
+
 @pytest.fixture
 def tmp_config(tmp_path):
     """Create a minimal config.yaml for Context Recall init."""
@@ -2091,3 +2115,26 @@ def test_auto_arm_absent_when_calendar_import_disabled(tmp_path):
     app._maybe_start_auto_arm()
 
     assert app._auto_arm is None
+
+
+def test_ensure_audio_routing_emits_warning_on_router_error(app_with_mocked_api):
+    """A router that reports the switch did not take effect must surface a
+    pipeline.warning (source=routing), not fail silently (Bug #5)."""
+    from src.audio_routing import RoutingResult
+
+    app = app_with_mocked_api
+    app._config.audio.auto_route_system_audio = True
+    app._audio_router = MagicMock()
+    app._audio_router.ensure_routed.return_value = RoutingResult(
+        error="System audio routing did not take effect."
+    )
+    app._emit = MagicMock()
+
+    app._ensure_audio_routing()
+
+    routing_warnings = [
+        c
+        for c in app._emit.call_args_list
+        if c.args and c.args[0] == "pipeline.warning" and c.kwargs.get("source") == "routing"
+    ]
+    assert routing_warnings

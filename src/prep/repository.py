@@ -101,10 +101,26 @@ class PrepRepository:
         cursor = await self._db.conn.execute(
             "SELECT * FROM prep_briefings "
             "WHERE calendar_event_uid IS NOT NULL AND expires_at > ? "
-            "ORDER BY generated_at DESC LIMIT ?",
-            (now, limit),
+            "ORDER BY generated_at DESC",
+            (now,),
         )
-        return [dict(r) for r in await cursor.fetchall()]
+        # Regeneration (e.g. an attendee change) leaves the superseded row
+        # alive until its expires_at, so one event can have several current
+        # rows. Keep only the newest per event — otherwise the Prep list
+        # shows a transient duplicate card. De-dupe happens BEFORE the limit
+        # so the limit counts events, not raw rows.
+        seen: set[str] = set()
+        rows: list[dict] = []
+        for r in await cursor.fetchall():
+            row = dict(r)
+            uid = row["calendar_event_uid"]
+            if uid in seen:
+                continue
+            seen.add(uid)
+            rows.append(row)
+            if len(rows) >= limit:
+                break
+        return rows
 
     async def prepared_event_uids(self) -> list[str]:
         now = time.time()

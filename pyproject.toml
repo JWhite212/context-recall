@@ -6,6 +6,13 @@ requires-python = ">=3.11"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # Third-party SWIG bindings (pulled in via soundfile/sounddevice's cffi
+    # chain) emit these at import time on Python 3.12+; not ours to fix.
+    # Message-scoped so genuine deprecations in our code still surface.
+    "ignore:builtin type SwigPy:DeprecationWarning",
+    "ignore:builtin type swigvarlink:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["src"]
