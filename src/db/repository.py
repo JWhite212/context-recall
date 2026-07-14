@@ -442,14 +442,6 @@ class MeetingRepository:
             "error_count": row[5],
         }
 
-    async def get_distinct_labels(self) -> list[str]:
-        """Return all unique non-empty labels, sorted alphabetically."""
-        cursor = await self._db.conn.execute(
-            "SELECT DISTINCT label FROM meetings WHERE label != '' ORDER BY label"
-        )
-        rows = await cursor.fetchall()
-        return [row[0] for row in rows]
-
     async def get_distinct_tags(self) -> list[str]:
         """Return all unique non-empty tags across meetings, sorted."""
         cursor = await self._db.conn.execute(

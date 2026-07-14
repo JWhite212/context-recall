@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   searchTranscripts,
   reindexMeetings,
-  getMeetingLabels,
+  getMeetingTags,
 } from "../../lib/api";
 import type { SearchResult } from "../../lib/types";
 import { useToast } from "../common/Toast";
@@ -32,9 +32,9 @@ export function Search() {
   const [hasSearched, setHasSearched] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { data: labels = [] } = useQuery({
-    queryKey: ["meeting-labels"],
-    queryFn: getMeetingLabels,
+  const { data: tags = [] } = useQuery({
+    queryKey: ["meeting-tags"],
+    queryFn: getMeetingTags,
     staleTime: 30_000,
   });
 
@@ -174,19 +174,19 @@ export function Search() {
             </p>
           </div>
 
-          {labels.length > 0 && (
+          {tags.length > 0 && (
             <div className="flex flex-col items-center gap-1.5">
               <span className="text-xs text-text-muted">
-                Try searching by label:
+                Try searching by tag:
               </span>
               <div className="flex flex-wrap justify-center gap-1.5">
-                {labels.slice(0, 8).map((label) => (
+                {tags.slice(0, 8).map((tag) => (
                   <button
-                    key={label}
-                    onClick={() => setQuery(label)}
+                    key={tag}
+                    onClick={() => setQuery(tag)}
                     className="text-xs px-2.5 py-1 rounded-full bg-accent/10 text-accent hover:bg-accent/20 transition-colors"
                   >
-                    {label}
+                    {tag}
                   </button>
                 ))}
               </div>
