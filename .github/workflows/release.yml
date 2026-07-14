@@ -25,14 +25,27 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.lock pyinstaller
 
+      # build_daemon.sh (not raw pyinstaller) so CI gets the same layout the
+      # inject script expects — dist/context-recall-daemon/Context Recall
+      # Daemon.app — plus the stable signing identifier (its ad-hoc fallback
+      # is load-bearing for cert-less CI). Raw pyinstaller leaves the .app at
+      # dist/Context Recall Daemon.app and only the onedir payload at
+      # dist/context-recall-daemon/, which is what broke the v0.3.0 release.
       - name: Build daemon binary
-        run: pyinstaller context-recall.spec --noconfirm
+        run: ./scripts/build_daemon.sh
+
+      # upload-artifact does not preserve symlinks, and the PyInstaller .app
+      # is a relative-symlink farm (Frameworks/Resources cross-links). Ship
+      # the bundle as a tarball so the symlinks survive the artifact
+      # round-trip; inject_daemon.sh hard-fails if they are lost.
+      - name: Package daemon bundle (tar preserves the symlink farm)
+        run: tar -C dist/context-recall-daemon -czf daemon-bundle.tar.gz "Context Recall Daemon.app"
 
       - name: Upload daemon artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: context-recall-daemon
-          path: dist/context-recall-daemon/
+          path: daemon-bundle.tar.gz
 
   build-app:
     runs-on: macos-14
@@ -44,7 +57,16 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: context-recall-daemon
-          path: ui/src-tauri/resources/context-recall-daemon
+          path: ${{ runner.temp }}/daemon-artifact
+
+      # Populate the Tauri resource directory declared in tauri.conf.json.
+      # The Tauri copier will mangle this copy's symlinks inside the bundled
+      # app; that copy is replaced wholesale by inject_daemon.sh below.
+      - name: Unpack daemon into Tauri resources
+        run: |
+          mkdir -p ui/src-tauri/resources/context-recall-daemon
+          tar -xzf "$RUNNER_TEMP/daemon-artifact/daemon-bundle.tar.gz" \
+            -C ui/src-tauri/resources/context-recall-daemon
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -73,12 +95,13 @@ jobs:
       # PyInstaller daemon bundle (the daemon then dies at bootstrap with
       # "No module named '_struct'"). Re-inject the pristine bundle with
       # a symlink-preserving copy and regenerate the DMG from the fixed
-      # app. The daemon artifact was downloaded to the same path
-      # build_daemon.sh uses locally, so the inject script finds it.
+      # app. Extract straight from the tarball into the layout
+      # build_daemon.sh produces locally, so the inject script finds it.
       - name: Re-inject daemon bundle and rebuild DMG
         run: |
-          mkdir -p dist
-          cp -R ui/src-tauri/resources/context-recall-daemon dist/context-recall-daemon
+          mkdir -p dist/context-recall-daemon
+          tar -xzf "$RUNNER_TEMP/daemon-artifact/daemon-bundle.tar.gz" \
+            -C dist/context-recall-daemon
           ./scripts/inject_daemon.sh "ui/src-tauri/target/release/bundle/macos/Context Recall.app"
           rm -f ui/src-tauri/target/release/bundle/dmg/*.dmg
           hdiutil create -volname "Context Recall" \
