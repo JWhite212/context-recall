@@ -44,6 +44,11 @@ datas += collect_data_files("soundfile")
 # speechbrain ships yaml/log-config data its inference classes read.
 datas += collect_data_files("speechbrain")
 
+# sqlite-vec: the loadable extension (vec0.dylib) is package data —
+# PyInstaller won't bundle it on its own, and without it the daemon
+# silently falls back to brute-force vector search.
+datas += collect_data_files("sqlite_vec")
+
 a = Analysis(
     ["src/__main__.py"],
     pathex=["."],
