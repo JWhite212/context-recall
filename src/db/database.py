@@ -28,17 +28,28 @@ SCHEMA_VERSION = 20
 _vec_available = False
 
 
-def _load_vec_extension(conn):
-    """Load sqlite-vec extension. Returns True if successful."""
+async def _load_vec_extension(conn):
+    """Load sqlite-vec into an aiosqlite connection. Returns True if successful.
+
+    Must go through aiosqlite's async API: the underlying sqlite3 connection
+    lives on aiosqlite's worker thread and is single-thread bound
+    (check_same_thread), so touching the raw connection from the caller's
+    thread raises ProgrammingError — which silently downgraded every daemon
+    boot to brute-force search.
+    """
     global _vec_available
     try:
         import sqlite_vec
 
-        sqlite_vec.load(conn)
+        await conn.enable_load_extension(True)
+        try:
+            await conn.load_extension(sqlite_vec.loadable_path())
+        finally:
+            await conn.enable_load_extension(False)
         _vec_available = True
         logger.info("sqlite-vec extension loaded successfully")
         return True
-    except (ImportError, Exception) as e:
+    except Exception as e:
         logger.warning(
             "sqlite-vec not available; vector search will use brute-force fallback: %s",
             e,
@@ -461,13 +472,39 @@ class Database:
         await self._connection.execute("PRAGMA journal_mode=WAL")
         await self._connection.execute("PRAGMA foreign_keys=ON")
         await self._verify_pragmas()
-        # Load sqlite-vec extension (must happen before migration to create vec0 tables).
-        # aiosqlite wraps a real sqlite3 connection — access it for extension loading.
-        raw_conn = self._connection._conn  # Access underlying sqlite3.Connection
-        _load_vec_extension(raw_conn)
+        # Load sqlite-vec before migration so a fresh install creates the
+        # vec0 table. Goes through aiosqlite (never the raw connection) so
+        # the load runs on the connection's own worker thread.
+        await _load_vec_extension(self._connection)
         await self._migrate()
         await self._ensure_idempotent_indexes()
+        await self._ensure_vec_table()
         logger.info("Database connected: %s", self._db_path)
+
+    async def _ensure_vec_table(self) -> None:
+        """Create + backfill the vec0 table on databases migrated while
+        sqlite-vec was unavailable.
+
+        The v4→v5 migration gates vec0 creation on `_vec_available` and never
+        re-runs once user_version has advanced, so a database migrated during
+        the cross-thread-load era (every deployed DB before the fix) is stuck
+        without the KNN table. Idempotent: VEC_SQL is IF NOT EXISTS and the
+        backfill only copies rows missing from the mirror.
+        """
+        if not _vec_available:
+            return
+        try:
+            await self.conn.executescript(VEC_SQL)
+            cursor = await self.conn.execute(
+                "INSERT INTO segment_embeddings_vec(rowid, embedding) "
+                "SELECT se.id, se.embedding FROM segment_embeddings se "
+                "WHERE se.id NOT IN (SELECT rowid FROM segment_embeddings_vec)"
+            )
+            if cursor.rowcount:
+                logger.info("Backfilled %d embeddings into vec0 table", cursor.rowcount)
+            await self.conn.commit()
+        except Exception as e:
+            logger.warning("Failed to ensure vec0 table: %s", e)
 
     async def _verify_pragmas(self) -> None:
         """Verify journal_mode=WAL and foreign_keys=ON took effect.

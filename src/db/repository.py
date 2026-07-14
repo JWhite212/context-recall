@@ -872,8 +872,17 @@ class MeetingRepository:
 
         base_sql += " ORDER BY v.distance"
 
-        cursor = await self._db.conn.execute(base_sql, params)
-        rows = await cursor.fetchall()
+        try:
+            cursor = await self._db.conn.execute(base_sql, params)
+            rows = await cursor.fetchall()
+        except Exception as e:
+            # e.g. dimension mismatch between the query vector and the vec0
+            # column — degrade to the brute-force path rather than failing
+            # the search outright.
+            logger.warning("vec0 KNN query failed; falling back to brute-force: %s", e)
+            return await self._search_embeddings_bruteforce(
+                query_embedding, limit, meeting_id, date_from, date_to
+            )
 
         results = []
         for row in rows:
