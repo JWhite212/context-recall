@@ -1,14 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { WeekTimeline } from "../WeekTimeline";
 import type { CalendarEvent } from "../../../lib/types";
 import { ToastProvider } from "../../common/Toast";
+import { makeTestQueryClient } from "../../../test/queryWrapper";
 
-function makeWrapper() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
-}
 
 // Wednesday, 15:00 UTC — well inside the visible 07:00-22:00 window.
 const EVENT: CalendarEvent = {
@@ -26,7 +24,7 @@ const EVENT: CalendarEvent = {
 describe("WeekTimeline with events", () => {
   it("renders upcoming events through the clickable UpcomingEventCard", () => {
     render(
-      <QueryClientProvider client={makeWrapper()}>
+      <QueryClientProvider client={makeTestQueryClient()}>
         <ToastProvider>
           <MemoryRouter>
             <WeekTimeline

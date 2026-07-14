@@ -1,10 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { UpcomingEventCard } from "../UpcomingEventCard";
 import type { CalendarEvent } from "../../../lib/types";
-import { ToastProvider } from "../../common/Toast";
+import { makeWrapper } from "../../../test/queryWrapper";
 
 vi.mock("../../../hooks/useDaemonStatus", () => ({
   useDaemonStatus: () => ({
@@ -14,16 +12,6 @@ vi.mock("../../../hooks/useDaemonStatus", () => ({
   }),
 }));
 
-function makeWrapper() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      <ToastProvider>{children}</ToastProvider>
-    </QueryClientProvider>
-  );
-}
 
 function liveEvent(): CalendarEvent {
   const now = Math.floor(Date.now() / 1000);

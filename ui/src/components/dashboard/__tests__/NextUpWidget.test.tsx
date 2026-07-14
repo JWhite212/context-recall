@@ -1,30 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
-import type { ReactNode } from "react";
 import { NextUpWidget } from "../NextUpWidget";
-import { ToastProvider } from "../../common/Toast";
 import * as api from "../../../lib/api";
 import { useDaemonStatus } from "../../../hooks/useDaemonStatus";
+import { makeWrapper } from "../../../test/queryWrapper";
 
 vi.mock("../../../lib/api");
 vi.mock("../../../hooks/useDaemonStatus");
 
 const NOW = 1_000_000; // seconds
 
-function makeWrapper() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      <ToastProvider>
-        <MemoryRouter>{children}</MemoryRouter>
-      </ToastProvider>
-    </QueryClientProvider>
-  );
-}
 
 function ev(
   overrides: Partial<import("../../../lib/types").CalendarEvent> = {},

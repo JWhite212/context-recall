@@ -1,20 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { TagEditor } from "../TagEditor";
-import { ToastProvider } from "../../common/Toast";
+import { makeWrapper } from "../../../test/queryWrapper";
 
-function makeWrapper() {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      <ToastProvider>{children}</ToastProvider>
-    </QueryClientProvider>
-  );
-}
 
 describe("TagEditor", () => {
   let calls: { url: string; method: string; body: unknown }[];
