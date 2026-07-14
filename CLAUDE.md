@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Setup
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock
 cp config.example.yaml config.yaml  # then edit with real values
 
 # Three run modes (all start the FastAPI server in-process when api.enabled=true)
@@ -53,14 +53,14 @@ Do **not** sign with the keychain's "Apple Development" identity — without an 
 
 ```bash
 # Python
-pip install -r requirements-dev.txt
-python3 -m pytest tests/ -v            # Full Python suite (~870 tests)
+pip install -r requirements-dev.lock
+python3 -m pytest tests/ -v            # Full Python suite (~1030 tests)
 python3 -m pytest tests/ -x            # Stop on first failure
 ruff check src/ tests/                 # Lint check
 
 # UI
 cd ui
-npm test                               # vitest run (~20 tests)
+npm test                               # vitest run (~100 tests)
 npx tsc --noEmit                       # TypeScript type check
 
 # Rust (Tauri shell)
@@ -128,7 +128,7 @@ TeamsDetector  ──►  AudioCapture  ──►  Transcriber  ──►  Diari
 
 ### DB
 
-**`src/db/database.py` + `src/db/repository.py`** — SQLite via `aiosqlite`. Migrations are numbered (`SCHEMA_VERSION` is the head; `tests/test_db_migration_v14.py` is the latest). Schema covers meetings (incl. `notion_page_id` and client/project assignment columns), segments, speaker mappings (person-linked), people + voice profiles, clients + projects, keyword trackers + hits, templates, action items, analytics rollups, prep briefings, series memberships, notification dispatches, and an FTS5 mirror for full-text search. `segment_embeddings_vec` is a `sqlite-vec` virtual table populated by `src/embeddings.py` for semantic search.
+**`src/db/database.py` + `src/db/repository.py`** — SQLite via `aiosqlite`. Migrations are numbered (`SCHEMA_VERSION` is the head; `tests/test_db_migration_v20.py` is the latest). Schema covers meetings (incl. `notion_page_id` and client/project assignment columns), segments, speaker mappings (person-linked), people + voice profiles, clients + projects, keyword trackers + hits, templates, action items, analytics rollups, prep briefings, series memberships, notification dispatches, and an FTS5 mirror for full-text search. `segment_embeddings_vec` is a `sqlite-vec` virtual table populated by `src/embeddings.py` for semantic search.
 
 ### Intelligence modules
 
@@ -161,7 +161,7 @@ These run after the core pipeline finishes (via `_run_post_processing`), each no
 
 - **macOS + Apple Silicon only**: relies on BlackHole virtual audio driver, `pgrep`, `lsof`, `osascript`, and `mlx_whisper` (MLX is Apple-Silicon only). The CI matrix marks the MLX/Tauri jobs as Apple-Silicon only (commit `554ede5`).
 - **`config.yaml` is gitignored** — contains API keys. `config.example.yaml` is the tracked template.
-- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~870 tests. Tests never load real ML models (sentence-transformers/speechbrain are faked or unavailable).
+- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~1030 tests. Tests never load real ML models (sentence-transformers/speechbrain are faked or unavailable).
 - **UI tests**: vitest 4. `cd ui && npm test`. Pure UI; Tauri shell is not booted.
 - **Rust check**: `cd ui/src-tauri && cargo check` (requires the daemon-resource stub above).
 - **Linting**: ruff for Python (`ruff check src/ tests/`); tsc for TypeScript (`cd ui && npx tsc --noEmit`).
