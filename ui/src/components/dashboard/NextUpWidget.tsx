@@ -53,11 +53,6 @@ export function NextUpWidget() {
   const [showPrep, setShowPrep] = useState(false);
   const [confirmingRecord, setConfirmingRecord] = useState(false);
 
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-
   const nowSec = Date.now() / 1000;
 
   const { data, isLoading, isError, refetch } = useQuery({
@@ -81,6 +76,16 @@ export function NextUpWidget() {
         .sort((a, b) => a.start_ts - b.start_ts)[0],
     [data, nowSec],
   );
+
+  // Live countdown tick — only while there is actually a countdown to show
+  // (final-review Minor: an unconditional interval forced a re-render every
+  // second even when the widget rendered null/empty/error).
+  const hasHero = daemonRunning && event !== undefined;
+  useEffect(() => {
+    if (!hasHero) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasHero]);
 
   const generate = useMutation({
     mutationFn: () => {
