@@ -36,6 +36,10 @@ class SetLabelRequest(BaseModel):
     label: str = Field(default="", max_length=200)
 
 
+class SetTagsRequest(BaseModel):
+    tags: list[str] = Field(default_factory=list, max_length=50)
+
+
 @router.get("/api/meetings", response_model=MeetingListResponse, summary="List meetings")
 async def list_meetings(
     limit: int = Query(50, ge=1, le=200),
@@ -138,6 +142,11 @@ async def get_meeting_labels():
     return {"labels": labels}
 
 
+@router.get("/api/meetings/tags", summary="Get distinct meeting tags")
+async def get_meeting_tags():
+    return {"tags": await _repo.get_distinct_tags()}
+
+
 @router.get(
     "/api/meetings/stats",
     response_model=MeetingStatsResponse,
@@ -221,3 +230,17 @@ async def set_meeting_label(meeting_id: str, body: SetLabelRequest):
         raise HTTPException(status_code=404, detail="Meeting not found")
     await _repo.update_meeting(meeting_id, label=body.label)
     return {"meeting_id": meeting_id, "label": body.label}
+
+
+@router.patch("/api/meetings/{meeting_id}/tags", summary="Set meeting tags")
+async def set_meeting_tags(meeting_id: str, body: SetTagsRequest):
+    meeting = await _repo.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    normalised: list[str] = []
+    for raw in body.tags:
+        tag = raw.strip()
+        if tag and tag not in normalised:
+            normalised.append(tag)
+    await _repo.update_meeting(meeting_id, tags=normalised)
+    return {"meeting_id": meeting_id, "tags": normalised}

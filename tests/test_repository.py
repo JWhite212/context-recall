@@ -56,6 +56,15 @@ async def test_update_meeting_tags(repo: MeetingRepository):
 
 
 @pytest.mark.asyncio
+async def test_get_distinct_tags_returns_sorted_unique(repo: MeetingRepository):
+    m1 = await repo.create_meeting(started_at=1000.0)
+    m2 = await repo.create_meeting(started_at=2000.0)
+    await repo.update_meeting(m1, tags=["budget", "acme"])
+    await repo.update_meeting(m2, tags=["acme", "planning"])
+    assert await repo.get_distinct_tags() == ["acme", "budget", "planning"]
+
+
+@pytest.mark.asyncio
 async def test_list_meetings_pagination(repo: MeetingRepository):
     now = time.time()
     for i in range(5):

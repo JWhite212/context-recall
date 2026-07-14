@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.transcriber import TranscriptSegment
+from src.transcriber import Transcriber, TranscriptSegment
 
 logger = logging.getLogger("contextrecall.live")
 
@@ -41,6 +41,10 @@ class LiveTranscriptionConfig:
     min_chunk_seconds: float = 2.0
     overlap_seconds: float = 2.0
     silence_rms_threshold: float = 0.01
+    # Hallucination suppression (mirrors TranscriptionConfig defaults).
+    phrase_repetition_min_repeats: int = 3
+    hallucination_phrase_no_speech_threshold: float = 0.6
+    hallucination_phrase_max_words: int = 4
 
 
 class LiveTranscriber:
@@ -270,6 +274,17 @@ class LiveTranscriber:
         for seg in segments:
             seg_text = seg.get("text", "").strip()
             if not seg_text:
+                continue
+            # Suppress hallucinated fillers (phrase repeats, or a known filler
+            # phrase reported during silence) so they don't reach the live UI.
+            no_speech = seg.get("no_speech_prob", 0.0)
+            if Transcriber._is_phrase_repetition(
+                seg_text, self._config.phrase_repetition_min_repeats
+            ) or (
+                len(seg_text.split()) <= self._config.hallucination_phrase_max_words
+                and Transcriber._is_known_hallucination_phrase(seg_text)
+                and no_speech >= self._config.hallucination_phrase_no_speech_threshold
+            ):
                 continue
             # Only emit segments whose text appears in the new portion.
             if seg_text in new_text:

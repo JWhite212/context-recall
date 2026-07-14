@@ -200,6 +200,44 @@ class TestEnsureRouted:
         assert result.error is not None
         assert result.changed is False
 
+    def test_routing_that_does_not_stick_returns_error(self, backend):
+        class NonSticky(FakeBackend):
+            def set_default_output_device(self, device_id: int) -> None:
+                # Record the request but leave the default unchanged, as if
+                # CoreAudio accepted the set without it taking effect.
+                self.requested = device_id
+
+        result = _router(NonSticky(_standard_devices(), default_output=1)).ensure_routed()
+
+        assert result.changed is False
+        assert result.error is not None
+        assert "did not take effect" in result.error.lower()
+
+    def test_routing_succeeds_after_delayed_propagation(self):
+        class DelayedBackend(FakeBackend):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._pending: int | None = None
+                self._reads_after_set = 0
+
+            def set_default_output_device(self, device_id: int) -> None:
+                # Accepted, but the default only propagates after a couple of
+                # reads (simulating CoreAudio latency).
+                self._pending = device_id
+
+            def default_output_device(self) -> int:
+                if self._pending is not None:
+                    self._reads_after_set += 1
+                    if self._reads_after_set >= 2:
+                        self._default_output = self._pending
+                        self._pending = None
+                return self._default_output
+
+        result = _router(DelayedBackend(_standard_devices(), default_output=1)).ensure_routed()
+
+        assert result.error is None
+        assert result.changed is True
+
 
 class TestRestore:
     def test_restore_switches_back_to_previous_output(self, backend):

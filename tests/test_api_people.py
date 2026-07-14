@@ -242,6 +242,35 @@ async def test_assign_person_404s(api):
 
 
 @pytest.mark.asyncio
+async def test_assign_person_accepts_overlap_label(api):
+    """The energy diariser labels overlapping speech 'Me + Remote' — the
+    assign-person route must accept the '+' (previously rejected as 422)."""
+    repo = api["repo"]
+    person_repo = api["person_repo"]
+    meeting_id = await repo.create_meeting(started_at=1000.0, status="complete")
+    transcript = {
+        "segments": [
+            {"start": 0.0, "end": 3.0, "text": "hello", "speaker": "Me + Remote"},
+            {"start": 3.0, "end": 6.0, "text": "hi", "speaker": "Me"},
+        ]
+    }
+    await repo.update_meeting(meeting_id, transcript_json=json.dumps(transcript))
+    person_id = await person_repo.create(name="Sarah Chen")
+
+    with TestClient(api["app"]) as c:
+        resp = c.post(
+            f"/api/meetings/{meeting_id}/speakers/Me + Remote/assign-person",
+            headers=_auth_headers(),
+            json={"person_id": person_id, "enrol_voice": False},
+        )
+
+    assert resp.status_code == 200
+    meeting = await repo.get_meeting(meeting_id)
+    segments = json.loads(meeting.transcript_json)["segments"]
+    assert segments[0]["speaker"] == "Sarah Chen"
+
+
+@pytest.mark.asyncio
 async def test_voice_sample_delete_scoped_to_owner(api):
     """Deleting via another person's URL must 404, not delete."""
     person_repo = api["person_repo"]
@@ -250,12 +279,8 @@ async def test_voice_sample_delete_scoped_to_owner(api):
     sample_id = await person_repo.add_voice_sample(owner, [0.1, 0.2])
 
     with TestClient(api["app"]) as c:
-        wrong = c.delete(
-            f"/api/people/{other}/voice-samples/{sample_id}", headers=_auth_headers()
-        )
-        right = c.delete(
-            f"/api/people/{owner}/voice-samples/{sample_id}", headers=_auth_headers()
-        )
+        wrong = c.delete(f"/api/people/{other}/voice-samples/{sample_id}", headers=_auth_headers())
+        right = c.delete(f"/api/people/{owner}/voice-samples/{sample_id}", headers=_auth_headers())
 
     assert wrong.status_code == 404
     assert right.status_code == 200

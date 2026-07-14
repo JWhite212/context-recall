@@ -121,6 +121,14 @@ export class ApiError extends Error {
   }
 }
 
+/** Build a user-facing message from a thrown error, surfacing the API detail. */
+export function describeApiError(error: unknown, fallback: string): string {
+  if (error instanceof ApiError && error.detail) {
+    return `${fallback}: ${error.detail}`;
+  }
+  return fallback;
+}
+
 export interface RequestOptions extends RequestInit {
   /** Override the default 30s timeout. Set to 0 to disable. */
   timeoutMs?: number;
@@ -392,19 +400,24 @@ export async function mergeMeetings(
   });
 }
 
-export async function setMeetingLabel(
-  id: string,
-  label: string,
-): Promise<void> {
-  await request(`/api/meetings/${encodeURIComponent(id)}/label`, {
-    method: "PATCH",
-    body: JSON.stringify({ label }),
-  });
-}
-
 export async function getMeetingLabels(): Promise<string[]> {
   const data = await request<{ labels: string[] }>("/api/meetings/labels");
   return data.labels;
+}
+
+export async function setMeetingTags(
+  id: string,
+  tags: string[],
+): Promise<void> {
+  await request(`/api/meetings/${encodeURIComponent(id)}/tags`, {
+    method: "PATCH",
+    body: JSON.stringify({ tags }),
+  });
+}
+
+export async function getMeetingTags(): Promise<string[]> {
+  const data = await request<{ tags: string[] }>("/api/meetings/tags");
+  return data.tags;
 }
 
 export async function getTemplates(): Promise<SummaryTemplate[]> {
