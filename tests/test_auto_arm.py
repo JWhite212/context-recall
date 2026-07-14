@@ -237,3 +237,16 @@ def test_tick_swallows_stop_exceptions():
     # Seed an owned recording so the stop branch is reached.
     ctrl._recording_event = _event(end_ts=2800.0)
     ctrl.tick()  # must not raise
+
+
+def test_second_armed_tick_does_not_reopen_the_monitor():
+    # Regression guard for the _armed idempotency flag: repeated
+    # armed-but-no-activity ticks must not call monitor.start() again
+    # (a reopened stream would fight PortAudio for the device).
+    ctrl, state, monitor = _controller(event=_event())
+    ctrl.tick()
+    ctrl.tick()
+    ctrl.tick()
+    assert monitor.start_calls == 1
+    assert monitor.open is True
+    assert state["started"] == []
