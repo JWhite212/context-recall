@@ -816,9 +816,17 @@ class ContextRecall:
     def api_start_recording(self) -> None:
         """Start a manual recording session via the API.
 
-        Raises AudioCaptureError if the microphone permission is missing
-        or the audio device cannot be opened.
+        Raises AudioCaptureError if a recording is already in progress, the
+        microphone permission is missing, or the audio device cannot be
+        opened.
         """
+        # Guard here, not just in AudioCapture: its start() would no-op on a
+        # live capture, after which this method would reset
+        # _meeting_started_at and emit a spurious meeting.started for the
+        # recording already in flight (manual + auto-arm can race).
+        if self._capture.is_recording:
+            raise AudioCaptureError("A recording is already in progress")
+
         problem = self._ensure_mic_permission()
         if problem is not None:
             raise AudioCaptureError(problem)
