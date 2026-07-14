@@ -24,6 +24,17 @@ const END_HOUR = 22;
 const TOTAL_HOURS = END_HOUR - START_HOUR;
 const HOUR_HEIGHT = 48; // px per hour
 
+/** Clamp a block into the visible hour range; flags out-of-range starts. */
+function clampToVisible(startHour: number, durationHours: number) {
+  const clampedStart = Math.max(START_HOUR, Math.min(startHour, END_HOUR));
+  const clampedEnd = Math.min(END_HOUR, startHour + durationHours);
+  return {
+    top: (clampedStart - START_HOUR) * HOUR_HEIGHT,
+    height: Math.max(20, (clampedEnd - clampedStart) * HOUR_HEIGHT),
+    isOutOfRange: startHour < START_HOUR || startHour >= END_HOUR,
+  };
+}
+
 export function WeekTimeline({
   currentDate,
   meetings,
@@ -104,19 +115,10 @@ export function WeekTimeline({
                   const duration = meeting.duration_seconds
                     ? meeting.duration_seconds / 3600
                     : 0.5; // default 30min
-                  // Clamp position within the visible range
-                  const clampedStart = Math.max(
-                    START_HOUR,
-                    Math.min(startHour, END_HOUR),
+                  const { top, height, isOutOfRange } = clampToVisible(
+                    startHour,
+                    duration,
                   );
-                  const clampedEnd = Math.min(END_HOUR, startHour + duration);
-                  const top = (clampedStart - START_HOUR) * HOUR_HEIGHT;
-                  const height = Math.max(
-                    20,
-                    (clampedEnd - clampedStart) * HOUR_HEIGHT,
-                  );
-                  const isOutOfRange =
-                    startHour < START_HOUR || startHour >= END_HOUR;
 
                   return (
                     <button
@@ -155,21 +157,22 @@ export function WeekTimeline({
                   const startHour =
                     getHours(eventDate) + getMinutes(eventDate) / 60;
                   const duration = (ev.end_ts - ev.start_ts) / 3600;
-                  const clampedStart = Math.max(
-                    START_HOUR,
-                    Math.min(startHour, END_HOUR),
-                  );
-                  const clampedEnd = Math.min(END_HOUR, startHour + duration);
-                  const top = (clampedStart - START_HOUR) * HOUR_HEIGHT;
-                  const height = Math.max(
-                    20,
-                    (clampedEnd - clampedStart) * HOUR_HEIGHT,
+                  const { top, height, isOutOfRange } = clampToVisible(
+                    startHour,
+                    duration,
                   );
 
                   return (
                     <div
                       key={ev.event_uid}
-                      className="absolute left-0.5 right-0.5"
+                      className={`absolute left-0.5 right-0.5 ${
+                        isOutOfRange
+                          ? "rounded ring-1 ring-amber-500/40 ring-dashed"
+                          : ""
+                      }`}
+                      title={
+                        isOutOfRange ? "Outside visible hours" : undefined
+                      }
                       style={{ top: `${top}px`, height: `${height}px` }}
                     >
                       <UpcomingEventCard
