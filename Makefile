@@ -20,13 +20,8 @@ setup:
 	test -d .venv || python3 -m venv .venv
 	@echo "==> Installing Python dependencies"
 	.venv/bin/pip install --upgrade pip
-	@if [ -f requirements.lock ] && [ -f requirements-dev.lock ]; then \
-		echo "==> Installing from pinned lock files"; \
-		.venv/bin/pip install -r requirements.lock -r requirements-dev.lock; \
-	else \
-		echo "(!) lock files missing - falling back to requirements*.txt"; \
-		.venv/bin/pip install -r requirements.lock -r requirements-dev.lock; \
-	fi
+	@echo "==> Installing from pinned lock files"
+	.venv/bin/pip install -r requirements.lock -r requirements-dev.lock
 	@echo "==> Installing UI dependencies"
 	cd ui && npm install
 
