@@ -812,12 +812,6 @@ export async function dismissNotification(id: string): Promise<void> {
 
 // --- Prep Briefings ---
 
-export async function getUpcomingPrep(): Promise<PrepBriefing | null> {
-  const res = await requestRaw("/api/prep/upcoming");
-  if (res.status === 204) return null;
-  return res.json() as Promise<PrepBriefing>;
-}
-
 export async function getPrepForMeeting(
   meetingId: string,
 ): Promise<PrepBriefing> {

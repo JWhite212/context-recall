@@ -13,7 +13,6 @@ import {
   getHealth,
   getMeetingTags,
   getStatus,
-  getUpcomingPrep,
   getUpcomingPrepList,
   getPrepByEvent,
   getPreparedEventUids,
@@ -216,12 +215,12 @@ describe("requestRaw consumers", () => {
     await expect(exportMeeting("abc")).rejects.toBeInstanceOf(ApiError);
   });
 
-  it("getUpcomingPrep returns null for a 204 No Content response", async () => {
+  it("getPrepByEvent returns null for a 204 No Content response", async () => {
     globalThis.fetch = vi.fn(
       async () => new Response(null, { status: 204 }),
     ) as unknown as typeof fetch;
 
-    await expect(getUpcomingPrep()).resolves.toBeNull();
+    await expect(getPrepByEvent("EK1:1000")).resolves.toBeNull();
   });
 });
 

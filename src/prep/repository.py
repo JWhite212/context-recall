@@ -56,15 +56,6 @@ class PrepRepository:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-    async def get_upcoming(self) -> dict | None:
-        now = time.time()
-        cursor = await self._db.conn.execute(
-            "SELECT * FROM prep_briefings WHERE expires_at > ? ORDER BY generated_at DESC LIMIT 1",
-            (now,),
-        )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
-
     async def get_by_meeting(self, meeting_id: str) -> dict | None:
         now = time.time()
         cursor = await self._db.conn.execute(
