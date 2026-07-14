@@ -85,39 +85,46 @@ class CalendarReader:
         self._store = None
         self._authorized = False
         self._init_attempted = False
+        self._init_lock = threading.Lock()
 
     def _ensure_store(self) -> None:
         """Lazily create the EventKit store and request access (blocking auth wait).
 
         Must be called from a worker thread (the API server offloads reads via
-        run_in_executor), never on the event loop.
+        run_in_executor), never on the event loop. The lock serialises
+        concurrent first calls — two executor reads racing here used to both
+        run the (up to 60s) auth wait; now losers block until the winner
+        finishes and then return immediately.
         """
-        if self._init_attempted:
-            return
-        self._init_attempted = True
-        if not _is_eventkit_available():
-            return
-        try:
-            import EventKit
+        with self._init_lock:
+            if self._init_attempted:
+                return
+            self._init_attempted = True
+            if not _is_eventkit_available():
+                return
+            try:
+                import EventKit
 
-            self._store = EventKit.EKEventStore.alloc().init()
-            done = threading.Event()
-            result = [False]
+                self._store = EventKit.EKEventStore.alloc().init()
+                done = threading.Event()
+                result = [False]
 
-            def on_access(granted, error):
-                result[0] = granted
-                if error:
-                    logger.warning("Calendar access error: %s", error)
-                done.set()
+                def on_access(granted, error):
+                    result[0] = granted
+                    if error:
+                        logger.warning("Calendar access error: %s", error)
+                    done.set()
 
-            self._store.requestAccessToEntityType_completion_(EventKit.EKEntityTypeEvent, on_access)
-            if done.wait(timeout=60):
-                self._authorized = result[0]
-            else:
-                logger.warning("Calendar access request timed out")
-        except Exception as e:  # pragma: no cover - requires EventKit
-            logger.warning("Failed to initialise EventKit reader: %s", e)
-            self._store = None
+                self._store.requestAccessToEntityType_completion_(
+                    EventKit.EKEntityTypeEvent, on_access
+                )
+                if done.wait(timeout=60):
+                    self._authorized = result[0]
+                else:
+                    logger.warning("Calendar access request timed out")
+            except Exception as e:  # pragma: no cover - requires EventKit
+                logger.warning("Failed to initialise EventKit reader: %s", e)
+                self._store = None
 
     @property
     def available(self) -> bool:
