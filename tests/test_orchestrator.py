@@ -700,6 +700,7 @@ def test_api_start_recording_emits_pipeline_warning_when_capture_warns(
     app._capture.start = MagicMock()
 
     app._emit = MagicMock()
+    app._capture.is_recording = False
     app.api_start_recording()
 
     warning_calls = [
@@ -735,6 +736,7 @@ def test_api_start_recording_no_warning_emitted_on_clean_start(
     app._capture.start = MagicMock()
 
     app._emit = MagicMock()
+    app._capture.is_recording = False
     app.api_start_recording()
 
     warning_calls = [
@@ -779,6 +781,7 @@ def test_api_start_recording_wires_capture_error_callback_before_start(
     app._capture.start = fake_start
 
     app._emit = MagicMock()
+    app._capture.is_recording = False
     app.api_start_recording()
 
     assert callable(callback_at_start_call.get("on_capture_error"))
@@ -1745,6 +1748,7 @@ def test_api_start_recording_raises_when_mic_permission_denied(
     problem = "Microphone access is denied for the Context Recall daemon."
     with patch("src.main.ensure_microphone_access", return_value=("denied", problem)):
         with pytest.raises(AudioCaptureError, match="denied"):
+            app._capture.is_recording = False
             app.api_start_recording()
 
     app._capture.start.assert_not_called()
@@ -1770,6 +1774,7 @@ def test_api_start_recording_proceeds_when_permission_unknown(
     app._emit = MagicMock()
 
     with patch("src.main.ensure_microphone_access", return_value=("unknown", None)):
+        app._capture.is_recording = False
         app.api_start_recording()
 
     app._capture.start.assert_called_once()
@@ -2138,3 +2143,38 @@ def test_ensure_audio_routing_emits_warning_on_router_error(app_with_mocked_api)
         if c.args and c.args[0] == "pipeline.warning" and c.kwargs.get("source") == "routing"
     ]
     assert routing_warnings
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_api_start_recording_rejects_when_already_recording(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    """Starting over an in-flight recording must fail loudly, not reset the
+    meeting clock: AudioCapture.start() would no-op ("Already recording"),
+    after which api_start_recording used to overwrite _meeting_started_at
+    and emit a spurious meeting.started for the same capture."""
+    from src.audio_capture import AudioCaptureError
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture.is_recording = True
+    app._capture.start = MagicMock()
+    app._emit = MagicMock()
+    app._meeting_started_at = 1234.0
+
+    with pytest.raises(AudioCaptureError, match="already in progress"):
+        app.api_start_recording()
+
+    app._capture.start.assert_not_called()
+    assert app._meeting_started_at == 1234.0  # clock untouched
+    started_events = [
+        c for c in app._emit.call_args_list if c.args and c.args[0] == "meeting.started"
+    ]
+    assert not started_events
