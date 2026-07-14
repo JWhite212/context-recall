@@ -315,7 +315,7 @@ git clone https://github.com/JWhite212/context-recall.git
 cd context-recall
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock
 cp config.example.yaml config.yaml   # then edit with your values
 ```
 
