@@ -87,8 +87,8 @@ export function UpcomingEventCard({
           </p>
           {event.attendees.length > 0 && (
             <ul className="mt-2 flex flex-col gap-0.5">
-              {event.attendees.map((a) => (
-                <li key={a.email || a.name} className="text-text-secondary">
+              {event.attendees.map((a, i) => (
+                <li key={`${a.email || a.name}-${i}`} className="text-text-secondary">
                   {a.name || a.email}
                 </li>
               ))}
