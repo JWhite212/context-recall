@@ -11,6 +11,30 @@ from src.summariser import MeetingSummary
 from src.transcriber import Transcript, TranscriptSegment
 
 
+@pytest.fixture(autouse=True)
+def _closed_db_bridge_try_call():
+    """Close (not run) any repo coroutine handed to DbBridge.try_call.
+
+    Orchestrator tests mock the API server with a MagicMock loop, which
+    swallows call_soon_threadsafe: a real try_call would (a) leak the repo
+    coroutine it was handed — surfacing later as "coroutine ... was never
+    awaited" RuntimeWarnings attributed to whatever test gc runs under —
+    and (b) stall ~10s per call in future.result() before its TimeoutError.
+    Closing the coroutine and returning None is exactly what the real
+    method does when the bridge is unavailable: same semantics, instant,
+    warning-free. try_call's real behaviour is covered by
+    tests/test_pipeline_runner.py.
+    """
+    from src.pipeline_runner import DbBridge
+
+    def _closed_try_call(self, coro, timeout=15.0, what="db call"):
+        coro.close()
+        return None
+
+    with patch.object(DbBridge, "try_call", _closed_try_call):
+        yield
+
+
 @pytest.fixture
 def tmp_config(tmp_path):
     """Create a minimal config.yaml for Context Recall init."""
