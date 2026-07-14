@@ -47,7 +47,9 @@ This creates a per-machine self-signed identity (`CN="Context Recall Self-Signed
 
 Deploy sequence that preserves the stable signature: `build_daemon.sh` (stable-signs the daemon) → `npm run tauri build` (mangles the bundled copy) → `scripts/inject_daemon.sh "<app>"` (restores the pristine stable-signed daemon, re-seals **only** the outer app). Nothing after `build_daemon.sh` re-signs the daemon. After installing, `launchctl bootout` then `bootstrap` (not `kickstart`), then click **Allow** once — the grant persists thereafter. Because switching from the old ad-hoc cdhash DR to the cert-leaf DR is a new identity, seed the grant once: if a stale entry lingers, `tccutil reset Microphone dev.jamiewhite.contextrecall.daemon` then re-Allow (a reboot reliably re-seats the prompt).
 
-Do **not** sign with the keychain's "Apple Development" identity — without an embedded provisioning profile tccd rejects the bundle and kills the daemon (`OS_REASON_TCC`). GitHub-released daemons stay ad-hoc (`release.yml` builds via raw `pyinstaller`; CI has no cert) — the stable grant is a local-deploy benefit.
+Do **not** sign with the keychain's "Apple Development" identity — without an embedded provisioning profile tccd rejects the bundle and kills the daemon (`OS_REASON_TCC`). GitHub-released daemons stay ad-hoc — the stable grant is a local-deploy benefit.
+
+**If the mic dialog never appears at all**: check `codesign --verify` on the _installed_ daemon bundle. Runtime `__pycache__` writes (torch/speechbrain ship as source and compile on import) add files inside the signed bundle, breaking the resource seal — and tccd **silently refuses to prompt** for a bundle that fails validation (no dialog, permission pinned at `not_determined`, `tccutil reset` doesn't help). Fix: `find "<daemon .app>" -type d -name __pycache__ -exec rm -rf {} +`, verify the seal passes, restart the daemon. The frozen entrypoint disables bytecode writing (`src/utils/frozen_runtime.py`) so bundles built after 2026-07-14 can't re-break themselves.
 
 ### Tests and lint
 
