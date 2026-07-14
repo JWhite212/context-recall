@@ -105,6 +105,12 @@ a = Analysis(
     # speechbrain lazy-loads submodules via importutils, invisible to
     # static analysis — enumerate the whole package.
     + collect_submodules("speechbrain"),
+    # speechbrain must ship as SOURCE, not inside the PYZ archive: its
+    # importutils.lazy_export_all walks the package directory on the
+    # FILESYSTEM to discover submodules, so a frozen-only speechbrain dies
+    # at import with FileNotFoundError('.../speechbrain/lobes') — observed
+    # in every deployed daemon as silently degraded voice-ID.
+    module_collection_mode={"speechbrain": "py"},
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
