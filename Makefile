@@ -25,7 +25,7 @@ setup:
 		.venv/bin/pip install -r requirements.lock -r requirements-dev.lock; \
 	else \
 		echo "(!) lock files missing - falling back to requirements*.txt"; \
-		.venv/bin/pip install -r requirements.txt -r requirements-dev.txt; \
+		.venv/bin/pip install -r requirements.lock -r requirements-dev.lock; \
 	fi
 	@echo "==> Installing UI dependencies"
 	cd ui && npm install

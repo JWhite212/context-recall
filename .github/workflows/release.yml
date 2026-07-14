@@ -23,7 +23,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pyinstaller
+        run: pip install -r requirements.lock pyinstaller
 
       - name: Build daemon binary
         run: pyinstaller context-recall.spec --noconfirm
