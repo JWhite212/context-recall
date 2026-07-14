@@ -24,15 +24,6 @@ def _get_repo() -> PrepRepository:
     return _repo
 
 
-@router.get("/upcoming")
-async def get_upcoming(response: Response):
-    briefing = await _get_repo().get_upcoming()
-    if not briefing:
-        response.status_code = 204
-        return None
-    return briefing
-
-
 @router.get("/upcoming-list")
 async def get_upcoming_list(limit: int = 20):
     return await _get_repo().list_upcoming(limit)
