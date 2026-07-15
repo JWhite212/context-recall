@@ -18,6 +18,7 @@ import { AssignmentSelect } from "../clients/AssignmentSelect";
 import { MeetingInsights } from "./MeetingInsights";
 import { TemplateBadge } from "./TemplateBadge";
 import { TagEditor } from "./TagEditor";
+import { TitleEditor } from "./TitleEditor";
 import { AssignSpeakerMenu } from "../people/AssignSpeakerMenu";
 import { API_BASE } from "../../lib/constants";
 import { canRetryMeeting } from "../../lib/meetingStatus";
@@ -514,7 +515,11 @@ export function MeetingDetail() {
       {/* Header */}
       <div>
         <h1 className="text-lg font-semibold text-text-primary">
-          {meeting.title}
+          <TitleEditor
+            meetingId={meeting.id}
+            title={meeting.title}
+            className="text-left hover:underline decoration-dotted underline-offset-4"
+          />
         </h1>
         <div className="flex items-center gap-3 mt-1 flex-wrap">
           <span className="text-xs text-text-muted">
