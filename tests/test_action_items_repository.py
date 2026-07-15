@@ -150,3 +150,23 @@ async def test_create_and_update_tags(ai_repo, meeting_id):
     item = await ai_repo.get(item_id)
     assert item["client_id"] == "c2"
     assert item["tag_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_list_items_filters_by_client_and_priority(ai_repo, meeting_id):
+    await ai_repo.create(meeting_id=meeting_id, title="a", priority="high", client_id="c1")
+    await ai_repo.create(meeting_id=meeting_id, title="b", priority="low", client_id="c1")
+    await ai_repo.create(meeting_id=meeting_id, title="c", priority="high", client_id="c2")
+
+    got = await ai_repo.list_items(client_id="c1", priority="high")
+    assert [i["title"] for i in got] == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_list_items_filters_by_project_and_due_after(ai_repo, meeting_id):
+    await ai_repo.create(meeting_id=meeting_id, title="x", project_id="p1", due_date="2026-08-01")
+    await ai_repo.create(meeting_id=meeting_id, title="y", project_id="p1", due_date="2026-01-01")
+    await ai_repo.create(meeting_id=meeting_id, title="z", project_id="p2", due_date="2026-08-01")
+
+    got = await ai_repo.list_items(project_id="p1", due_after="2026-06-01")
+    assert [i["title"] for i in got] == ["x"]

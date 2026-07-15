@@ -171,6 +171,10 @@ class ActionItemRepository:
         status: str | None = None,
         assignee: str | None = None,
         due_before: str | None = None,
+        due_after: str | None = None,
+        client_id: str | None = None,
+        project_id: str | None = None,
+        priority: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -180,6 +184,10 @@ class ActionItemRepository:
             status: Filter by status (open, in_progress, done, cancelled).
             assignee: Filter by assignee name.
             due_before: Filter items due before this ISO date string.
+            due_after: Filter items due after this ISO date string.
+            client_id: Filter by client ID.
+            project_id: Filter by project ID.
+            priority: Filter by priority (low, medium, high, urgent).
             limit: Maximum number of results.
             offset: Number of results to skip.
         """
@@ -195,6 +203,18 @@ class ActionItemRepository:
         if due_before is not None:
             conditions.append("due_date < ?")
             params.append(due_before)
+        if due_after is not None:
+            conditions.append("due_date > ?")
+            params.append(due_after)
+        if client_id is not None:
+            conditions.append("client_id = ?")
+            params.append(client_id)
+        if project_id is not None:
+            conditions.append("project_id = ?")
+            params.append(project_id)
+        if priority is not None:
+            conditions.append("priority = ?")
+            params.append(priority)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         params.extend([limit, offset])

@@ -49,11 +49,23 @@ async def list_action_items(
     status: str | None = None,
     assignee: str | None = None,
     due_before: str | None = None,
+    due_after: str | None = None,
+    client_id: str | None = None,
+    project_id: str | None = None,
+    priority: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ):
     items = await _get_repo().list_items(
-        status=status, assignee=assignee, due_before=due_before, limit=limit, offset=offset
+        status=status,
+        assignee=assignee,
+        due_before=due_before,
+        due_after=due_after,
+        client_id=client_id,
+        project_id=project_id,
+        priority=priority,
+        limit=limit,
+        offset=offset,
     )
     return {"items": items}
 

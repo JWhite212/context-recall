@@ -59,3 +59,36 @@ async def test_patch_missing_item_404s(action_items_client):
     client, _repo, _meeting_repo = action_items_client
     resp = client.patch("/api/action-items/nope", json={"client_id": "c9"})
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_endpoint_filters_by_project(action_items_client):
+    client, repo, meeting_repo = action_items_client
+    meeting_id = await meeting_repo.create_meeting(started_at=1700000000)
+    await repo.create(meeting_id=meeting_id, title="x", project_id="p1")
+    await repo.create(meeting_id=meeting_id, title="y", project_id="p2")
+    resp = client.get("/api/action-items?project_id=p1")
+    assert resp.status_code == 200
+    assert [i["title"] for i in resp.json()["items"]] == ["x"]
+
+
+@pytest.mark.asyncio
+async def test_list_endpoint_filters_by_client_and_priority(action_items_client):
+    client, repo, meeting_repo = action_items_client
+    meeting_id = await meeting_repo.create_meeting(started_at=1700000000)
+    await repo.create(meeting_id=meeting_id, title="a", priority="high", client_id="c1")
+    await repo.create(meeting_id=meeting_id, title="b", priority="low", client_id="c1")
+    resp = client.get("/api/action-items?client_id=c1&priority=high")
+    assert resp.status_code == 200
+    assert [i["title"] for i in resp.json()["items"]] == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_list_endpoint_filters_by_due_after(action_items_client):
+    client, repo, meeting_repo = action_items_client
+    meeting_id = await meeting_repo.create_meeting(started_at=1700000000)
+    await repo.create(meeting_id=meeting_id, title="future", due_date="2026-08-01")
+    await repo.create(meeting_id=meeting_id, title="past", due_date="2026-01-01")
+    resp = client.get("/api/action-items?due_after=2026-06-01")
+    assert resp.status_code == 200
+    assert [i["title"] for i in resp.json()["items"]] == ["future"]
