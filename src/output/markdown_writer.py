@@ -40,7 +40,9 @@ def _rewrite_frontmatter_title(content: str, new_title: str) -> str:
                 fm = {}
             if isinstance(fm, dict):
                 fm["title"] = new_title
-                new_block = _yaml.dump(fm, default_flow_style=False, allow_unicode=True).rstrip()
+                new_block = _yaml.dump(
+                    fm, default_flow_style=False, allow_unicode=True, sort_keys=False
+                ).rstrip()
                 return f"---\n{new_block}\n---{content[end + 4 :]}"
     return content
 
@@ -198,12 +200,20 @@ class MarkdownWriter:
         new_content = _rewrite_frontmatter_title(content, new_title)
 
         # Same computed filename: just rewrite the frontmatter in place.
+        # Atomic write (tmp + os.replace), same crash-safe pattern as write(),
+        # so a crash mid-write can't truncate the only copy of the note.
         if new_path == old_path.resolve():
+            tmp_path = old_path.with_name(old_path.name + ".tmp")
             try:
-                old_path.write_text(new_content, encoding="utf-8")
+                tmp_path.write_text(new_content, encoding="utf-8")
+                os.replace(tmp_path, old_path)
             except OSError as e:
                 self.last_error = f"Could not rewrite note {old_path}: {e}"
                 logger.error("Markdown rename failed: %s", self.last_error)
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 return None
             return old_path
 
@@ -218,13 +228,28 @@ class MarkdownWriter:
                     break
                 n += 1
 
+        tmp_path = new_path.with_name(new_path.name + ".tmp")
         try:
-            new_path.write_text(new_content, encoding="utf-8")
-            old_path.unlink(missing_ok=True)
+            tmp_path.write_text(new_content, encoding="utf-8")
+            os.replace(tmp_path, new_path)
         except OSError as e:
             self.last_error = f"Could not write renamed note {new_path}: {e}"
             logger.error("Markdown rename failed: %s", self.last_error)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             return None
+
+        # The rename itself succeeded once the new file is written. Removing
+        # the old file is best-effort: if it fails, a stale duplicate is far
+        # better than reporting a false failure and orphaning the new file
+        # with no path back to it, so this does NOT set last_error or
+        # return None.
+        try:
+            old_path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Renamed note written but could not remove old file %s: %s", old_path, e)
 
         logger.info("Markdown note renamed: %s -> %s", old_path, new_path)
         return new_path
