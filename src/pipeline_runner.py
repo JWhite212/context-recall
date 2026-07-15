@@ -859,6 +859,15 @@ class PipelineRunner:
         self, meeting_id: str, transcript, started_at: float, is_reprocess: bool
     ) -> None:
         """Async post-processing: action items, analytics. Non-fatal."""
+        # Auto-assignment must precede extraction: extracted action items
+        # inherit the meeting's client/project, so an LLM assignment made
+        # here has to land on the meeting row first (I2).
+        try:
+            tagging_cfg = getattr(self._config, "tagging", None)
+            if tagging_cfg and tagging_cfg.enabled and tagging_cfg.auto_assign:
+                await self._auto_assign_client_project(meeting_id)
+        except Exception:
+            logger.warning("Client/project auto-assignment failed", exc_info=True)
         try:
             if self._config.action_items.auto_extract:
                 await self._extract_action_items(meeting_id, transcript, is_reprocess)
@@ -870,12 +879,6 @@ class PipelineRunner:
                 await self._suggest_speaker_names(meeting_id, transcript)
         except Exception:
             logger.warning("Speaker-name suggestion failed", exc_info=True)
-        try:
-            tagging_cfg = getattr(self._config, "tagging", None)
-            if tagging_cfg and tagging_cfg.enabled and tagging_cfg.auto_assign:
-                await self._auto_assign_client_project(meeting_id)
-        except Exception:
-            logger.warning("Client/project auto-assignment failed", exc_info=True)
         try:
             await self._scan_trackers(meeting_id, transcript)
         except Exception:
