@@ -338,3 +338,28 @@ class NotionWriter:
             return False
         logger.info("Archived previous Notion page %s", page_id)
         return True
+
+    def update_page_title(self, page_id: str, title: str) -> bool:
+        """PATCH a previously written page's title property (best-effort).
+
+        Used to propagate a meeting rename to Notion. Failures are logged,
+        never raised — an output-sync failure must not block the rename's
+        DB update.
+        """
+        if not page_id:
+            return False
+        try:
+            client = self._get_client()
+            title_prop = self._config.properties["title"]
+            self._call_with_retry(
+                lambda: client.pages.update(
+                    page_id=page_id,
+                    properties={title_prop: {"title": self._rich_text(title)}},
+                ),
+                description="pages.update(title)",
+            )
+        except Exception as e:
+            logger.warning("Could not update Notion page title %s: %s", page_id, e)
+            return False
+        logger.info("Updated Notion page title %s", page_id)
+        return True
