@@ -35,3 +35,15 @@ def test_spec_collects_eventkit_submodules(spec_text):
 )
 def test_spec_declares_tcc_usage_keys(spec_text, key):
     assert key in spec_text, f"{key} missing from context-recall.spec info_plist"
+
+
+@pytest.mark.parametrize(
+    "module",
+    ['"pyannote.audio"', '"pyannote.core"', '"pyannote.pipeline"'],
+)
+def test_spec_bundles_pyannote(spec_text, module):
+    assert module in spec_text, f"{module} missing from context-recall.spec hiddenimports"
+
+
+def test_spec_collects_pyannote_submodules(spec_text):
+    assert 'collect_submodules("pyannote.audio")' in spec_text
