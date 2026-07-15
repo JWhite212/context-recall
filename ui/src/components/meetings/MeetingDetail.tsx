@@ -1,6 +1,6 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import Markdown from "react-markdown";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import {
@@ -20,6 +20,7 @@ import { TemplateBadge } from "./TemplateBadge";
 import { TagEditor } from "./TagEditor";
 import { TitleEditor } from "./TitleEditor";
 import { AssignSpeakerMenu } from "../people/AssignSpeakerMenu";
+import { SpeakerPanel } from "./SpeakerPanel";
 import { API_BASE } from "../../lib/constants";
 import { canRetryMeeting } from "../../lib/meetingStatus";
 import type { TranscriptSegment } from "../../lib/types";
@@ -489,6 +490,21 @@ export function MeetingDetail() {
   const hasSummary = !!meeting.summary_markdown;
   const hasAudio = !!meeting.audio_path;
 
+  // Parsed once here (separately from TranscriptView's own parse, which also
+  // tracks dropped-hallucination counts) so the SpeakerPanel can list
+  // detected speakers without needing TranscriptView to lift its state up.
+  const segments = useMemo<TranscriptSegment[]>(() => {
+    if (!meeting.transcript_json) return [];
+    try {
+      const data = JSON.parse(meeting.transcript_json);
+      return (data.segments ?? []).filter((s: TranscriptSegment) =>
+        s.text?.trim(),
+      );
+    } catch {
+      return [];
+    }
+  }, [meeting.transcript_json]);
+
   return (
     <div className="flex flex-col gap-4 p-6 max-w-3xl">
       {/* Back button */}
@@ -845,6 +861,15 @@ export function MeetingDetail() {
         <AudioPlayer
           src={`${API_BASE}/api/meetings/${meeting.id}/audio`}
           seekRef={audioSeekRef}
+        />
+      )}
+
+      {/* Speaker correction panel */}
+      {hasTranscript && (
+        <SpeakerPanel
+          meetingId={meeting.id}
+          segments={segments}
+          onSeek={(s) => audioSeekRef.current?.seekTo(s)}
         />
       )}
 
