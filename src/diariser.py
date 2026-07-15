@@ -149,10 +149,11 @@ def create_diariser(config: DiarisationConfig) -> DiariserBackend:
         try:
             import pyannote.audio  # noqa: F401
         except ImportError:
-            raise ValueError(
-                "Pyannote backend requires 'pyannote.audio' and its dependencies. "
-                "Install with: pip install pyannote.audio"
-            ) from None
+            logger.warning(
+                "pyannote.audio unavailable — degrading diarisation to the "
+                "energy backend (binary Me/Remote)."
+            )
+            return EnergyDiariser(config)
         from src.pyannote_diariser import PyAnnoteDiariser
 
         return PyAnnoteDiariser(config)
