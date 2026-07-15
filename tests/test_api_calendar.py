@@ -117,3 +117,21 @@ async def test_events_empty_when_reader_unavailable(api):
         r = c.get("/api/calendar/events?start=0&end=5000", headers=_auth_headers())
         assert r.status_code == 200
         assert r.json() == {"events": [], "count": 0}
+
+
+def test_calendar_permission_endpoint(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import calendar as calendar_routes
+
+    monkeypatch.setattr("src.calendar_permission.authorization_status", lambda: "authorized")
+    app = FastAPI()
+    app.include_router(calendar_routes.router)
+    client = TestClient(app)
+
+    resp = client.get("/api/calendar/permission")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "authorized"
+    assert body["granted"] is True

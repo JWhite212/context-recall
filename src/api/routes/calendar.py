@@ -6,6 +6,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Query
 
+from src import calendar_permission
 from src.utils.config import load_config
 
 logger = logging.getLogger("contextrecall.api.calendar")
@@ -69,6 +70,13 @@ async def get_calendars():
     loop = asyncio.get_running_loop()
     calendars = await loop.run_in_executor(None, _reader.list_calendars)
     return {"calendars": calendars}
+
+
+@router.get("/api/calendar/permission", summary="Calendar TCC permission status")
+async def get_calendar_permission():
+    """Return this process's macOS Calendar permission status for the UI banner."""
+    status = calendar_permission.authorization_status()
+    return {"status": status, "granted": status == calendar_permission.AUTHORIZED}
 
 
 @router.post("/api/calendar/sync", summary="Sync the calendar mirror now")
