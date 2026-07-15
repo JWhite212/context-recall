@@ -7,10 +7,15 @@ describe("CalendarsSection", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let permissionStatus = "authorized";
   let permissionGranted = true;
+  let calendarsList: { id: string; title: string }[] = [];
 
   beforeEach(() => {
     permissionStatus = "authorized";
     permissionGranted = true;
+    calendarsList = [
+      { id: "c1", title: "Work" },
+      { id: "c2", title: "Personal" },
+    ];
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url.includes("/api/calendar/sync")) {
@@ -22,10 +27,7 @@ describe("CalendarsSection", () => {
       if (url.includes("/api/calendar/calendars")) {
         return new Response(
           JSON.stringify({
-            calendars: [
-              { id: "c1", title: "Work" },
-              { id: "c2", title: "Personal" },
-            ],
+            calendars: calendarsList,
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -136,11 +138,26 @@ describe("CalendarsSection", () => {
     expect(
       screen.getByRole("button", { name: /open system settings/i }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sync now/i })).toBeDisabled();
   });
 
   it("does not show the permission banner when access is granted", async () => {
     render(<CalendarsSection />, { wrapper: makeWrapper() });
     await screen.findByText("Work");
+    expect(
+      screen.queryByText(/calendar access is not granted/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows 'No calendars available.' when access is granted but there are no calendars", async () => {
+    permissionStatus = "authorized";
+    permissionGranted = true;
+    calendarsList = [];
+    render(<CalendarsSection />, { wrapper: makeWrapper() });
+
+    expect(
+      await screen.findByText(/no calendars available/i),
+    ).toBeInTheDocument();
     expect(
       screen.queryByText(/calendar access is not granted/i),
     ).not.toBeInTheDocument();
