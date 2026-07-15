@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.db.database import Database
+from src.db.database import SCHEMA_VERSION, Database
 
 
 @pytest.mark.asyncio
@@ -16,7 +16,10 @@ async def test_v22_adds_action_item_tag_columns(tmp_path):
         assert "project_id" in cols
         assert "tag_source" in cols
 
+        # A fresh DB fast-forwards to the current head version via the
+        # fresh-create path, not the versioned `< 22` migration block, so
+        # this must track SCHEMA_VERSION rather than a version literal.
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 22
+        assert (await cursor.fetchone())[0] == SCHEMA_VERSION
     finally:
         await db.close()
