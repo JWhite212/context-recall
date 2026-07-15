@@ -697,6 +697,29 @@ def test_attendee_enrichment_renames_remote_in_two_speaker_meeting(tmp_path, loo
     )
 
 
+def test_attendee_enrichment_renames_pyannote_speaker_in_two_speaker_meeting(tmp_path, loop_thread):
+    """The 2-speaker attendee auto-rename must also fire when the single
+    remote speaker is a pyannote SPEAKER_NN label, not just 'Remote'."""
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    transcript = _make_transcript(
+        texts=("hello there team", "hi and welcome everyone"),
+        speakers=["Me", "SPEAKER_00"],
+    )
+    runner = _make_runner(
+        _make_config(tmp_path), db=bridge, transcriber=FakeTranscriber(transcript=transcript)
+    )
+
+    runner.run(
+        tmp_path / "a.wav",
+        "m1",
+        started_at=1000.0,
+        attendees=[{"name": "Sarah Chen", "email": "s@x.com"}],
+    )
+
+    assert transcript.segments[1].speaker == "Sarah Chen"
+
+
 def test_stored_manual_rename_wins_over_attendee_auto_rename(tmp_path, loop_thread):
     """A reprocess must respect the user's manual label even when the
     calendar attendee auto-rename would suggest a different name."""

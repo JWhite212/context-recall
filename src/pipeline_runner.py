@@ -612,12 +612,19 @@ class PipelineRunner:
         my_name = self._config.diarisation.speaker_name
         other_attendees = [a for a in attendees if a.get("name") and a["name"] != my_name]
         # Auto-rename in 2-speaker meetings with exactly 1 other attendee.
-        if len(speakers) == 2 and remote_label in speakers and len(other_attendees) == 1:
-            new_name = other_attendees[0]["name"]
-            for seg in transcript.segments:
-                if seg.speaker == remote_label:
-                    seg.speaker = new_name
-            logger.info("Speaker enrichment: renamed '%s' to '%s'", remote_label, new_name)
+        # The single non-me speaker may be labelled "Remote" (energy backend)
+        # or "SPEAKER_NN" (pyannote hybrid) — either is an unresolved auto-label
+        # safe to name from the lone calendar attendee. A real name (from
+        # voice-ID or a re-applied manual rename) is left untouched.
+        non_me = speakers - {my_name}
+        if len(speakers) == 2 and len(non_me) == 1 and len(other_attendees) == 1:
+            only_other = next(iter(non_me))
+            if only_other == remote_label or only_other.startswith("SPEAKER_"):
+                new_name = other_attendees[0]["name"]
+                for seg in transcript.segments:
+                    if seg.speaker == only_other:
+                        seg.speaker = new_name
+                logger.info("Speaker enrichment: renamed '%s' to '%s'", only_other, new_name)
         # Store all attendees as candidate speaker mappings for the UI.
         if meeting_id and self._db_available():
             for attendee in other_attendees:
