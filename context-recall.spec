@@ -88,6 +88,14 @@ a = Analysis(
         "notion_client",
         "slugify",
         "yaml",
+        # macOS Calendar integration (EventKit via pyobjc). The reader
+        # does `import EventKit` and `from Foundation import NSDate`;
+        # neither is discovered by static analysis, so without these the
+        # calendar reader ships as available==False in every build.
+        "objc",
+        "EventKit",
+        "Foundation",
+        "CoreFoundation",
         # Voice identification + semantic search (torch stack)
         "torch",
         "torchaudio",
@@ -109,7 +117,8 @@ a = Analysis(
     + collect_submodules("mlx_whisper")
     # speechbrain lazy-loads submodules via importutils, invisible to
     # static analysis — enumerate the whole package.
-    + collect_submodules("speechbrain"),
+    + collect_submodules("speechbrain")
+    + collect_submodules("EventKit"),
     # speechbrain must ship as SOURCE, not inside the PYZ archive: its
     # importutils.lazy_export_all walks the package directory on the
     # FILESYSTEM to discover submodules, so a frozen-only speechbrain dies
@@ -201,6 +210,16 @@ app = BUNDLE(
             "loopback and your microphone) to transcribe and summarise "
             "your meetings. Audio is captured only while a meeting is "
             "detected or you press Record."
+        ),
+        "NSCalendarsUsageDescription": (
+            "Context Recall reads your calendar to label recordings with "
+            "the matching meeting's title and attendees, and to show your "
+            "upcoming meetings. Calendar data stays on this Mac."
+        ),
+        "NSCalendarsFullAccessUsageDescription": (
+            "Context Recall reads your calendar to label recordings with "
+            "the matching meeting's title and attendees, and to show your "
+            "upcoming meetings. Calendar data stays on this Mac."
         ),
     },
 )
