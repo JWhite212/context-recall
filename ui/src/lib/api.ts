@@ -687,14 +687,24 @@ export async function getCalendarPermission(): Promise<{
 
 // --- Action Items ---
 
-export async function getActionItems(
-  status?: string,
-  assignee?: string,
-  limit = 100,
-): Promise<ActionItemsResponse> {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (status) params.set("status", status);
-  if (assignee) params.set("assignee", assignee);
+export async function getActionItems(opts?: {
+  status?: string;
+  assignee?: string;
+  clientId?: string;
+  projectId?: string;
+  priority?: string;
+  dueBefore?: string;
+  dueAfter?: string;
+  limit?: number;
+}): Promise<ActionItemsResponse> {
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 100) });
+  if (opts?.status) params.set("status", opts.status);
+  if (opts?.assignee) params.set("assignee", opts.assignee);
+  if (opts?.clientId) params.set("client_id", opts.clientId);
+  if (opts?.projectId) params.set("project_id", opts.projectId);
+  if (opts?.priority) params.set("priority", opts.priority);
+  if (opts?.dueBefore) params.set("due_before", opts.dueBefore);
+  if (opts?.dueAfter) params.set("due_after", opts.dueAfter);
   return request<ActionItemsResponse>(`/api/action-items?${params}`);
 }
 

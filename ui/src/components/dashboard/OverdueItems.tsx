@@ -15,7 +15,7 @@ export function OverdueItems() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["action-items", "open"],
-    queryFn: () => getActionItems("open"),
+    queryFn: () => getActionItems({ status: "open" }),
   });
 
   if (isLoading || isError || !data) return null;
