@@ -7,6 +7,7 @@ import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
 import { SkeletonMeetingRow } from "../common/Skeleton";
+import { TitleEditor } from "./TitleEditor";
 import { useToast } from "../common/Toast";
 import type { Meeting, MeetingStatus } from "../../lib/types";
 
@@ -377,9 +378,18 @@ function MeetingRow({
   onTagClick: (tag: string) => void;
 }) {
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => (selectMode ? onToggleSelect(m.id) : onSelect(m.id))}
-      className={`flex items-center justify-between py-3 px-4 rounded-xl bg-surface-raised border transition-colors text-left w-full mb-1 ${
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (selectMode) onToggleSelect(m.id);
+          else onSelect(m.id);
+        }
+      }}
+      className={`flex items-center justify-between py-3 px-4 rounded-xl bg-surface-raised border transition-colors text-left w-full mb-1 cursor-pointer ${
         isSelected
           ? "border-accent/60 bg-accent/5"
           : "border-border hover:border-accent/40"
@@ -398,9 +408,16 @@ function MeetingRow({
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-text-primary truncate">
-          {m.title}
-        </p>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <TitleEditor
+            meetingId={m.id}
+            title={m.title}
+            className="block max-w-full truncate text-left text-sm font-medium text-text-primary hover:underline"
+          />
+        </div>
         <div className="flex items-center gap-2 mt-0.5">
           <span className="text-xs text-text-muted">
             {new Date(m.started_at * 1000).toLocaleDateString(undefined, {
@@ -458,6 +475,6 @@ function MeetingRow({
           {m.status}
         </span>
       </div>
-    </button>
+    </div>
   );
 }
