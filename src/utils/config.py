@@ -225,7 +225,7 @@ class RetentionConfig:
 
 @dataclass
 class CalendarConfig:
-    enabled: bool = False
+    enabled: bool = True
     time_window_minutes: int = 15
     min_confidence: float = 0.7
     import_enabled: bool = True
