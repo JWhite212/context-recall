@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getCalendars,
   getCalendarPermission,
@@ -53,11 +54,18 @@ export function CalendarsSection({ id }: { id?: string }) {
     save.mutate(next);
   }
 
-  function openSystemSettings() {
-    window.open(
-      "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
-      "_blank",
-    );
+  async function openSystemSettings() {
+    // Route through the Tauri opener plugin: a plain window.open() of a
+    // custom x-apple.systempreferences: scheme is intercepted by the
+    // WKWebview and never reaches macOS, so the button appears to do
+    // nothing. openUrl() hands the URL to the OS handler.
+    try {
+      await openUrl(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
+      );
+    } catch {
+      toast.error("Could not open System Settings.");
+    }
   }
 
   return (
