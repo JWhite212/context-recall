@@ -37,6 +37,22 @@ describe("TitleEditor", () => {
     );
   });
 
+  it("does not fire a second PATCH when blur follows Enter (M2)", async () => {
+    // Enter commits and disables the input; the browser then blurs the
+    // disabled input, which used to re-enter commit() and PATCH twice.
+    const onRenamed = vi.fn();
+    render(<TitleEditor meetingId="m1" title="Old" onRenamed={onRenamed} />, {
+      wrapper: makeWrapper(),
+    });
+    fireEvent.click(screen.getByText("Old"));
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "Renamed" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+    await waitFor(() => expect(onRenamed).toHaveBeenCalledWith("Renamed"));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels on Escape without calling the API", () => {
     render(<TitleEditor meetingId="m1" title="Old" />, {
       wrapper: makeWrapper(),
