@@ -43,6 +43,7 @@ import { useNotifications } from "./hooks/useNotifications";
 import { usePipelineSync } from "./hooks/usePipelineSync";
 import { useAppStore } from "./stores/appStore";
 import { setAuthToken, renameMeeting } from "./lib/api";
+import { shouldApplyLiveRename } from "./lib/liveRename";
 import type { WSEvent } from "./lib/types";
 
 const queryClient = new QueryClient({
@@ -67,11 +68,19 @@ function AppShell() {
     (event: WSEvent) => {
       // A title typed in the live view during recording has no meeting row
       // yet. Capture it BEFORE handleEvent clears the live state, then apply
-      // it once pipeline.complete carries the new meeting_id.
+      // it once pipeline.complete carries the new meeting_id — but ONLY for
+      // the completion of the same live session it was typed in (C1: a
+      // reprocess or back-to-back recording must never claim it).
       if (event.type === "pipeline.complete" && event.meeting_id) {
-        const { liveTitleOverride, liveCalendarTitle } = useAppStore.getState();
-        const pending = liveTitleOverride?.trim();
-        if (pending && pending !== liveCalendarTitle) {
+        const { liveTitleOverride, liveCalendarTitle, liveSessionStartedAt } =
+          useAppStore.getState();
+        const pending = shouldApplyLiveRename(
+          event,
+          liveSessionStartedAt,
+          liveTitleOverride,
+          liveCalendarTitle,
+        );
+        if (pending) {
           void renameMeeting(event.meeting_id, pending).catch(() => {});
         }
       }

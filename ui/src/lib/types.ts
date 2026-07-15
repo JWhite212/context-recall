@@ -411,7 +411,17 @@ export type WSEvent =
       stage: string;
       percent: number;
     }
-  | { type: "pipeline.complete"; meeting_id: string | null; title?: string }
+  | {
+      type: "pipeline.complete";
+      meeting_id: string | null;
+      title?: string;
+      /** True when this completion came from a reprocess, not a live
+       *  recording — the UI must never apply a pending live rename to it. */
+      is_reprocess?: boolean;
+      /** Start timestamp of the recording session that produced this
+       *  completion; keys the pending live rename to its own session. */
+      started_at?: number;
+    }
   | {
       type: "pipeline.error";
       meeting_id: string | null;

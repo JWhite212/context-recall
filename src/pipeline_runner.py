@@ -328,7 +328,15 @@ class PipelineRunner:
                 ) or SHORT_TRANSCRIPT_TITLE
                 self._update_title_if_auto(meeting_id, short_title)
             self._update_fts(meeting_id)
-            self._emit("pipeline.complete", meeting_id=meeting_id, title=SHORT_TRANSCRIPT_TITLE)
+            # is_reprocess + started_at let the UI key its pending live
+            # rename to the exact recording session (C1).
+            self._emit(
+                "pipeline.complete",
+                meeting_id=meeting_id,
+                title=SHORT_TRANSCRIPT_TITLE,
+                is_reprocess=is_reprocess,
+                started_at=started_at,
+            )
             return RunResult("short", title=SHORT_TRANSCRIPT_TITLE)
 
         # Step 2: Diarise.
@@ -415,7 +423,15 @@ class PipelineRunner:
             summary, transcript, started_at, duration_seconds, meeting_id, notion_page_id
         )
 
-        self._emit("pipeline.complete", meeting_id=meeting_id, title=summary.title)
+        # is_reprocess + started_at let the UI key its pending live rename
+        # to the exact recording session (C1).
+        self._emit(
+            "pipeline.complete",
+            meeting_id=meeting_id,
+            title=summary.title,
+            is_reprocess=is_reprocess,
+            started_at=started_at,
+        )
 
         # Step 7: Intelligence post-processing (non-fatal, async).
         self._dispatch_post_processing(meeting_id, transcript, started_at, is_reprocess)
