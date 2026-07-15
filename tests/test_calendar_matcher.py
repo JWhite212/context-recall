@@ -1,10 +1,33 @@
 """Tests for calendar matching logic (unit tests that don't require EventKit)."""
 
+import sys
+import types
+from types import SimpleNamespace
+
 from src.calendar_matcher import (
     CalendarMatch,
+    CalendarMatcher,
     _extract_teams_thread_id,
     _score_time_match,
 )
+
+
+def _fake_eventkit() -> types.ModuleType:
+    """Minimal EventKit stand-in: enough for the matcher to alloc/init."""
+
+    class _Store:
+        pass
+
+    mod = types.ModuleType("EventKit")
+    mod.EKEntityTypeEvent = 0
+    mod.EKEventStore = SimpleNamespace(alloc=lambda: SimpleNamespace(init=lambda: _Store()))
+    return mod
+
+
+def _eventkit_matcher_env(monkeypatch, status):
+    monkeypatch.setattr("src.calendar_matcher._is_eventkit_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "EventKit", _fake_eventkit())
+    monkeypatch.setattr("src.calendar_permission.authorization_status", lambda: status["v"])
 
 
 def test_extract_teams_url_from_notes():
@@ -61,3 +84,41 @@ def test_calendar_match_dataclass():
     assert match.organizer is None
     assert match.confidence == 0.0
     assert match.match_method == "none"
+
+
+def test_matcher_already_authorized_skips_blocking_request(monkeypatch):
+    """When macOS already reports the grant (boot poller, previous run),
+    construction must create the store directly — no 60s blocking wait at
+    daemon boot. The conftest guard raises if request_access fires, so
+    passing proves the fast path."""
+    _eventkit_matcher_env(monkeypatch, {"v": "authorized"})
+    matcher = CalendarMatcher()
+    assert matcher.available is True
+
+
+def test_matcher_self_heals_on_late_grant(monkeypatch):
+    """Regression (I1): a matcher built before the boot prompt was answered
+    must not be dead forever — once the grant lands, match() re-initialises."""
+    status = {"v": "not_determined"}
+    _eventkit_matcher_env(monkeypatch, status)
+    monkeypatch.setattr("src.calendar_permission.request_access", lambda **_kw: None)
+    matcher = CalendarMatcher()
+    assert matcher.available is False
+
+    status["v"] = "authorized"
+    matcher.match(1000.0)  # fake store has no events; the heal still runs
+    assert matcher.available is True
+
+
+def test_matcher_denied_never_requests_and_heals_on_settings_grant(monkeypatch):
+    """A determined denied status cannot prompt, so no request may fire
+    (the conftest guard raises if it does) — and a later System Settings
+    grant self-heals via match()."""
+    status = {"v": "denied"}
+    _eventkit_matcher_env(monkeypatch, status)
+    matcher = CalendarMatcher()
+    assert matcher.available is False
+
+    status["v"] = "authorized"
+    matcher.match(1000.0)
+    assert matcher.available is True

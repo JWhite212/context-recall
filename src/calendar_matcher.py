@@ -10,9 +10,10 @@ Requires macOS and the pyobjc-framework-EventKit package.
 
 import logging
 import re
-import threading
 from dataclasses import dataclass, field
 from urllib.parse import unquote
+
+from src import calendar_permission
 
 logger = logging.getLogger("contextrecall.calendar")
 
@@ -146,37 +147,66 @@ class CalendarMatcher:
         self._init_store()
 
     def _init_store(self) -> None:
-        """Initialize EventKit store and request access."""
+        """Initialise the EventKit store, requesting access only when needed.
+
+        When macOS already reports the grant (boot poller answered, or a
+        previous run was authorized) the store is created directly — no 60s
+        blocking wait at daemon boot. Only a genuinely undetermined status
+        fires the (blocking, may-prompt) request.
+        """
+        try:
+            status = calendar_permission.authorization_status()
+            if status == calendar_permission.AUTHORIZED:
+                self._create_store()
+                if self.available:
+                    logger.info("Calendar access already granted")
+                return
+            if status in (
+                calendar_permission.DENIED,
+                calendar_permission.RESTRICTED,
+                calendar_permission.WRITE_ONLY,
+            ):
+                # Determined-but-blocked: requesting cannot prompt. match()
+                # self-heals once the user grants access in System Settings.
+                logger.warning(
+                    "Calendar access blocked (%s); matching disabled until granted", status
+                )
+                return
+            # NOT_DETERMINED (or UNKNOWN introspection failure): fire the
+            # request — blocks until the user answers the dialog or the
+            # timeout elapses. Prefers the macOS 14+ full-access API.
+            granted = calendar_permission.request_access(timeout_seconds=60.0)
+            if granted:
+                self._create_store()
+                logger.info("Calendar access granted")
+            elif granted is False:
+                logger.warning("Calendar access denied by user")
+            else:
+                logger.warning("Calendar access request timed out or unavailable")
+        except Exception as e:
+            logger.warning("Failed to initialize EventKit: %s", e)
+
+    def _create_store(self) -> None:
+        """Create the EKEventStore for an already-authorized process."""
         try:
             import EventKit
 
             self._store = EventKit.EKEventStore.alloc().init()
-
-            # Request calendar access. On macOS, this blocks until the user responds
-            # to the system permission dialog (first time only).
-            access_event = threading.Event()
-            access_result = [False]
-
-            def on_access(granted, error):
-                access_result[0] = granted
-                if error:
-                    logger.warning("Calendar access error: %s", error)
-                access_event.set()
-
-            self._store.requestAccessToEntityType_completion_(EventKit.EKEntityTypeEvent, on_access)
-
-            # Wait up to 60 seconds for the user to respond to the permission dialog.
-            if access_event.wait(timeout=60):
-                self._authorized = access_result[0]
-                if self._authorized:
-                    logger.info("Calendar access granted")
-                else:
-                    logger.warning("Calendar access denied by user")
-            else:
-                logger.warning("Calendar access request timed out")
-
+            self._authorized = True
         except Exception as e:
             logger.warning("Failed to initialize EventKit: %s", e)
+
+    def _retry_init(self) -> None:
+        """Late-grant self-heal: when authorization arrived after
+        construction (boot poller answered, System Settings), create the
+        store now. Never prompts — one cheap status check per attempt."""
+        if not _is_eventkit_available():
+            return
+        if calendar_permission.authorization_status() != calendar_permission.AUTHORIZED:
+            return
+        self._create_store()
+        if self.available:
+            logger.info("Calendar access granted after start — matching enabled")
 
     @property
     def available(self) -> bool:
@@ -191,6 +221,8 @@ class CalendarMatcher:
         Returns:
             CalendarMatch if a match is found above min_confidence, else None.
         """
+        if not self.available:
+            self._retry_init()
         if not self.available:
             return None
 
