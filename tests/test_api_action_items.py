@@ -41,6 +41,61 @@ async def test_patch_sets_client_project_and_marks_manual(action_items_client):
 
 
 @pytest.mark.asyncio
+async def test_patch_explicit_null_clears_client_and_marks_manual(action_items_client):
+    """PATCH {"client_id": null} must untag the item (clearing is a manual
+    action, so tag_source flips to 'manual'). exclude_none would silently
+    drop the null and make untagging a no-op."""
+    client, repo, meeting_repo = action_items_client
+    meeting_id = await meeting_repo.create_meeting(started_at=1700000000)
+    item_id = await repo.create(
+        meeting_id=meeting_id, title="Do it", source="extracted", client_id="c9"
+    )
+
+    resp = client.patch(f"/api/action-items/{item_id}", json={"client_id": None})
+    assert resp.status_code == 200
+    assert resp.json()["client_id"] is None
+
+    item = await repo.get(item_id)
+    assert item["client_id"] is None
+    assert item["tag_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_patch_explicit_null_clears_project(action_items_client):
+    client, repo, meeting_repo = action_items_client
+    meeting_id = await meeting_repo.create_meeting(started_at=1700000000)
+    item_id = await repo.create(
+        meeting_id=meeting_id, title="Do it", source="extracted", project_id="p1"
+    )
+
+    resp = client.patch(f"/api/action-items/{item_id}", json={"project_id": None})
+    assert resp.status_code == 200
+
+    item = await repo.get(item_id)
+    assert item["project_id"] is None
+    assert item["tag_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_patch_omitted_fields_are_not_cleared(action_items_client):
+    """exclude_unset semantics: a field absent from the body stays put —
+    only an explicit null clears it."""
+    client, repo, meeting_repo = action_items_client
+    meeting_id = await meeting_repo.create_meeting(started_at=1700000000)
+    item_id = await repo.create(
+        meeting_id=meeting_id, title="Do it", source="extracted", client_id="c9", assignee="Sam"
+    )
+
+    resp = client.patch(f"/api/action-items/{item_id}", json={"priority": "high"})
+    assert resp.status_code == 200
+
+    item = await repo.get(item_id)
+    assert item["client_id"] == "c9"
+    assert item["assignee"] == "Sam"
+    assert item["priority"] == "high"
+
+
+@pytest.mark.asyncio
 async def test_patch_without_tag_fields_leaves_tag_source_untouched(action_items_client):
     client, repo, meeting_repo = action_items_client
     meeting_id = await meeting_repo.create_meeting(started_at=1700000000)
