@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -418,9 +418,22 @@ class PipelineRunner:
         # Step 5: Embed transcript segments for semantic search.
         self._embed_segments(transcript, meeting_id)
 
-        # Step 6: Write outputs.
+        # Step 6: Write outputs. On a reprocess of a manually-renamed
+        # meeting (preserve_title) the fresh note/page must carry the
+        # PRESERVED meeting title, not summary.title — the writer derives
+        # the .md filename and frontmatter from the summary title, and a
+        # summary-titled rewrite would repoint markdown_path and orphan
+        # the manually-renamed note (I6).
+        output_summary = summary
+        if preserve_title and meeting_id and self._db_available():
+            preserved = self._db.try_call(
+                self._db.repo.get_meeting(meeting_id), what="fetch preserved title"
+            )
+            preserved_title = getattr(preserved, "title", "") or ""
+            if preserved_title and preserved_title != summary.title:
+                output_summary = replace(summary, title=preserved_title)
         self._write_outputs(
-            summary, transcript, started_at, duration_seconds, meeting_id, notion_page_id
+            output_summary, transcript, started_at, duration_seconds, meeting_id, notion_page_id
         )
 
         # is_reprocess + started_at let the UI key its pending live rename
@@ -428,7 +441,7 @@ class PipelineRunner:
         self._emit(
             "pipeline.complete",
             meeting_id=meeting_id,
-            title=summary.title,
+            title=output_summary.title,
             is_reprocess=is_reprocess,
             started_at=started_at,
         )
@@ -436,7 +449,7 @@ class PipelineRunner:
         # Step 7: Intelligence post-processing (non-fatal, async).
         self._dispatch_post_processing(meeting_id, transcript, started_at, is_reprocess)
 
-        return RunResult("complete", title=summary.title)
+        return RunResult("complete", title=output_summary.title)
 
     # ------------------------------------------------------------------
     # Stages

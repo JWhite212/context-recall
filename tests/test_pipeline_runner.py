@@ -284,6 +284,51 @@ def test_preserve_title_leaves_manual_title_untouched(tmp_path, loop_thread):
     repo.update_title_if_auto.assert_not_awaited()
 
 
+def test_preserve_title_writes_outputs_under_preserved_title(tmp_path, loop_thread):
+    """I6: on reprocess of a manually-renamed meeting the fresh markdown /
+    Notion outputs must carry the PRESERVED meeting title, not
+    summary.title — writing under summary.title recomputes the filename,
+    repoints markdown_path, and orphans the manually-renamed note."""
+    repo = _make_repo()
+    record = MagicMock()
+    record.title = "My Real Name"
+    repo.get_meeting = AsyncMock(return_value=record)
+    bridge = DbBridge(repo, loop_thread)
+    md = FakeWriter()
+    notion = FakeNotionWriter()
+    summariser = FakeSummariser(_make_summary(title="Fresh Summary Title"))
+    runner = _make_runner(
+        _make_config(tmp_path),
+        db=bridge,
+        summariser=summariser,
+        md_writer=md,
+        notion_writer=notion,
+    )
+
+    result = runner.run(tmp_path / "a.wav", "m1", started_at=1000.0, preserve_title=True)
+
+    assert result.status == "complete"
+    assert md.calls, "markdown writer was not invoked"
+    written_summary = md.calls[0][0]
+    assert written_summary.title == "My Real Name"
+    assert notion.calls[0][0].title == "My Real Name"
+    # The final title reported outward is the preserved one too.
+    assert result.title == "My Real Name"
+
+
+def test_without_preserve_title_outputs_use_summary_title(tmp_path, loop_thread):
+    """Control for I6: a normal run still writes under summary.title."""
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    md = FakeWriter()
+    summariser = FakeSummariser(_make_summary(title="Fresh Summary Title"))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, summariser=summariser, md_writer=md)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    assert md.calls[0][0].title == "Fresh Summary Title"
+
+
 def test_empty_transcript_marks_error(tmp_path, loop_thread):
     repo = _make_repo()
     bridge = DbBridge(repo, loop_thread)
