@@ -24,6 +24,27 @@ from src.utils.config import MarkdownConfig
 logger = logging.getLogger(__name__)
 
 
+def _rewrite_frontmatter_title(content: str, new_title: str) -> str:
+    """Return *content* with its YAML frontmatter ``title`` set to *new_title*.
+
+    Falls back to returning *content* unchanged if the frontmatter block is
+    missing or malformed, rather than risk corrupting the note.
+    """
+    if content.startswith("---\n"):
+        end = content.find("\n---", 4)
+        if end != -1:
+            block = content[4:end]
+            try:
+                fm = _yaml.safe_load(block) or {}
+            except _yaml.YAMLError:
+                fm = {}
+            if isinstance(fm, dict):
+                fm["title"] = new_title
+                new_block = _yaml.dump(fm, default_flow_style=False, allow_unicode=True).rstrip()
+                return f"---\n{new_block}\n---{content[end + 4 :]}"
+    return content
+
+
 class MarkdownWriter:
     """Writes meeting output to an Obsidian-compatible Markdown vault."""
 
@@ -141,3 +162,69 @@ class MarkdownWriter:
 
         logger.info("Markdown written: %s", filepath)
         return filepath
+
+    def rename_note(self, old_path: Path, new_title: str, started_at: float) -> Path | None:
+        """Rename a written note to reflect a new title.
+
+        Rewrites the YAML frontmatter ``title`` and renames the file to the
+        new title's slug (same template + start time as ``write()``).
+        Returns the new path, the (title-updated) old path when the
+        computed filename is unchanged, or ``None`` on a filesystem error
+        (``last_error`` is set). Raises ``ValueError`` if the target would
+        escape the vault, matching ``write()``'s existing behaviour.
+        """
+        self.last_error = None
+        old_path = Path(old_path)
+        vault_path = Path(self._config.vault_path)
+        try:
+            content = old_path.read_text(encoding="utf-8")
+        except OSError as e:
+            self.last_error = f"Could not read note {old_path}: {e}"
+            logger.error("Markdown rename failed: %s", self.last_error)
+            return None
+
+        # Recompute the target filename exactly like write().
+        date_str = time.strftime("%Y-%m-%d", time.localtime(started_at))
+        time_str = time.strftime("%H-%M", time.localtime(started_at))
+        title_slug = slugify(new_title, max_length=60)
+        filename = self._config.filename_template.format(
+            date=date_str, time=time_str, slug=title_slug or "meeting"
+        )
+        filename = filename.replace("/", "_").replace("\\", "_").lstrip(".")
+        new_path = (vault_path / filename).resolve()
+        if not new_path.is_relative_to(vault_path.resolve()):
+            raise ValueError(f"Rename target would escape the vault directory: {filename!r}")
+
+        new_content = _rewrite_frontmatter_title(content, new_title)
+
+        # Same computed filename: just rewrite the frontmatter in place.
+        if new_path == old_path.resolve():
+            try:
+                old_path.write_text(new_content, encoding="utf-8")
+            except OSError as e:
+                self.last_error = f"Could not rewrite note {old_path}: {e}"
+                logger.error("Markdown rename failed: %s", self.last_error)
+                return None
+            return old_path
+
+        # Different filename: avoid clobbering an unrelated existing note.
+        if new_path.exists():
+            stem, suffix = new_path.stem, new_path.suffix
+            n = 2
+            while True:
+                candidate = new_path.with_name(f"{stem} ({n}){suffix}")
+                if not candidate.exists():
+                    new_path = candidate
+                    break
+                n += 1
+
+        try:
+            new_path.write_text(new_content, encoding="utf-8")
+            old_path.unlink(missing_ok=True)
+        except OSError as e:
+            self.last_error = f"Could not write renamed note {new_path}: {e}"
+            logger.error("Markdown rename failed: %s", self.last_error)
+            return None
+
+        logger.info("Markdown note renamed: %s -> %s", old_path, new_path)
+        return new_path
