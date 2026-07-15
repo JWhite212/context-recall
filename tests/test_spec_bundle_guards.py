@@ -16,7 +16,7 @@ def spec_text() -> str:
     return SPEC.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("module", ['"EventKit"', '"Foundation"', '"objc"'])
+@pytest.mark.parametrize("module", ['"EventKit"', '"Foundation"', '"CoreFoundation"', '"objc"'])
 def test_spec_bundles_eventkit_modules(spec_text, module):
     assert module in spec_text, f"{module} missing from context-recall.spec hiddenimports"
 
