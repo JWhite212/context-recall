@@ -18,82 +18,100 @@ import os
 import threading
 from pathlib import Path
 
-from src.diariser import DiarisationConfig
-from src.transcriber import Transcript
-
 logger = logging.getLogger(__name__)
 
 
 class PyAnnoteDiariser:
-    """
-    Labels transcript segments with speaker identifiers using pyannote.audio.
+    """Hybrid diariser: energy decides me-vs-remote, pyannote separates the
+    remote speakers.
 
-    Implements the DiariserBackend Protocol
-    (diarise(transcript, audio_path) -> Transcript).
+    The mic channel is unambiguously the local user, so this runs the energy
+    diariser first (mic-vs-system RMS) to mark the user's segments as
+    ``speaker_name``, then runs pyannote over the *remote* (system) source
+    WAV and overlays ``SPEAKER_NN`` onto every non-user segment. This keeps
+    "Me" reliable while separating multiple remote participants.
     """
 
-    def __init__(self, config: DiarisationConfig) -> None:
+    def __init__(self, config) -> None:
         self._config = config
         self._pipeline = None  # Lazy-loaded
         self._lock = threading.Lock()
 
     def _load_pipeline(self) -> None:
-        """Lazy-load the pyannote pipeline."""
+        """Lazy-load the pyannote pipeline (the model is gated — needs HF_TOKEN)."""
         from pyannote.audio import Pipeline
 
         if not os.environ.get("HF_TOKEN"):
-            logger.warning("HF_TOKEN not set — pyannote model download may fail for gated models")
+            logger.warning(
+                "HF_TOKEN not set — the gated pyannote model may fail to load; "
+                "diarisation will degrade to the energy backend."
+            )
         self._pipeline = Pipeline.from_pretrained(
             self._config.pyannote_model,
             use_auth_token=os.environ.get("HF_TOKEN"),
         )
         logger.info("Loaded pyannote pipeline: %s", self._config.pyannote_model)
 
-    def diarise(self, transcript: Transcript, audio_path: Path) -> Transcript:
-        """
-        Label each segment in *transcript* with a speaker identifier.
-
-        Runs the pyannote pipeline on the combined audio file, then
-        aligns the resulting speaker turns with the transcript segments
-        by temporal overlap.
-        """
+    def _speaker_turns(self, audio_path: Path) -> list[tuple[float, float, str]]:
+        """Run pyannote on *audio_path* and return (start, end, label) turns."""
         if self._pipeline is None:
             with self._lock:
                 if self._pipeline is None:
                     self._load_pipeline()
-
-        # Run pyannote diarisation.
         params: dict = {}
         if self._config.num_speakers > 0:
             params["num_speakers"] = self._config.num_speakers
-
         diarisation = self._pipeline(str(audio_path), **params)
+        return [
+            (turn.start, turn.end, speaker)
+            for turn, _, speaker in diarisation.itertracks(yield_label=True)
+        ]
 
-        # Build a list of (start, end, speaker_label) turns.
-        turns: list[tuple[float, float, str]] = []
-        for turn, _, speaker in diarisation.itertracks(yield_label=True):
-            turns.append((turn.start, turn.end, speaker))
+    def diarise(
+        self,
+        transcript,
+        audio_path: Path,
+        *,
+        mic_audio_path: Path | None = None,
+        system_audio_path: Path | None = None,
+    ):
+        """Label each segment: local user → ``speaker_name``; remote → SPEAKER_NN."""
+        from src.diariser import EnergyDiariser
 
-        # Assign speakers to transcript segments by maximum temporal overlap.
+        me = self._config.speaker_name
+
+        # Step 1: energy me/remote (only when the mic source survives).
+        if mic_audio_path is not None and Path(mic_audio_path).exists():
+            try:
+                EnergyDiariser(self._config).diarise(
+                    transcript, audio_path, mic_audio_path=mic_audio_path
+                )
+            except Exception as e:
+                logger.warning("Energy pre-pass failed (%s); treating all as remote", e)
+                for seg in transcript.segments:
+                    seg.speaker = ""
+
+        # Step 2: pyannote over the remote (system) channel.
+        remote_wav = (
+            system_audio_path
+            if system_audio_path is not None and Path(system_audio_path).exists()
+            else audio_path
+        )
+        turns = self._speaker_turns(Path(remote_wav))
+
+        # Step 3: overlay SPEAKER_NN onto every non-user segment.
         for segment in transcript.segments:
-            best_speaker = ""
-            best_overlap = 0.0
-
+            if segment.speaker == me:
+                continue
+            best_speaker, best_overlap = "", 0.0
             for turn_start, turn_end, speaker in turns:
-                overlap_start = max(segment.start, turn_start)
-                overlap_end = min(segment.end, turn_end)
-                overlap = max(0.0, overlap_end - overlap_start)
-
+                overlap = max(0.0, min(segment.end, turn_end) - max(segment.start, turn_start))
                 if overlap > best_overlap:
-                    best_overlap = overlap
-                    best_speaker = speaker
+                    best_overlap, best_speaker = overlap, speaker
+            segment.speaker = best_speaker or self._config.remote_label
 
-            segment.speaker = best_speaker
-
-        # Log summary.
         counts: dict[str, int] = {}
         for seg in transcript.segments:
             counts[seg.speaker] = counts.get(seg.speaker, 0) + 1
-        logger.info("Pyannote diarisation complete: %s", counts)
-
+        logger.info("Hybrid pyannote diarisation complete: %s", counts)
         return transcript

@@ -4,9 +4,12 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 from src.diariser import DiarisationConfig
+from src.pyannote_diariser import PyAnnoteDiariser
 from src.transcriber import Transcript, TranscriptSegment
 
 # ---------------------------------------------------------------------------
@@ -94,8 +97,10 @@ class TestPyAnnoteDiariser:
         assert result.segments[0].speaker == "SPEAKER_00"
         assert result.segments[1].speaker == "SPEAKER_01"
 
-    def test_diarise_no_overlap_leaves_empty(self, mock_pipeline):
-        """When no pipeline turns overlap a segment, speaker stays empty."""
+    def test_diarise_no_overlap_falls_back_to_remote_label(self, mock_pipeline):
+        """When no pipeline turns overlap a segment, it falls back to
+        config.remote_label (the hybrid diariser's non-user fallback —
+        previously this left the segment unlabelled)."""
         PyAnnoteDiariser, mock_pl_instance, _ = mock_pipeline
 
         # Pipeline says speech only at 100-110s.
@@ -117,7 +122,7 @@ class TestPyAnnoteDiariser:
 
         result = diariser.diarise(transcript, Path("/fake/audio.wav"))
 
-        assert result.segments[0].speaker == ""
+        assert result.segments[0].speaker == config.remote_label
 
     def test_num_speakers_passed_to_pipeline(self, mock_pipeline):
         """When num_speakers > 0, it is passed as a kwarg to the pipeline call."""
@@ -181,3 +186,70 @@ class TestPyAnnoteDiariser:
         diariser.diarise(transcript2, Path("/fake/audio.wav"))
 
         assert mock_pl_cls.from_pretrained.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Hybrid diariser: energy me/remote pre-pass + pyannote remote separation.
+# The pyannote pipeline is always mocked via a stubbed _speaker_turns — no
+# real model is loaded.
+# ---------------------------------------------------------------------------
+
+
+def _wav(path: Path, loud: bool, seconds: float = 3.0, sr: int = 16000):
+    n = int(seconds * sr)
+    amp = 0.5 if loud else 0.0001
+    sf.write(str(path), (np.random.randn(n) * amp).astype("float32"), sr)
+
+
+def _transcript():
+    return Transcript(
+        segments=[
+            TranscriptSegment(start=0.0, end=1.0, text="hi", speaker=""),
+            TranscriptSegment(start=1.0, end=2.0, text="hello there", speaker=""),
+            TranscriptSegment(start=2.0, end=3.0, text="agreed", speaker=""),
+        ],
+        language="en",
+    )
+
+
+def _diariser_with_turns(turns):
+    cfg = DiarisationConfig(backend="pyannote")
+    d = PyAnnoteDiariser(cfg)
+    # Stub the pyannote turn extraction — never load a real model.
+    d._speaker_turns = lambda audio_path: turns  # type: ignore
+    return d, cfg
+
+
+def test_mic_dominant_segment_is_me(tmp_path):
+    system = tmp_path / "m_system.wav"
+    mic = tmp_path / "m_mic.wav"
+    _wav(system, loud=False)  # remote quiet
+    _wav(mic, loud=True)  # user talking
+    d, cfg = _diariser_with_turns([(0.0, 3.0, "SPEAKER_00")])
+    t = _transcript()
+    d.diarise(t, system, mic_audio_path=mic, system_audio_path=system)
+    assert all(seg.speaker == cfg.speaker_name for seg in t.segments)
+
+
+def test_remote_segments_get_pyannote_speakers(tmp_path):
+    system = tmp_path / "m_system.wav"
+    mic = tmp_path / "m_mic.wav"
+    _wav(system, loud=True)  # remote talking
+    _wav(mic, loud=False)  # user quiet
+    d, cfg = _diariser_with_turns([(0.0, 1.5, "SPEAKER_00"), (1.5, 3.0, "SPEAKER_01")])
+    t = _transcript()
+    d.diarise(t, system, mic_audio_path=mic, system_audio_path=system)
+    assert t.segments[0].speaker == "SPEAKER_00"
+    assert t.segments[2].speaker == "SPEAKER_01"
+    assert cfg.speaker_name not in {s.speaker for s in t.segments}
+
+
+def test_remote_segment_without_overlap_falls_back_to_remote_label(tmp_path):
+    system = tmp_path / "m_system.wav"
+    mic = tmp_path / "m_mic.wav"
+    _wav(system, loud=True)
+    _wav(mic, loud=False)
+    d, cfg = _diariser_with_turns([])  # pyannote found no turns
+    t = _transcript()
+    d.diarise(t, system, mic_audio_path=mic, system_audio_path=system)
+    assert all(seg.speaker == cfg.remote_label for seg in t.segments)
