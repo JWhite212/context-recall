@@ -68,10 +68,12 @@ function AppShell() {
       handleEvent(event);
       setLastEvent(event);
 
-      // Invalidate meeting queries on pipeline completion or re-summarise status change.
+      // Invalidate meeting queries on pipeline completion, re-summarise
+      // status change, or a rename (from any client).
       if (
         event.type === "pipeline.complete" ||
-        event.type === "meeting.resummarise"
+        event.type === "meeting.resummarise" ||
+        event.type === "meeting.renamed"
       ) {
         queryClient.invalidateQueries({ queryKey: ["meetings"] });
         queryClient.invalidateQueries({ queryKey: ["calendar"] });
