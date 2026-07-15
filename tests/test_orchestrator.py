@@ -2122,6 +2122,21 @@ def test_auto_arm_absent_when_calendar_import_disabled(tmp_path):
     assert app._auto_arm is None
 
 
+def test_calendar_matcher_kept_when_not_yet_authorized(tmp_path):
+    """Regression (I1): a matcher that is not available at construction
+    (permission not granted yet) must NOT be permanently nulled — it
+    self-heals via match() once the boot poller obtains the grant."""
+    from src.main import ContextRecall
+
+    # The conftest calendar guard makes EventKit invisible, so the matcher
+    # constructs unavailable — exactly the not-yet-authorized boot shape.
+    app = ContextRecall(config_path=_auto_arm_config(tmp_path, enabled=False))
+
+    assert app._config.calendar.enabled is True  # default-on
+    assert app._calendar_matcher is not None
+    assert app._calendar_matcher.available is False
+
+
 def test_ensure_audio_routing_emits_warning_on_router_error(app_with_mocked_api):
     """A router that reports the switch did not take effect must surface a
     pipeline.warning (source=routing), not fail silently (Bug #5)."""

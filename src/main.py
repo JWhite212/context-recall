@@ -162,8 +162,13 @@ class ContextRecall:
             if self._calendar_matcher.available:
                 logger.info("Calendar integration enabled")
             else:
-                logger.warning("Calendar integration enabled but not available (check permissions)")
-                self._calendar_matcher = None
+                # Do NOT null the matcher: it is typically just not
+                # authorized YET (the boot poller raises the prompt after
+                # construction) and self-heals via match() once granted.
+                logger.warning(
+                    "Calendar integration enabled but not authorized yet — "
+                    "matching activates once calendar access is granted"
+                )
 
         # Wire up detector callbacks.
         self._detector.on_meeting_start = self._on_meeting_start
