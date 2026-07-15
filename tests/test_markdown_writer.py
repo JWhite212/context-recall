@@ -351,3 +351,55 @@ class TestMarkdownRenameNote:
 
         assert result is None
         assert writer.last_error is not None
+
+    def test_rename_note_same_filename_is_atomic_and_leaves_no_tmp(
+        self, markdown_config, sample_transcript, started_at, duration
+    ):
+        """The same-filename rewrite path uses tmp + os.replace(), so no
+        .tmp file is left behind in the vault after a successful rename."""
+        writer = MarkdownWriter(markdown_config)
+        old = writer.write(self._summary("Old Title"), sample_transcript, started_at, duration)
+
+        with patch("src.output.markdown_writer.os.replace") as mock_replace:
+            result = writer.rename_note(old, "Old Title!!!", started_at)
+        mock_replace.assert_called_once()
+        tmp_arg, final_arg = mock_replace.call_args.args
+        assert str(tmp_arg).endswith(".tmp")
+        assert final_arg == old
+
+        # os.replace was mocked above (so the real swap never happened);
+        # re-run for real to confirm the on-disk end state.
+        result = writer.rename_note(old, "Old Title!!!", started_at)
+
+        assert result == old
+        text = old.read_text(encoding="utf-8")
+        assert "title: Old Title!!!" in text
+
+        vault_path = Path(markdown_config.vault_path)
+        leftover_tmp_files = list(vault_path.glob("*.tmp"))
+        assert leftover_tmp_files == []
+
+    def test_rename_note_old_file_unlink_failure_still_returns_new_path(
+        self, markdown_config, sample_transcript, started_at, duration
+    ):
+        """If removing the old file after a successful rename fails, the
+        rename itself still succeeded: return the new path (not None) and
+        do not set last_error."""
+        writer = MarkdownWriter(markdown_config)
+        old = writer.write(self._summary("Old Title"), sample_transcript, started_at, duration)
+        assert old is not None and old.exists()
+
+        real_unlink = Path.unlink
+
+        def fake_unlink(self, *args, **kwargs):
+            if self == old:
+                raise OSError("permission denied")
+            return real_unlink(self, *args, **kwargs)
+
+        with patch("pathlib.Path.unlink", fake_unlink):
+            result = writer.rename_note(old, "New Shiny Title", started_at)
+
+        assert result is not None
+        assert result != old
+        assert result.exists()
+        assert writer.last_error is None
