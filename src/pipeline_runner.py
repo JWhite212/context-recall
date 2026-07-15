@@ -482,17 +482,29 @@ class PipelineRunner:
             if isinstance(self._diariser, EnergyDiariser):
                 self._diariser.diarise(transcript, audio_path, mic_audio_path=mic_audio_path)
             else:
-                # PyAnnote works from the combined file and takes no
-                # mic path (passing one was a latent TypeError).
-                self._diariser.diarise(transcript, audio_path)
+                system_audio_path = derive_source_paths(
+                    audio_path, self._config.audio.temp_audio_dir
+                ).get("system")
+                self._diariser.diarise(
+                    transcript,
+                    audio_path,
+                    mic_audio_path=mic_audio_path,
+                    system_audio_path=system_audio_path,
+                )
         except Exception as e:
-            logger.error("Diarisation failed: %s", e, exc_info=True)
+            logger.warning("Diarisation backend failed (%s) — degrading to energy for this run", e)
             self._emit(
                 "pipeline.warning",
                 meeting_id=meeting_id,
                 source="diarisation",
-                message=f"Diarisation skipped: {e}",
+                message="Speaker separation unavailable; used basic Me/Remote labels.",
             )
+            try:
+                EnergyDiariser(self._config.diarisation).diarise(
+                    transcript, audio_path, mic_audio_path=mic_audio_path
+                )
+            except Exception as e2:
+                logger.warning("Energy fallback also failed: %s", e2)
 
     def _reapply_speaker_mappings(self, transcript, meeting_id: str | None) -> None:
         """Re-apply stored speaker renames to a freshly generated transcript.
@@ -600,12 +612,19 @@ class PipelineRunner:
         my_name = self._config.diarisation.speaker_name
         other_attendees = [a for a in attendees if a.get("name") and a["name"] != my_name]
         # Auto-rename in 2-speaker meetings with exactly 1 other attendee.
-        if len(speakers) == 2 and remote_label in speakers and len(other_attendees) == 1:
-            new_name = other_attendees[0]["name"]
-            for seg in transcript.segments:
-                if seg.speaker == remote_label:
-                    seg.speaker = new_name
-            logger.info("Speaker enrichment: renamed '%s' to '%s'", remote_label, new_name)
+        # The single non-me speaker may be labelled "Remote" (energy backend)
+        # or "SPEAKER_NN" (pyannote hybrid) — either is an unresolved auto-label
+        # safe to name from the lone calendar attendee. A real name (from
+        # voice-ID or a re-applied manual rename) is left untouched.
+        non_me = speakers - {my_name}
+        if len(speakers) == 2 and len(non_me) == 1 and len(other_attendees) == 1:
+            only_other = next(iter(non_me))
+            if only_other == remote_label or only_other.startswith("SPEAKER_"):
+                new_name = other_attendees[0]["name"]
+                for seg in transcript.segments:
+                    if seg.speaker == only_other:
+                        seg.speaker = new_name
+                logger.info("Speaker enrichment: renamed '%s' to '%s'", only_other, new_name)
         # Store all attendees as candidate speaker mappings for the UI.
         if meeting_id and self._db_available():
             for attendee in other_attendees:

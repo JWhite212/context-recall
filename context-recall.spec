@@ -102,6 +102,13 @@ a = Analysis(
         "speechbrain",
         "hyperpyyaml",
         "sentence_transformers",
+        # Neural diarisation (optional; degrades to the energy backend when
+        # the gated model can't load — see src/pipeline_runner._diarise).
+        "pyannote.audio",
+        "pyannote.core",
+        "pyannote.pipeline",
+        "asteroid_filterbanks",
+        "pytorch_metric_learning",
         # The full src.* tree (pipeline, API routes, intelligence modules,
         # platform adapters, utilities) is enumerated by
         # collect_submodules("src") below — this picks up lazy imports like
@@ -118,7 +125,8 @@ a = Analysis(
     # speechbrain lazy-loads submodules via importutils, invisible to
     # static analysis — enumerate the whole package.
     + collect_submodules("speechbrain")
-    + collect_submodules("EventKit"),
+    + collect_submodules("EventKit")
+    + collect_submodules("pyannote.audio"),
     # speechbrain must ship as SOURCE, not inside the PYZ archive: its
     # importutils.lazy_export_all walks the package directory on the
     # FILESYSTEM to discover submodules, so a frozen-only speechbrain dies
