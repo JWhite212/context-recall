@@ -170,6 +170,9 @@ def _make_repo():
     repo.set_speaker_name = AsyncMock()
     repo.get_speaker_names = AsyncMock(return_value=[])
     repo.store_embeddings = AsyncMock()
+    # Default: no meeting row / no client-project assignment. Tests that
+    # care about the meeting's fields override this per-test.
+    repo.get_meeting = AsyncMock(return_value=None)
     return repo
 
 
@@ -830,6 +833,73 @@ def test_post_processing_appends_without_delete_on_live_run(tmp_path, loop_threa
 
     ai_repo.delete_extracted_for_meeting.assert_not_awaited()
     ai_repo.create.assert_awaited_once()
+
+
+def test_extracted_action_items_inherit_meeting_client_project(tmp_path, loop_thread):
+    """A fresh extraction inherits the meeting's own client/project
+    assignment, tagged 'inherited' so a later manual PATCH can be told
+    apart from the deterministic/LLM auto-assignment."""
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_meeting_record(client_id="c1", project_id="p1"))
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    config.action_items.auto_extract = True
+    runner = _make_runner(config, db=bridge)
+
+    ai_repo = MagicMock()
+    ai_repo.delete_extracted_for_meeting = AsyncMock()
+    ai_repo.create = AsyncMock()
+
+    with (
+        patch("src.action_items.extractor.ActionItemExtractor") as extractor_cls,
+        patch("src.action_items.repository.ActionItemRepository", return_value=ai_repo),
+        patch("src.analytics.engine.AnalyticsEngine") as engine_cls,
+    ):
+        extractor_cls.return_value.extract.return_value = [{"title": "Do the thing"}]
+        engine_cls.return_value.refresh_period = AsyncMock()
+        asyncio.run(
+            runner._post_process_async(
+                "m1", _make_transcript(), started_at=1000.0, is_reprocess=False
+            )
+        )
+
+    kwargs = ai_repo.create.call_args.kwargs
+    assert kwargs["client_id"] == "c1"
+    assert kwargs["project_id"] == "p1"
+    assert kwargs["tag_source"] == "inherited"
+
+
+def test_extracted_action_items_no_meeting_tags_when_untagged(tmp_path, loop_thread):
+    """A meeting with no client/project assignment extracts items with
+    both fields None — no spurious inheritance."""
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=_meeting_record())
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    config.action_items.auto_extract = True
+    runner = _make_runner(config, db=bridge)
+
+    ai_repo = MagicMock()
+    ai_repo.delete_extracted_for_meeting = AsyncMock()
+    ai_repo.create = AsyncMock()
+
+    with (
+        patch("src.action_items.extractor.ActionItemExtractor") as extractor_cls,
+        patch("src.action_items.repository.ActionItemRepository", return_value=ai_repo),
+        patch("src.analytics.engine.AnalyticsEngine") as engine_cls,
+    ):
+        extractor_cls.return_value.extract.return_value = [{"title": "Do the thing"}]
+        engine_cls.return_value.refresh_period = AsyncMock()
+        asyncio.run(
+            runner._post_process_async(
+                "m1", _make_transcript(), started_at=1000.0, is_reprocess=False
+            )
+        )
+
+    kwargs = ai_repo.create.call_args.kwargs
+    assert kwargs["client_id"] is None
+    assert kwargs["project_id"] is None
+    assert kwargs["tag_source"] == "inherited"
 
 
 def test_analytics_refreshes_period_of_meeting_date(tmp_path, loop_thread):

@@ -912,10 +912,15 @@ class PipelineRunner:
         ai_repo = ActionItemRepository(self._db.database)
         if is_reprocess:
             # A re-run replaces what extraction previously produced;
-            # manually created items are never touched.
+            # manually created/tagged items are never touched.
             await ai_repo.delete_extracted_for_meeting(meeting_id)
         if not items:
             return
+        # Extracted items inherit the meeting's own client/project
+        # assignment; only a user PATCH sets tag_source='manual'.
+        meeting = await self._db.repo.get_meeting(meeting_id)
+        m_client = getattr(meeting, "client_id", None) if meeting else None
+        m_project = getattr(meeting, "project_id", None) if meeting else None
         for item in items:
             await ai_repo.create(
                 meeting_id=meeting_id,
@@ -925,6 +930,9 @@ class PipelineRunner:
                 priority=item.get("priority", "medium"),
                 source="extracted",
                 extracted_text=item.get("extracted_text"),
+                client_id=m_client,
+                project_id=m_project,
+                tag_source="inherited",
             )
         logger.info("Extracted %d action items from meeting %s", len(items), meeting_id)
         self._emit("action_items.extracted", meeting_id=meeting_id, count=len(items))
