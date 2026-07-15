@@ -1,6 +1,7 @@
 """Tests for the Markdown output writer."""
 
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -255,3 +256,98 @@ class TestMarkdownWriter:
         assert result is None
         assert writer.last_error is not None
         mock_unlink.assert_called_once()
+
+
+class TestMarkdownRenameNote:
+    """Tests for MarkdownWriter.rename_note()."""
+
+    def _summary(self, title: str) -> MeetingSummary:
+        return MeetingSummary(
+            raw_markdown=f"# {title}\n\nContent.",
+            title=title,
+            tags=["general"],
+        )
+
+    def test_rename_note_renames_file_and_updates_frontmatter(
+        self, markdown_config, sample_transcript, started_at, duration
+    ):
+        writer = MarkdownWriter(markdown_config)
+        old = writer.write(self._summary("Old Title"), sample_transcript, started_at, duration)
+        assert old is not None and old.exists()
+
+        new = writer.rename_note(old, "New Shiny Title", started_at)
+
+        assert new is not None and new.exists()
+        assert not old.exists()
+        assert "new-shiny-title" in new.name
+        text = new.read_text(encoding="utf-8")
+        assert "title: New Shiny Title" in text
+
+    def test_rename_note_preserves_body_and_other_frontmatter(
+        self, markdown_config, sample_transcript, started_at, duration
+    ):
+        writer = MarkdownWriter(markdown_config)
+        old = writer.write(self._summary("Old Title"), sample_transcript, started_at, duration)
+
+        new = writer.rename_note(old, "New Shiny Title", started_at)
+
+        text = new.read_text(encoding="utf-8")
+        assert "## Full Transcript" in text
+        assert "tags:" in text
+        assert "- general" in text
+        # Body content (derived from the original title) is untouched.
+        assert "Content." in text
+
+    def test_rename_note_rejects_vault_escape(
+        self, markdown_config, sample_transcript, started_at, duration
+    ):
+        """The guard mirrors write()'s: it can never trigger via a real title
+        (slugify already strips path separators), so force the unsafe
+        condition directly to prove the belt-and-braces check still fires."""
+        writer = MarkdownWriter(markdown_config)
+        old = writer.write(self._summary("X"), sample_transcript, started_at, duration)
+        assert old is not None
+
+        with patch("pathlib.Path.is_relative_to", return_value=False):
+            with pytest.raises(ValueError, match="escape"):
+                writer.rename_note(old, "New Title", started_at)
+
+    def test_rename_note_avoids_collision(
+        self, markdown_config, sample_transcript, started_at, duration
+    ):
+        writer = MarkdownWriter(markdown_config)
+        a = writer.write(self._summary("Taken"), sample_transcript, started_at, duration)
+        b = writer.write(self._summary("Other"), sample_transcript, started_at, duration)
+
+        renamed = writer.rename_note(b, "Taken", started_at)
+
+        assert renamed is not None and renamed.exists()
+        assert renamed.name != a.name  # did not clobber the existing note
+        assert a.exists()
+        assert "(2)" in renamed.name
+
+    def test_rename_note_same_filename_updates_in_place(
+        self, markdown_config, sample_transcript, started_at, duration
+    ):
+        """A new title that slugifies to the same filename rewrites in place
+        and returns the original path unchanged."""
+        writer = MarkdownWriter(markdown_config)
+        old = writer.write(self._summary("Old Title"), sample_transcript, started_at, duration)
+
+        result = writer.rename_note(old, "Old Title!!!", started_at)
+
+        assert result == old
+        assert old.exists()
+        text = old.read_text(encoding="utf-8")
+        assert "title: Old Title!!!" in text
+
+    def test_rename_note_missing_source_returns_none_and_sets_last_error(
+        self, markdown_config, started_at
+    ):
+        writer = MarkdownWriter(markdown_config)
+        missing = Path(markdown_config.vault_path) / "does-not-exist.md"
+
+        result = writer.rename_note(missing, "New Title", started_at)
+
+        assert result is None
+        assert writer.last_error is not None
