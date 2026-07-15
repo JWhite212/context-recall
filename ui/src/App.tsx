@@ -42,7 +42,7 @@ import { useTraySync } from "./hooks/useTraySync";
 import { useNotifications } from "./hooks/useNotifications";
 import { usePipelineSync } from "./hooks/usePipelineSync";
 import { useAppStore } from "./stores/appStore";
-import { setAuthToken } from "./lib/api";
+import { setAuthToken, renameMeeting } from "./lib/api";
 import type { WSEvent } from "./lib/types";
 
 const queryClient = new QueryClient({
@@ -65,6 +65,16 @@ function AppShell() {
 
   const onWSEvent = useCallback(
     (event: WSEvent) => {
+      // A title typed in the live view during recording has no meeting row
+      // yet. Capture it BEFORE handleEvent clears the live state, then apply
+      // it once pipeline.complete carries the new meeting_id.
+      if (event.type === "pipeline.complete" && event.meeting_id) {
+        const { liveTitleOverride, liveCalendarTitle } = useAppStore.getState();
+        const pending = liveTitleOverride?.trim();
+        if (pending && pending !== liveCalendarTitle) {
+          void renameMeeting(event.meeting_id, pending).catch(() => {});
+        }
+      }
       handleEvent(event);
       setLastEvent(event);
 

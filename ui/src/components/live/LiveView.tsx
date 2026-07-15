@@ -95,6 +95,9 @@ export function LiveView() {
   const dismissWarning = useAppStore((s) => s.dismissWarning);
   const liveSegments = useAppStore((s) => s.liveSegments);
   const audioLevels = useAppStore((s) => s.audioLevels);
+  const liveCalendarTitle = useAppStore((s) => s.liveCalendarTitle);
+  const liveTitleOverride = useAppStore((s) => s.liveTitleOverride);
+  const setLiveTitleOverride = useAppStore((s) => s.setLiveTitleOverride);
   const queryClient = useQueryClient();
   const segmentsEndRef = useRef<HTMLDivElement>(null);
   const isClipping = audioLevels.system > CLIPPING_THRESHOLD;
@@ -180,6 +183,20 @@ export function LiveView() {
                   : "Idle"}
           </span>
         </div>
+
+        {/* Editable meeting title (seeded from the matched calendar event).
+            No DB row exists yet — App.tsx applies this via renameMeeting when
+            pipeline.complete arrives with the new meeting_id. */}
+        {isRecording && (
+          <input
+            type="text"
+            value={liveTitleOverride ?? liveCalendarTitle ?? ""}
+            onChange={(e) => setLiveTitleOverride(e.target.value)}
+            placeholder="Meeting title…"
+            aria-label="Meeting title"
+            className="w-full max-w-md text-center text-sm bg-surface border border-border rounded-lg px-3 py-1.5 text-text-primary placeholder:text-text-muted focus:border-accent outline-none"
+          />
+        )}
 
         {/* Elapsed time */}
         <div className="text-5xl font-light text-text-primary font-mono tabular-nums tracking-tight">
