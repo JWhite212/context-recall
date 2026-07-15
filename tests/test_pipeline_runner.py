@@ -141,6 +141,20 @@ class BoomDiariser:
         raise RuntimeError("model load failed")
 
 
+class RecordingEnergyDiariser(EnergyDiariser):
+    """Real ``EnergyDiariser`` subclass (so ``_diarise``'s ``isinstance``
+    dispatch selects the energy branch) that records the paths it was
+    handed instead of reading audio off disk."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.calls = []
+
+    def diarise(self, transcript, audio_path, **kwargs):
+        self.calls.append((audio_path, kwargs))
+        return transcript
+
+
 @pytest.fixture(autouse=True)
 def _no_real_embedder(monkeypatch):
     """Keep the suite hermetic: never load the real sentence-transformer."""
@@ -633,6 +647,26 @@ def test_non_energy_diariser_receives_mic_and_derived_system_paths(tmp_path):
     _, _, kwargs = diariser.calls[0]
     assert kwargs["mic_audio_path"] == tmp_path / "mic.wav"
     assert kwargs["system_audio_path"] == tmp_path / "a_system.wav"
+
+
+def test_energy_diariser_receives_system_source_not_merged_mix(tmp_path):
+    # Regression: the energy branch must compare the SYSTEM-only source
+    # against the mic. The merged mix RMS-normalises and amplifies both
+    # channels, so feeding it as the "system" channel means the mic can
+    # never win the energy ratio and every segment collapses to the remote
+    # label. _diarise must recover the surviving <stem>_system.wav.
+    config = _make_config(tmp_path)
+    config.audio.temp_audio_dir = str(tmp_path)
+    (tmp_path / "a_system.wav").write_bytes(b"x" * 100)
+    diariser = RecordingEnergyDiariser(config.diarisation)
+    runner = _make_runner(config, diariser=diariser)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0, mic_audio_path=tmp_path / "mic.wav")
+
+    assert len(diariser.calls) == 1
+    audio_path, kwargs = diariser.calls[0]
+    assert audio_path == tmp_path / "a_system.wav"  # system source, not merged a.wav
+    assert kwargs["mic_audio_path"] == tmp_path / "mic.wav"
 
 
 def test_diarise_degrades_to_energy_when_pyannote_raises(tmp_path):
