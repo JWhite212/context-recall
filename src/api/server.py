@@ -557,7 +557,10 @@ class ApiServer:
 
         reader = getattr(self, "_calendar_reader", None)
         sync = getattr(self, "_calendar_sync", None)
-        if reader is None or sync is None or not reader.available:
+        # Never gate on reader.available: it only becomes True once
+        # list_events() performs its lazy EventKit init (on the executor
+        # thread below — the init must never run on the event loop).
+        if reader is None or sync is None:
             return
         config = load_config().calendar
         now = time.time()

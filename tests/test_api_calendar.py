@@ -29,15 +29,41 @@ def _auth_headers():
 
 
 class FakeReader:
+    """Mirrors the real CalendarReader contract: reads on an unavailable
+    reader return empty rather than raising, and `available` is a result
+    of initialisation, not a precondition callers may gate on."""
+
     def __init__(self, events=None, calendars=None, available=True):
         self._events = events or []
         self._calendars = calendars or []
         self.available = available
 
     def list_events(self, start, end, excluded_calendars=None):
+        if not self.available:
+            return []
         return [e for e in self._events if start <= e.start_ts < end]
 
     def list_calendars(self):
+        if not self.available:
+            return []
+        return self._calendars
+
+
+class LazyFakeReader:
+    """Models the real reader's lazy init: `available` only becomes True
+    once list_events()/list_calendars() run _ensure_store()."""
+
+    def __init__(self, events=None, calendars=None):
+        self._events = events or []
+        self._calendars = calendars or []
+        self.available = False
+
+    def list_events(self, start, end, excluded_calendars=None):
+        self.available = True
+        return [e for e in self._events if start <= e.start_ts < end]
+
+    def list_calendars(self):
+        self.available = True
         return self._calendars
 
 
@@ -108,6 +134,30 @@ async def test_post_sync_mirrors_into_table(api):
         assert r.json()["synced"] == 1
     rows = await api["cal_repo"].list_by_range(0.0, 10**12)
     assert [row["event_uid"] for row in rows] == ["EK1:future"]
+
+
+@pytest.mark.asyncio
+async def test_routes_do_not_gate_on_available_before_lazy_init(api):
+    """Regression (C1): the reader's `available` only flips True after
+    list_events()/list_calendars() perform the lazy EventKit init. Gating
+    the routes on `available` up front meant the reader was never called,
+    so it could never initialise — events and calendars were permanently
+    empty. The routes must call the reader and let IT decide."""
+    lazy = LazyFakeReader(
+        events=[_ev(uid="EK1:1000", start=1000.0)],
+        calendars=[{"id": "c1", "title": "Work"}],
+    )
+    calendar_routes.init(None, lazy, None)
+    assert lazy.available is False
+    with TestClient(api["app"]) as c:
+        r = c.get("/api/calendar/events?start=0&end=5000", headers=_auth_headers())
+        assert r.status_code == 200
+        assert r.json()["count"] == 1
+        assert r.json()["events"][0]["event_uid"] == "EK1:1000"
+
+        r = c.get("/api/calendar/calendars", headers=_auth_headers())
+        assert r.status_code == 200
+        assert r.json()["calendars"] == [{"id": "c1", "title": "Work"}]
 
 
 @pytest.mark.asyncio
