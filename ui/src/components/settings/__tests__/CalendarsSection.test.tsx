@@ -3,11 +3,14 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { CalendarsSection } from "../CalendarsSection";
 import { makeWrapper } from "../../../test/queryWrapper";
 
-
 describe("CalendarsSection", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  let permissionStatus = "authorized";
+  let permissionGranted = true;
 
   beforeEach(() => {
+    permissionStatus = "authorized";
+    permissionGranted = true;
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input.toString();
       if (url.includes("/api/calendar/sync")) {
@@ -23,6 +26,15 @@ describe("CalendarsSection", () => {
               { id: "c1", title: "Work" },
               { id: "c2", title: "Personal" },
             ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/api/calendar/permission")) {
+        return new Response(
+          JSON.stringify({
+            status: permissionStatus,
+            granted: permissionGranted,
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -112,5 +124,25 @@ describe("CalendarsSection", () => {
       url.toString().includes("/api/calendar/sync"),
     )!;
     expect(init?.method).toBe("POST");
+  });
+
+  it("shows a permission banner when calendar access is not granted", async () => {
+    permissionStatus = "denied";
+    permissionGranted = false;
+    render(<CalendarsSection />, { wrapper: makeWrapper() });
+    expect(
+      await screen.findByText(/calendar access is not granted/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /open system settings/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the permission banner when access is granted", async () => {
+    render(<CalendarsSection />, { wrapper: makeWrapper() });
+    await screen.findByText("Work");
+    expect(
+      screen.queryByText(/calendar access is not granted/i),
+    ).not.toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   getCalendars,
+  getCalendarPermission,
   getConfig,
   updateConfig,
   triggerCalendarSync,
@@ -12,6 +13,10 @@ export function CalendarsSection({ id }: { id?: string }) {
   const queryClient = useQueryClient();
   const toast = useToast();
 
+  const { data: permission } = useQuery({
+    queryKey: ["calendar-permission"],
+    queryFn: getCalendarPermission,
+  });
   const { data: calData } = useQuery({
     queryKey: ["calendars"],
     queryFn: getCalendars,
@@ -23,6 +28,7 @@ export function CalendarsSection({ id }: { id?: string }) {
 
   const excluded = config?.calendar?.excluded_calendars ?? [];
   const calendars = calData?.calendars ?? [];
+  const granted = permission?.granted ?? true;
 
   const save = useMutation({
     mutationFn: (next: string[]) =>
@@ -47,6 +53,13 @@ export function CalendarsSection({ id }: { id?: string }) {
     save.mutate(next);
   }
 
+  function openSystemSettings() {
+    window.open(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
+      "_blank",
+    );
+  }
+
   return (
     <fieldset
       id={id}
@@ -58,33 +71,51 @@ export function CalendarsSection({ id }: { id?: string }) {
         Choose which calendars to import upcoming meetings from.
       </p>
 
-      <div className="py-3 flex flex-col gap-2">
-        {calendars.length === 0 ? (
-          <p className="text-sm text-text-muted">No calendars available.</p>
-        ) : (
-          calendars.map((c) => {
-            const included = !excluded.includes(c.title);
-            return (
-              <label
-                key={c.id}
-                className="flex items-center gap-2 text-sm text-text-secondary"
-              >
-                <input
-                  type="checkbox"
-                  checked={included}
-                  onChange={(e) => toggle(c.title, e.target.checked)}
-                />
-                {c.title}
-              </label>
-            );
-          })
-        )}
-      </div>
+      {!granted && (
+        <div className="mt-3 rounded-lg border border-border bg-surface p-3">
+          <p className="text-sm text-text-secondary">
+            Calendar access is not granted. Context Recall needs macOS Calendar
+            permission to import your meetings.
+          </p>
+          <button
+            type="button"
+            onClick={openSystemSettings}
+            className="mt-2 px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
+          >
+            Open System Settings
+          </button>
+        </div>
+      )}
+
+      {granted && (
+        <div className="py-3 flex flex-col gap-2">
+          {calendars.length === 0 ? (
+            <p className="text-sm text-text-muted">No calendars available.</p>
+          ) : (
+            calendars.map((c) => {
+              const included = !excluded.includes(c.title);
+              return (
+                <label
+                  key={c.id}
+                  className="flex items-center gap-2 text-sm text-text-secondary"
+                >
+                  <input
+                    type="checkbox"
+                    checked={included}
+                    onChange={(e) => toggle(c.title, e.target.checked)}
+                  />
+                  {c.title}
+                </label>
+              );
+            })
+          )}
+        </div>
+      )}
 
       <button
         type="button"
         onClick={() => syncNow.mutate()}
-        disabled={syncNow.isPending}
+        disabled={syncNow.isPending || !granted}
         className="self-end px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
       >
         Sync now
