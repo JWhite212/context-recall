@@ -5,6 +5,8 @@ directly; darwin calls are guarded and return UNKNOWN off-platform. No
 test may trigger a real permission dialog."""
 
 import sys
+import types
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +26,16 @@ from src.calendar_permission import (
 # replaces them — lets tests of the real implementations bypass the guard
 # without weakening it for the rest of the suite.
 _REAL_AUTHORIZATION_STATUS = cp.authorization_status
+_REAL_REQUEST_ACCESS = cp.request_access
+
+
+def _fake_eventkit(store) -> types.ModuleType:
+    """A minimal stand-in for the EventKit module: enough for
+    request_access() to alloc/init a store and name the entity type."""
+    mod = types.ModuleType("EventKit")
+    mod.EKEntityTypeEvent = 0
+    mod.EKEventStore = SimpleNamespace(alloc=lambda: SimpleNamespace(init=lambda: store))
+    return mod
 
 
 @pytest.mark.parametrize(
@@ -64,6 +76,41 @@ def test_ensure_calendar_access_denied_returns_problem(monkeypatch, bad):
 
 def test_describe_fix_not_determined_mentions_allow():
     assert "Allow" in describe_fix(NOT_DETERMINED)
+
+
+def test_request_access_prefers_full_access_api(monkeypatch):
+    """macOS 14 split calendar access: the legacy entity-type request only
+    grants write-only there. Prefer requestFullAccessToEventsWithCompletion_
+    when the store exposes it."""
+    calls: list[str] = []
+
+    class ModernStore:
+        def requestFullAccessToEventsWithCompletion_(self, handler):
+            calls.append("full")
+            handler(True, None)
+
+        def requestAccessToEntityType_completion_(self, entity, handler):
+            calls.append("legacy")
+            handler(True, None)
+
+    monkeypatch.setattr(cp, "_eventkit_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "EventKit", _fake_eventkit(ModernStore()))
+    assert _REAL_REQUEST_ACCESS(timeout_seconds=1.0) is True
+    assert calls == ["full"]
+
+
+def test_request_access_falls_back_to_legacy_api(monkeypatch):
+    calls: list[str] = []
+
+    class LegacyStore:
+        def requestAccessToEntityType_completion_(self, entity, handler):
+            calls.append("legacy")
+            handler(False, None)
+
+    monkeypatch.setattr(cp, "_eventkit_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "EventKit", _fake_eventkit(LegacyStore()))
+    assert _REAL_REQUEST_ACCESS(timeout_seconds=1.0) is False
+    assert calls == ["legacy"]
 
 
 def test_request_access_at_boot_returns_early_when_determined(monkeypatch):
