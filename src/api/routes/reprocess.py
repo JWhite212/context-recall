@@ -108,6 +108,12 @@ async def _do_reprocess(meeting, config) -> None:
             mic_audio_path=sources["mic"],
             preserve_mappings=True,
             notion_page_id=(getattr(meeting, "notion_page_id", "") or None),
+            # The stored calendar match must keep steering the auto-title
+            # on reprocess (I2) — otherwise a calendar-titled meeting
+            # silently reverts to the fresh summary.title.
+            calendar_fields={
+                "calendar_event_title": getattr(meeting, "calendar_event_title", "") or ""
+            },
             is_reprocess=True,
             preserve_title=(meeting.title_source == "manual"),
         )

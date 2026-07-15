@@ -165,6 +165,7 @@ def _drain(loop):
 def _make_repo():
     repo = MagicMock()
     repo.update_meeting = AsyncMock()
+    repo.update_title_if_auto = AsyncMock()
     repo.update_fts = AsyncMock()
     repo.set_speaker_name = AsyncMock()
     repo.get_speaker_names = AsyncMock(return_value=[])
@@ -220,7 +221,11 @@ def test_full_run_persists_complete_and_updates_fts(tmp_path, loop_thread):
     _drain(loop_thread)
     persist_calls = [c.kwargs for c in repo.update_meeting.call_args_list]
     complete = next(c for c in persist_calls if c.get("status") == "complete")
-    assert complete["title"] == "Test Meeting"
+    # Title goes through the conditional write, never the blanket persist
+    # (I4: an in-flight manual rename must win at the DB).
+    assert "title" not in complete
+    assert "title_source" not in complete
+    repo.update_title_if_auto.assert_awaited_with("m1", "Test Meeting")
     assert complete["word_count"] == 6
     repo.update_fts.assert_awaited_with("m1")
     types = [e["type"] for e in events]
@@ -242,10 +247,7 @@ def test_auto_title_prefers_calendar_event_title(tmp_path, loop_thread):
     )
 
     _drain(loop_thread)
-    persist_calls = [c.kwargs for c in repo.update_meeting.call_args_list]
-    complete = next(c for c in persist_calls if c.get("status") == "complete")
-    assert complete["title"] == "Weekly Sync"
-    assert complete["title_source"] == "auto"
+    repo.update_title_if_auto.assert_awaited_with("m1", "Weekly Sync")
 
 
 def test_auto_title_falls_back_to_summary_title(tmp_path, loop_thread):
@@ -257,10 +259,7 @@ def test_auto_title_falls_back_to_summary_title(tmp_path, loop_thread):
     runner.run(tmp_path / "a.wav", "m1", started_at=1000.0, calendar_fields=None)
 
     _drain(loop_thread)
-    persist_calls = [c.kwargs for c in repo.update_meeting.call_args_list]
-    complete = next(c for c in persist_calls if c.get("status") == "complete")
-    assert complete["title"] == "Roadmap chat"
-    assert complete["title_source"] == "auto"
+    repo.update_title_if_auto.assert_awaited_with("m1", "Roadmap chat")
 
 
 def test_preserve_title_leaves_manual_title_untouched(tmp_path, loop_thread):
@@ -282,6 +281,7 @@ def test_preserve_title_leaves_manual_title_untouched(tmp_path, loop_thread):
     complete = next(c for c in persist_calls if c.get("status") == "complete")
     assert "title" not in complete
     assert "title_source" not in complete
+    repo.update_title_if_auto.assert_not_awaited()
 
 
 def test_empty_transcript_marks_error(tmp_path, loop_thread):
@@ -335,10 +335,137 @@ def test_short_transcript_completes_without_summarisation(tmp_path, loop_thread)
     assert summariser.calls == []
     _drain(loop_thread)
     kwargs = repo.update_meeting.call_args.kwargs
-    assert kwargs["title"] == SHORT_TRANSCRIPT_TITLE
+    # Title goes through the conditional write (I3/I4), not the blanket persist.
+    assert "title" not in kwargs
+    assert "title_source" not in kwargs
+    repo.update_title_if_auto.assert_awaited_with("m1", SHORT_TRANSCRIPT_TITLE)
     assert kwargs["status"] == "complete"
     repo.update_fts.assert_awaited_with("m1")
     assert [e for e in events if e["type"] == "pipeline.complete"]
+
+
+def test_short_transcript_prefers_calendar_title(tmp_path, loop_thread):
+    """A short run matched to a calendar event should still take the
+    calendar auto-title, not the generic short-transcript placeholder."""
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    transcriber = FakeTranscriber(transcript=_make_transcript(texts=("hi bye",)))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, transcriber=transcriber)
+
+    runner.run(
+        tmp_path / "a.wav",
+        "m1",
+        started_at=1000.0,
+        calendar_fields={"calendar_event_title": "Weekly Sync"},
+    )
+
+    _drain(loop_thread)
+    repo.update_title_if_auto.assert_awaited_with("m1", "Weekly Sync")
+
+
+def test_short_transcript_preserve_title_writes_no_title(tmp_path, loop_thread):
+    """I3: a reprocess of a manually-renamed meeting that now yields a
+    short transcript must not stamp the placeholder title over the rename."""
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    transcriber = FakeTranscriber(transcript=_make_transcript(texts=("hi bye",)))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, transcriber=transcriber)
+
+    result = runner.run(tmp_path / "a.wav", "m1", started_at=1000.0, preserve_title=True)
+
+    assert result.status == "short"
+    _drain(loop_thread)
+    kwargs = repo.update_meeting.call_args.kwargs
+    assert "title" not in kwargs
+    assert "title_source" not in kwargs
+    repo.update_title_if_auto.assert_not_awaited()
+
+
+# ----------------------------------------------------------------------
+# Title precedence against a REAL database (I4/I3): the conditional
+# UPDATE ... WHERE title_source != 'manual' is the actual guard for a
+# rename issued while the pipeline is in flight, so these tests assert
+# on real DB state rather than mock call args.
+# ----------------------------------------------------------------------
+
+
+def _real_repo_on_loop(tmp_path, loop):
+    """A real Database + MeetingRepository owned by the bridge loop,
+    mirroring production where the API loop owns the connection."""
+    from src.db.database import Database
+    from src.db.repository import MeetingRepository
+
+    database = Database(db_path=tmp_path / "pipeline.db")
+    asyncio.run_coroutine_threadsafe(database.connect(), loop).result(timeout=15)
+    return database, MeetingRepository(database)
+
+
+def _run_on(loop, coro):
+    return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=15)
+
+
+def test_inflight_manual_rename_survives_full_persist(tmp_path, loop_thread):
+    """I4: a meeting renamed (title_source='manual') while the pipeline is
+    mid-flight keeps its title through a preserve_title=False persist."""
+    database, repo = _real_repo_on_loop(tmp_path, loop_thread)
+    try:
+        mid = _run_on(loop_thread, repo.create_meeting(started_at=1000.0))
+        # Simulate the user renaming while the pipeline is transcribing.
+        _run_on(loop_thread, repo.update_meeting(mid, title="My Real Name", title_source="manual"))
+
+        bridge = DbBridge(repo, loop_thread)
+        runner = _make_runner(_make_config(tmp_path), db=bridge)
+        result = runner.run(tmp_path / "a.wav", mid, started_at=1000.0, preserve_title=False)
+
+        assert result.status == "complete"
+        _drain(loop_thread)
+        meeting = _run_on(loop_thread, repo.get_meeting(mid))
+        assert meeting.status == "complete"
+        assert meeting.title == "My Real Name"
+        assert meeting.title_source == "manual"
+    finally:
+        _run_on(loop_thread, database.close())
+
+
+def test_auto_titled_meeting_gets_pipeline_title(tmp_path, loop_thread):
+    """Control for I4: an un-renamed meeting still receives the auto title."""
+    database, repo = _real_repo_on_loop(tmp_path, loop_thread)
+    try:
+        mid = _run_on(loop_thread, repo.create_meeting(started_at=1000.0))
+
+        bridge = DbBridge(repo, loop_thread)
+        runner = _make_runner(_make_config(tmp_path), db=bridge)
+        result = runner.run(tmp_path / "a.wav", mid, started_at=1000.0)
+
+        assert result.status == "complete"
+        _drain(loop_thread)
+        meeting = _run_on(loop_thread, repo.get_meeting(mid))
+        assert meeting.title == "Test Meeting"
+        assert meeting.title_source == "auto"
+    finally:
+        _run_on(loop_thread, database.close())
+
+
+def test_short_transcript_keeps_inflight_manual_title(tmp_path, loop_thread):
+    """I3 (persist-time variant): a short-transcript run must not clobber a
+    manual rename even when preserve_title=False (in-flight rename)."""
+    database, repo = _real_repo_on_loop(tmp_path, loop_thread)
+    try:
+        mid = _run_on(loop_thread, repo.create_meeting(started_at=1000.0))
+        _run_on(loop_thread, repo.update_meeting(mid, title="Kept Name", title_source="manual"))
+
+        bridge = DbBridge(repo, loop_thread)
+        transcriber = FakeTranscriber(transcript=_make_transcript(texts=("hi bye",)))
+        runner = _make_runner(_make_config(tmp_path), db=bridge, transcriber=transcriber)
+        result = runner.run(tmp_path / "a.wav", mid, started_at=1000.0, preserve_title=False)
+
+        assert result.status == "short"
+        _drain(loop_thread)
+        meeting = _run_on(loop_thread, repo.get_meeting(mid))
+        assert meeting.title == "Kept Name"
+        assert meeting.title_source == "manual"
+    finally:
+        _run_on(loop_thread, database.close())
 
 
 def test_summarisation_failure_marks_error(tmp_path, loop_thread):
