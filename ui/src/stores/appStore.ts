@@ -50,6 +50,11 @@ interface AppState {
   /** Live transcript segments for the active meeting. */
   liveSegments: TranscriptSegment[];
 
+  /** Title of the calendar event matched to the active recording, seeded
+   *  from meeting.calendar_match; used as the live editable title's default.
+   *  Cleared on pipeline.complete / resetLive. */
+  liveCalendarTitle: string | null;
+
   /** Live audio levels (RMS, 0.0–1.0). */
   audioLevels: AudioLevels;
 
@@ -77,6 +82,7 @@ export const useAppStore = create<AppState>((set) => ({
   warnings: [],
   lastPipelineError: null,
   liveSegments: [],
+  liveCalendarTitle: null,
   audioLevels: { system: 0, mic: 0 },
   modelProgress: {},
 
@@ -127,6 +133,9 @@ export const useAppStore = create<AppState>((set) => ({
         });
         break;
       }
+      case "meeting.calendar_match":
+        set({ liveCalendarTitle: event.title });
+        break;
       case "pipeline.complete":
         set({
           pipelineStage: null,
@@ -134,6 +143,7 @@ export const useAppStore = create<AppState>((set) => ({
           warnings: [],
           lastPipelineError: null,
           liveSegments: [],
+          liveCalendarTitle: null,
           audioLevels: { system: 0, mic: 0 },
         });
         break;
@@ -187,6 +197,7 @@ export const useAppStore = create<AppState>((set) => ({
       warnings: [],
       lastPipelineError: null,
       liveSegments: [],
+      liveCalendarTitle: null,
       audioLevels: { system: 0, mic: 0 },
     }),
 }));

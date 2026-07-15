@@ -96,14 +96,12 @@ describe("appStore — warnings slice (Unit 14 diagnostics banner)", () => {
   beforeEach(resetStore);
 
   it("pushWarning appends a warning and dismissWarning removes it by id", () => {
-    useAppStore
-      .getState()
-      .pushWarning({
-        id: "a",
-        source: "system",
-        message: "silent",
-        createdAt: 1,
-      });
+    useAppStore.getState().pushWarning({
+      id: "a",
+      source: "system",
+      message: "silent",
+      createdAt: 1,
+    });
     expect(useAppStore.getState().warnings).toHaveLength(1);
 
     useAppStore.getState().dismissWarning("a");
@@ -151,14 +149,12 @@ describe("appStore — warnings slice (Unit 14 diagnostics banner)", () => {
   });
 
   it("clears warnings when a new meeting starts", () => {
-    useAppStore
-      .getState()
-      .pushWarning({
-        id: "stale",
-        source: "system",
-        message: "old",
-        createdAt: 1,
-      });
+    useAppStore.getState().pushWarning({
+      id: "stale",
+      source: "system",
+      message: "old",
+      createdAt: 1,
+    });
 
     useAppStore.getState().handleEvent({
       type: "meeting.started",
@@ -166,5 +162,38 @@ describe("appStore — warnings slice (Unit 14 diagnostics banner)", () => {
     });
 
     expect(useAppStore.getState().warnings).toHaveLength(0);
+  });
+});
+
+describe("appStore — live calendar title (Feature 2 rename)", () => {
+  beforeEach(() => {
+    resetStore();
+    useAppStore.setState({ liveCalendarTitle: null });
+  });
+
+  it("seeds liveCalendarTitle from a meeting.calendar_match event", () => {
+    useAppStore.getState().handleEvent({
+      type: "meeting.calendar_match",
+      title: "Weekly Sync",
+      attendees: [],
+      confidence: 0.9,
+    });
+    expect(useAppStore.getState().liveCalendarTitle).toBe("Weekly Sync");
+  });
+
+  it("clears liveCalendarTitle on pipeline.complete", () => {
+    useAppStore.setState({ liveCalendarTitle: "Weekly Sync" });
+    useAppStore.getState().handleEvent({
+      type: "pipeline.complete",
+      meeting_id: "m1",
+      title: "Weekly Sync",
+    });
+    expect(useAppStore.getState().liveCalendarTitle).toBeNull();
+  });
+
+  it("clears liveCalendarTitle on resetLive", () => {
+    useAppStore.setState({ liveCalendarTitle: "Weekly Sync" });
+    useAppStore.getState().resetLive();
+    expect(useAppStore.getState().liveCalendarTitle).toBeNull();
   });
 });
