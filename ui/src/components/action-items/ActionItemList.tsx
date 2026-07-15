@@ -105,9 +105,10 @@ function groupByKey(
 /**
  * Group `items` client-side by the chosen dimension. `client`/`project`
  * resolve the id to a name via the fetched lookup lists (falling back to
- * "Unassigned" for a null id, or the raw id if the lookup hasn't loaded
- * yet). `due` buckets into overdue/today/this-week/later/no-date in that
- * fixed order. `none` returns everything as one unlabelled group.
+ * "Unassigned" for a null id or when the id isn't in the lookup — e.g.
+ * the lookup hasn't loaded yet). `due` buckets into
+ * overdue/today/this-week/later/no-date in that fixed order. `none`
+ * returns everything as one unlabelled group.
  */
 export function groupItems(
   items: ActionItem[],
