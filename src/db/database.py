@@ -23,7 +23,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 22
 
 _vec_available = False
 
@@ -659,6 +659,16 @@ class Database:
                 "CREATE INDEX IF NOT EXISTS idx_prep_briefings_cal_event "
                 "ON prep_briefings(calendar_event_uid)"
             )
+            # Action-item client/project tags (v22).
+            await _safe_add_column(self.conn, "action_items", "client_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "action_items", "project_id", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "action_items", "tag_source", "TEXT", "'inherited'")
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_action_items_client ON action_items(client_id)"
+            )
+            await self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_action_items_project ON action_items(project_id)"
+            )
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -900,9 +910,35 @@ class Database:
             if await cur.fetchone() is not None:
                 await _safe_add_column(self.conn, "meetings", "title_source", "TEXT", "'auto'")
                 await _safe_add_column(self.conn, "meetings", "markdown_path", "TEXT", "''")
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 21")
             await self.conn.commit()
             logger.info("Database migrated to version 21 (rename + auto-title)")
             current_version = 21
+
+        if current_version < 22:
+            # Action-item client/project tags: items inherit their meeting's
+            # client/project (tag_source='inherited'); a user override sets
+            # tag_source='manual' and survives reprocess. Guard on the table
+            # existing so minimal migration fixtures don't hard-fail.
+            cur = await self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='action_items'"
+            )
+            if await cur.fetchone() is not None:
+                await _safe_add_column(self.conn, "action_items", "client_id", "TEXT", "NULL")
+                await _safe_add_column(self.conn, "action_items", "project_id", "TEXT", "NULL")
+                await _safe_add_column(
+                    self.conn, "action_items", "tag_source", "TEXT", "'inherited'"
+                )
+                await self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_action_items_client ON action_items(client_id)"
+                )
+                await self.conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_action_items_project "
+                    "ON action_items(project_id)"
+                )
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 22 (action-item tags)")
+            current_version = 22
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

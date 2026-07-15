@@ -24,6 +24,9 @@ _MUTABLE_COLUMNS = frozenset(
         "reminder_at",
         "source",
         "extracted_text",
+        "client_id",
+        "project_id",
+        "tag_source",
     }
 )
 
@@ -46,6 +49,9 @@ class ActionItemRepository:
         reminder_at: float | None = None,
         source: str = "manual",
         extracted_text: str | None = None,
+        client_id: str | None = None,
+        project_id: str | None = None,
+        tag_source: str = "inherited",
     ) -> str:
         """Insert a new action item and return its ID."""
         if status not in _VALID_STATUSES:
@@ -62,8 +68,9 @@ class ActionItemRepository:
                 INSERT INTO action_items
                     (id, meeting_id, title, description, assignee, status, priority,
                      due_date, reminder_at, source, extracted_text,
+                     client_id, project_id, tag_source,
                      created_at, updated_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item_id,
@@ -77,6 +84,9 @@ class ActionItemRepository:
                     reminder_at,
                     source,
                     extracted_text,
+                    client_id,
+                    project_id,
+                    tag_source,
                     now,
                     now,
                     completed_at,

@@ -117,3 +117,19 @@ async def test_delete_extracted_scoped_to_meeting(ai_repo, meeting_id, repo):
 
     assert await ai_repo.list_by_meeting(meeting_id) == []
     assert len(await ai_repo.list_by_meeting(other)) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_tags(ai_repo, meeting_id):
+    item_id = await ai_repo.create(
+        meeting_id=meeting_id, title="Ship it", client_id="c1", project_id="p1"
+    )
+    item = await ai_repo.get(item_id)
+    assert item["client_id"] == "c1"
+    assert item["project_id"] == "p1"
+    assert item["tag_source"] == "inherited"
+
+    await ai_repo.update(item_id, client_id="c2", tag_source="manual")
+    item = await ai_repo.get(item_id)
+    assert item["client_id"] == "c2"
+    assert item["tag_source"] == "manual"
