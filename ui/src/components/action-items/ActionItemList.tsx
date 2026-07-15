@@ -212,6 +212,10 @@ export function ActionItemList() {
 
   const items = data?.items ?? [];
   const groups = groupItems(items, groupBy, { clients, projects });
+  const filterableProjects = projects?.filter(
+    (p) =>
+      !clientFilter || p.client_id === clientFilter || p.client_id === null,
+  );
 
   const selectClass =
     "px-2 py-1 text-xs bg-surface border border-border rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent";
@@ -268,7 +272,7 @@ export function ActionItemList() {
           onChange={(e) => setProjectFilter(e.target.value)}
         >
           <option value="">All projects</option>
-          {projects?.map((p) => (
+          {filterableProjects?.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
             </option>

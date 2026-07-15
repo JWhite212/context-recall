@@ -74,6 +74,11 @@ export function ActionItemCard({ item, onEdit }: Props) {
     ? projects?.find((p) => p.id === item.project_id)?.name
     : null;
 
+  const tagClientId = item.client_id ?? null;
+  const taggableProjects = projects?.filter(
+    (p) => !tagClientId || p.client_id === tagClientId || p.client_id === null,
+  );
+
   return (
     <div
       className="flex items-start gap-3 p-3 rounded-lg border border-border hover:bg-surface-raised transition-colors cursor-pointer"
@@ -157,7 +162,7 @@ export function ActionItemCard({ item, onEdit }: Props) {
               }
             >
               <option value="">No project</option>
-              {projects?.map((p) => (
+              {taggableProjects?.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
