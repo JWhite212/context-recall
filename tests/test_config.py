@@ -250,6 +250,12 @@ def test_calendar_config_import_defaults():
     assert cfg.excluded_calendars == []
 
 
+def test_calendar_enabled_defaults_true():
+    from src.utils.config import CalendarConfig
+
+    assert CalendarConfig().enabled is True
+
+
 def test_prep_config_sweep_defaults():
     from src.utils.config import PrepConfig
 
