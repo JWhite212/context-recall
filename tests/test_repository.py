@@ -592,3 +592,13 @@ async def test_reset_stale_reprocess_jobs_leaves_fresh_jobs_alone(
     assert reset == 0
     assert (await repo.get_meeting(mid)).status == "transcribing"
     assert await repo.is_reprocess_in_flight(mid) is True
+
+
+@pytest.mark.asyncio
+async def test_update_and_read_title_source_and_markdown_path(repo: MeetingRepository):
+    mid = await repo.create_meeting(started_at=1.0, status="complete")
+    await repo.update_meeting(mid, title_source="manual", markdown_path="/v/n.md")
+    m = await repo.get_meeting(mid)
+    assert m.title_source == "manual"
+    assert m.markdown_path == "/v/n.md"
+    assert m.to_dict()["title_source"] == "manual"
