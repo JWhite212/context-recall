@@ -185,3 +185,45 @@ def test_calendar_permission_endpoint(monkeypatch):
     body = resp.json()
     assert body["status"] == "authorized"
     assert body["granted"] is True
+
+
+class _RecordingSync:
+    """Mock sync job that records whether apply was called."""
+
+    def __init__(self):
+        self.apply_called = False
+
+    async def apply(self, start, end, events):
+        self.apply_called = True
+        return 1
+
+
+class _StaysUnavailableReader:
+    """Reader that stays unavailable even after list_events runs."""
+
+    def __init__(self):
+        self.available = False
+
+    def list_events(self, start, end, excluded_calendars=None):
+        return []
+
+    def list_calendars(self):
+        return []
+
+
+@pytest.mark.asyncio
+async def test_post_sync_skips_apply_when_reader_unavailable():
+    """Regression: when reader is unavailable (e.g. grant revoked),
+    sync.apply must be skipped to avoid pruning the mirror. Route
+    returns {synced: 0} without calling apply."""
+    sync_job = _RecordingSync()
+    reader = _StaysUnavailableReader()
+    calendar_routes.init(None, reader, sync_job)
+    app = FastAPI()
+    app.include_router(calendar_routes.router, dependencies=[Depends(verify_token)])
+
+    with TestClient(app) as c:
+        r = c.post("/api/calendar/sync", headers=_auth_headers())
+        assert r.status_code == 200
+        assert r.json() == {"synced": 0}
+    assert sync_job.apply_called is False

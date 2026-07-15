@@ -90,3 +90,28 @@ def test_sync_calendar_noop_without_reader_or_sync():
     server._calendar_sync = _RecordingSync()
     asyncio.run(server._sync_calendar())
     assert server._calendar_sync.applied is None
+
+
+class _UnavailableReader:
+    """Reader that stays unavailable even after list_events runs."""
+
+    def __init__(self):
+        self.available = False
+        self.calls = 0
+
+    def list_events(self, start, end, excluded_calendars=None):
+        self.calls += 1
+        return []
+
+
+def test_sync_calendar_skips_apply_when_reader_stays_unavailable():
+    """Regression: when reader is unavailable (e.g. grant revoked), list_events
+    may be called for lazy init, but sync.apply must be skipped to avoid
+    pruning the mirror. Only skip if unavailable AFTER list_events has run."""
+    server = ApiServer()
+    server._calendar_reader = _UnavailableReader()
+    server._calendar_sync = _RecordingSync()
+    with patch("src.api.server.load_config", return_value=_config()):
+        asyncio.run(server._sync_calendar())
+    assert server._calendar_reader.calls == 1
+    assert server._calendar_sync.applied is None

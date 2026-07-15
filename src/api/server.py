@@ -568,6 +568,8 @@ class ApiServer:
         excluded = config.excluded_calendars
         loop = asyncio.get_running_loop()
         events = await loop.run_in_executor(None, reader.list_events, now, end, excluded)
+        if not reader.available:
+            return
         await sync.apply(now, end, events)
 
     async def _sweep_prep(self) -> None:
