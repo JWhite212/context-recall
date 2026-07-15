@@ -12,6 +12,7 @@ from src.api.auth import verify_token
 from src.api.routes import meetings as meetings_routes
 from src.db.database import Database
 from src.db.repository import MeetingRepository
+from src.utils.config import AppConfig, MarkdownConfig, NotionConfig
 
 TEST_TOKEN = "test-token-for-meetings-extra"
 
@@ -136,3 +137,55 @@ async def test_patch_meeting_tags_missing_meeting_404s(client):
     c, _ = client
     resp = c.patch("/api/meetings/nope/tags", headers=_auth_headers(), json={"tags": ["x"]})
     assert resp.status_code == 404
+
+
+class _RecordingBus:
+    """Tiny event-bus stub for rename tests — records emitted events."""
+
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event):
+        self.events.append(event)
+
+
+@pytest.fixture
+async def meetings_app(db: Database, monkeypatch):
+    """Unauthenticated meetings app wired with a recording event bus and
+    both output writers disabled, so propagation is a no-op."""
+    repo = MeetingRepository(db)
+    bus = _RecordingBus()
+    disabled_config = AppConfig(
+        markdown=MarkdownConfig(enabled=False), notion=NotionConfig(enabled=False)
+    )
+    monkeypatch.setattr(meetings_routes, "load_config", lambda: disabled_config)
+    app = FastAPI()
+    meetings_routes.init(repo, event_bus=bus)
+    app.include_router(meetings_routes.router)
+    return app, repo, bus
+
+
+@pytest.mark.asyncio
+async def test_patch_meeting_title_sets_manual(meetings_app):
+    app, repo, bus = meetings_app
+    mid = await repo.create_meeting(started_at=1.0, status="complete")
+    await repo.update_meeting(mid, title="Auto Name", title_source="auto")
+
+    client = TestClient(app)
+    resp = client.patch(f"/api/meetings/{mid}", json={"title": "My Real Name"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["title"] == "My Real Name"
+    assert body["title_source"] == "manual"
+
+    m = await repo.get_meeting(mid)
+    assert m.title == "My Real Name"
+    assert m.title_source == "manual"
+    assert any(e["type"] == "meeting.renamed" and e["meeting_id"] == mid for e in bus.events)
+
+
+@pytest.mark.asyncio
+async def test_patch_meeting_title_404(meetings_app):
+    app, _repo, _bus = meetings_app
+    client = TestClient(app)
+    assert client.patch("/api/meetings/nope", json={"title": "x"}).status_code == 404
