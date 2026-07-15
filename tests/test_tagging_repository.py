@@ -77,6 +77,41 @@ async def test_delete_project_unassigns_meetings(cp_repo, repo):
 
 
 @pytest.mark.asyncio
+async def test_delete_client_untags_action_items(cp_repo, repo, db):
+    """The action_items FK is declarative-only (no real ON DELETE SET
+    NULL), so delete_client must null the tags manually — same as it
+    already does for meetings."""
+    from src.action_items.repository import ActionItemRepository
+
+    ai_repo = ActionItemRepository(db)
+    client_id = await cp_repo.create_client(name="Acme")
+    meeting_id = await repo.create_meeting(started_at=1000.0, status="complete")
+    item_id = await ai_repo.create(meeting_id=meeting_id, title="Do it", client_id=client_id)
+    other_id = await ai_repo.create(meeting_id=meeting_id, title="Keep", client_id="c-other")
+
+    assert await cp_repo.delete_client(client_id) is True
+
+    assert (await ai_repo.get(item_id))["client_id"] is None
+    assert (await ai_repo.get(other_id))["client_id"] == "c-other"  # untouched
+
+
+@pytest.mark.asyncio
+async def test_delete_project_untags_action_items(cp_repo, repo, db):
+    from src.action_items.repository import ActionItemRepository
+
+    ai_repo = ActionItemRepository(db)
+    project_id = await cp_repo.create_project(name="Portal")
+    meeting_id = await repo.create_meeting(started_at=1000.0, status="complete")
+    item_id = await ai_repo.create(meeting_id=meeting_id, title="Do it", project_id=project_id)
+    other_id = await ai_repo.create(meeting_id=meeting_id, title="Keep", project_id="p-other")
+
+    assert await cp_repo.delete_project(project_id) is True
+
+    assert (await ai_repo.get(item_id))["project_id"] is None
+    assert (await ai_repo.get(other_id))["project_id"] == "p-other"  # untouched
+
+
+@pytest.mark.asyncio
 async def test_latest_assignment_for_series_prefers_manual(cp_repo, repo):
     client_a = await cp_repo.create_client(name="A")
     client_b = await cp_repo.create_client(name="B")
