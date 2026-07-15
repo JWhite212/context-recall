@@ -142,9 +142,27 @@ export function ActionItemCard({ item, onEdit }: Props) {
               aria-label="Tag client"
               className="px-2 py-1 text-xs bg-surface border border-border rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
               value={item.client_id ?? ""}
-              onChange={(e) =>
-                tagMutation.mutate({ client_id: e.target.value || null })
-              }
+              onChange={(e) => {
+                const newClientId = e.target.value || null;
+                const patch: {
+                  client_id: string | null;
+                  project_id?: null;
+                } = { client_id: newClientId };
+                // Don't persist a project that belongs to a different
+                // client: clear it in the same PATCH. Client-less
+                // projects stay (they are taggable under any client).
+                if (newClientId && item.project_id) {
+                  const project = projects?.find(
+                    (p) => p.id === item.project_id,
+                  );
+                  const compatible =
+                    project != null &&
+                    (project.client_id === null ||
+                      project.client_id === newClientId);
+                  if (!compatible) patch.project_id = null;
+                }
+                tagMutation.mutate(patch);
+              }}
             >
               <option value="">No client</option>
               {clients?.map((c) => (
