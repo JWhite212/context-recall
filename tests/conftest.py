@@ -50,6 +50,30 @@ def _no_real_tcc_prompt(monkeypatch):
     monkeypatch.setattr("src.mic_permission.trigger_prompt_via_input_probe", lambda *a, **kw: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_calendar_tcc(monkeypatch):
+    """The suite must never trigger a macOS calendar-permission dialog.
+
+    With ``calendar.enabled`` defaulting True, every ``ContextRecall(...)``
+    construction builds a CalendarMatcher — and EventKit IS importable in a
+    dev venv, so without this guard that fires a real (blocking, up to 60s)
+    TCC request. EventKit is made invisible to both the matcher and the
+    reader (the reader imports ``_is_eventkit_available`` into its OWN
+    namespace, so it must be patched separately), status introspection
+    reports a benign non-authorized value, and a stray ``request_access()``
+    fails loudly. Tests that exercise these paths override per-test (their
+    monkeypatch wins because it is applied after this autouse fixture).
+    """
+    monkeypatch.setattr("src.calendar_matcher._is_eventkit_available", lambda: False)
+    monkeypatch.setattr("src.calendar_events.reader._is_eventkit_available", lambda: False)
+    monkeypatch.setattr("src.calendar_permission.authorization_status", lambda: "not_determined")
+
+    def _forbidden(**_kwargs):
+        raise AssertionError("calendar request_access() must never run inside the test suite")
+
+    monkeypatch.setattr("src.calendar_permission.request_access", _forbidden)
+
+
 class FakePlatform:
     """Controllable PlatformDetector for testing."""
 

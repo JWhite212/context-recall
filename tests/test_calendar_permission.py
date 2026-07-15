@@ -20,6 +20,11 @@ from src.calendar_permission import (
     ensure_calendar_access,
 )
 
+# Captured at import time (collection), BEFORE the conftest autouse guard
+# replaces them — lets tests of the real implementations bypass the guard
+# without weakening it for the rest of the suite.
+_REAL_AUTHORIZATION_STATUS = cp.authorization_status
+
 
 @pytest.mark.parametrize(
     "raw,expected",
@@ -38,7 +43,7 @@ def test_status_from_raw(raw, expected):
 
 def test_authorization_status_off_darwin(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
-    assert cp.authorization_status() == UNKNOWN
+    assert _REAL_AUTHORIZATION_STATUS() == UNKNOWN
 
 
 def test_ensure_calendar_access_authorized_has_no_problem(monkeypatch):
