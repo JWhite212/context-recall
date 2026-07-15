@@ -62,6 +62,12 @@ interface AppState {
   liveTitleOverride: string | null;
   setLiveTitleOverride: (title: string | null) => void;
 
+  /** started_at of the active recording session (from meeting.started).
+   *  Keys the pending liveTitleOverride to its own session so a reprocess
+   *  or back-to-back completion can never claim it (C1). Cleared on
+   *  pipeline.complete / pipeline.error / resetLive. */
+  liveSessionStartedAt: number | null;
+
   /** Live audio levels (RMS, 0.0–1.0). */
   audioLevels: AudioLevels;
 
@@ -92,6 +98,7 @@ export const useAppStore = create<AppState>((set) => ({
   liveCalendarTitle: null,
   liveTitleOverride: null,
   setLiveTitleOverride: (title) => set({ liveTitleOverride: title }),
+  liveSessionStartedAt: null,
   audioLevels: { system: 0, mic: 0 },
   modelProgress: {},
 
@@ -112,8 +119,18 @@ export const useAppStore = create<AppState>((set) => ({
   handleEvent: (event) => {
     switch (event.type) {
       case "meeting.started":
-        // New session — clear any warning left over from a previous run.
-        set({ pipelineWarning: null, warnings: [], lastPipelineError: null });
+        // New session — clear warnings AND any live titles left over from
+        // a previous run (I1: a stale override must never leak into this
+        // session's meeting). The daemon emits meeting.started BEFORE
+        // meeting.calendar_match, so the fresh calendar seed still lands.
+        set({
+          pipelineWarning: null,
+          warnings: [],
+          lastPipelineError: null,
+          liveCalendarTitle: null,
+          liveTitleOverride: null,
+          liveSessionStartedAt: event.started_at,
+        });
         break;
       case "pipeline.stage":
         set({ pipelineStage: event.stage });
@@ -154,15 +171,21 @@ export const useAppStore = create<AppState>((set) => ({
           liveSegments: [],
           liveCalendarTitle: null,
           liveTitleOverride: null,
+          liveSessionStartedAt: null,
           audioLevels: { system: 0, mic: 0 },
         });
         break;
       case "pipeline.error":
+        // The session is over — drop its live titles too (I1) so they
+        // cannot be applied to some later completion.
         set({
           pipelineStage: null,
           pipelineWarning: null,
           warnings: [],
           lastPipelineError: event.error,
+          liveCalendarTitle: null,
+          liveTitleOverride: null,
+          liveSessionStartedAt: null,
           audioLevels: { system: 0, mic: 0 },
         });
         break;
@@ -209,6 +232,7 @@ export const useAppStore = create<AppState>((set) => ({
       liveSegments: [],
       liveCalendarTitle: null,
       liveTitleOverride: null,
+      liveSessionStartedAt: null,
       audioLevels: { system: 0, mic: 0 },
     }),
 }));

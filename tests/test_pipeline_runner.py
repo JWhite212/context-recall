@@ -487,6 +487,37 @@ def test_summarisation_failure_marks_error(tmp_path, loop_thread):
     assert [e for e in events if e["type"] == "pipeline.error" and e["stage"] == "summarising"]
 
 
+def test_pipeline_complete_event_carries_session_identity(tmp_path, loop_thread):
+    """C1: pipeline.complete must carry is_reprocess + started_at so the
+    UI can key the pending live-title rename to the exact recording
+    session — a reprocess or back-to-back recording completion must be
+    distinguishable from the live session the user typed the title in."""
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    events, emit = _collect_events()
+    runner = _make_runner(_make_config(tmp_path), emit=emit, db=bridge)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1234.0, is_reprocess=True)
+
+    complete = next(e for e in events if e["type"] == "pipeline.complete")
+    assert complete["is_reprocess"] is True
+    assert complete["started_at"] == 1234.0
+
+
+def test_short_run_complete_event_carries_session_identity(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    events, emit = _collect_events()
+    transcriber = FakeTranscriber(transcript=_make_transcript(texts=("hi bye",)))
+    runner = _make_runner(_make_config(tmp_path), emit=emit, db=bridge, transcriber=transcriber)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1234.0)
+
+    complete = next(e for e in events if e["type"] == "pipeline.complete")
+    assert complete["is_reprocess"] is False
+    assert complete["started_at"] == 1234.0
+
+
 def test_transcript_segment_events_forwarded(tmp_path):
     events, emit = _collect_events()
     runner = _make_runner(_make_config(tmp_path), emit=emit)

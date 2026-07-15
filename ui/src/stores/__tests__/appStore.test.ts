@@ -216,3 +216,71 @@ describe("appStore — live calendar title (Feature 2 rename)", () => {
     expect(useAppStore.getState().liveTitleOverride).toBeNull();
   });
 });
+
+describe("appStore — live session keying (C1/I1)", () => {
+  beforeEach(() => {
+    resetStore();
+    useAppStore.setState({
+      liveCalendarTitle: null,
+      liveTitleOverride: null,
+      liveSessionStartedAt: null,
+    });
+  });
+
+  it("records the session key on meeting.started", () => {
+    useAppStore.getState().handleEvent({
+      type: "meeting.started",
+      started_at: 1234.5,
+    });
+    expect(useAppStore.getState().liveSessionStartedAt).toBe(1234.5);
+  });
+
+  it("meeting.started clears stale live titles from a previous session (I1)", () => {
+    // Leftovers from a session that errored or never completed must not
+    // leak into the next recording (the daemon emits meeting.started
+    // BEFORE meeting.calendar_match, so the fresh seed still lands).
+    useAppStore.setState({
+      liveCalendarTitle: "Old Sync",
+      liveTitleOverride: "Old Override",
+    });
+    useAppStore.getState().handleEvent({
+      type: "meeting.started",
+      started_at: 999,
+    });
+    const s = useAppStore.getState();
+    expect(s.liveCalendarTitle).toBeNull();
+    expect(s.liveTitleOverride).toBeNull();
+  });
+
+  it("pipeline.error clears live titles and the session key (I1)", () => {
+    useAppStore.setState({
+      liveCalendarTitle: "Sync",
+      liveTitleOverride: "Typed",
+      liveSessionStartedAt: 42,
+    });
+    useAppStore.getState().handleEvent({
+      type: "pipeline.error",
+      meeting_id: "m1",
+      stage: "transcribing",
+      error: "boom",
+    });
+    const s = useAppStore.getState();
+    expect(s.liveCalendarTitle).toBeNull();
+    expect(s.liveTitleOverride).toBeNull();
+    expect(s.liveSessionStartedAt).toBeNull();
+  });
+
+  it("pipeline.complete and resetLive clear the session key", () => {
+    useAppStore.setState({ liveSessionStartedAt: 42 });
+    useAppStore.getState().handleEvent({
+      type: "pipeline.complete",
+      meeting_id: "m1",
+      title: "x",
+    });
+    expect(useAppStore.getState().liveSessionStartedAt).toBeNull();
+
+    useAppStore.setState({ liveSessionStartedAt: 43 });
+    useAppStore.getState().resetLive();
+    expect(useAppStore.getState().liveSessionStartedAt).toBeNull();
+  });
+});
