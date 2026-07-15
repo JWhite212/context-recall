@@ -40,6 +40,8 @@ class UpdateActionItemRequest(BaseModel):
     priority: Literal["low", "medium", "high", "urgent"] | None = None
     due_date: str | None = None
     reminder_at: str | None = None
+    client_id: str | None = None
+    project_id: str | None = None
 
 
 @router.get("/api/action-items")
@@ -86,6 +88,8 @@ async def update_action_item(item_id: str, body: UpdateActionItemRequest):
     if not await repo.get(item_id):
         raise HTTPException(status_code=404, detail="Action item not found")
     fields = body.model_dump(exclude_none=True)
+    if "client_id" in fields or "project_id" in fields:
+        fields["tag_source"] = "manual"
     if fields:
         await repo.update(item_id, **fields)
     return await repo.get(item_id)
