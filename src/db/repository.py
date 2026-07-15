@@ -46,6 +46,8 @@ _MUTABLE_COLUMNS = frozenset(
         "assignment_confidence",
         "template_name",
         "template_source",
+        "title_source",
+        "markdown_path",
         "updated_at",
     }
 )
@@ -83,6 +85,8 @@ class MeetingRecord:
     assignment_confidence: float = 0.0
     template_name: str = ""
     template_source: str = ""
+    title_source: str = "auto"
+    markdown_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -112,6 +116,8 @@ class MeetingRecord:
             "assignment_confidence": self.assignment_confidence,
             "template_name": self.template_name,
             "template_source": self.template_source,
+            "title_source": self.title_source,
+            "markdown_path": self.markdown_path,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -168,6 +174,13 @@ class MeetingRecord:
         except (IndexError, KeyError):
             pass
 
+        title_source = "auto"
+        markdown_path = ""
+        if "title_source" in row.keys():
+            title_source = row["title_source"] or "auto"
+        if "markdown_path" in row.keys():
+            markdown_path = row["markdown_path"] or ""
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -197,6 +210,8 @@ class MeetingRecord:
             assignment_confidence=assignment_confidence,
             template_name=template_name,
             template_source=template_source,
+            title_source=title_source,
+            markdown_path=markdown_path,
         )
 
 

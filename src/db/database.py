@@ -23,7 +23,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 _vec_available = False
 
@@ -636,6 +636,9 @@ class Database:
             # Per-meeting summary template (v15).
             await _safe_add_column(self.conn, "meetings", "template_name", "TEXT", "''")
             await _safe_add_column(self.conn, "meetings", "template_source", "TEXT", "''")
+            # Rename + auto-title (v21).
+            await _safe_add_column(self.conn, "meetings", "title_source", "TEXT", "'auto'")
+            await _safe_add_column(self.conn, "meetings", "markdown_path", "TEXT", "''")
             # Keyword trackers (v14).
             await self.conn.executescript(TRACKERS_SQL)
             await self.conn.executescript(TRACKER_HITS_SQL)
@@ -878,9 +881,28 @@ class Database:
                             "UPDATE meetings SET tags = ? WHERE id = ?",
                             (json.dumps(existing), row["id"]),
                         )
-            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.execute("PRAGMA user_version = 20")
             await self.conn.commit()
             logger.info("Database migrated to version 20 (fold label into tags)")
             current_version = 20
+
+        if current_version < 21:
+            # Rename + auto-title: title_source ('auto'|'manual') so the
+            # pipeline's auto-title never clobbers a user rename, and
+            # markdown_path so a rename can find + rename the .md file.
+            # Guard on the table's existence — _safe_add_column's ALTER
+            # hard-fails on a missing table, and a DB that never ran the v1
+            # bootstrap (or a minimal migration fixture) may lack `meetings`
+            # entirely.
+            cur = await self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='meetings'"
+            )
+            if await cur.fetchone() is not None:
+                await _safe_add_column(self.conn, "meetings", "title_source", "TEXT", "'auto'")
+                await _safe_add_column(self.conn, "meetings", "markdown_path", "TEXT", "''")
+            await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            await self.conn.commit()
+            logger.info("Database migrated to version 21 (rename + auto-title)")
+            current_version = 21
         else:
             logger.debug("Database schema up to date (version %d)", current_version)
