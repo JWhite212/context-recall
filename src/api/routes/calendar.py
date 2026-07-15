@@ -95,5 +95,7 @@ async def sync_calendar():
     excluded = config.excluded_calendars
     loop = asyncio.get_running_loop()
     events = await loop.run_in_executor(None, _reader.list_events, now, end, excluded)
+    if not getattr(_reader, "available", False):
+        return {"synced": 0}
     synced = await _sync_job.apply(now, end, events)
     return {"synced": synced}
