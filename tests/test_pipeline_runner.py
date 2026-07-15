@@ -12,7 +12,9 @@ import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 from src.diariser import EnergyDiariser
 from src.pipeline_runner import (
@@ -44,6 +46,16 @@ def _make_transcript(texts=("hello world this is a test",), speakers=None):
         language_probability=0.99,
         duration_seconds=float(len(texts) * 2),
     )
+
+
+def _make_source_wavs(tmp_path, seconds: float = 3.0, sr: int = 16000):
+    """Write tiny real system/mic WAVs so the energy diariser can run."""
+    system = tmp_path / "m_system.wav"
+    mic = tmp_path / "m_mic.wav"
+    n = int(seconds * sr)
+    sf.write(str(system), (np.random.randn(n) * 0.01).astype("float32"), sr)
+    sf.write(str(mic), (np.random.randn(n) * 0.5).astype("float32"), sr)
+    return system, mic
 
 
 def _make_summary(title="Test Meeting"):
@@ -116,9 +128,17 @@ class RecordingDiariser:
     def __init__(self):
         self.calls = []
 
-    def diarise(self, transcript, audio_path):
-        self.calls.append((transcript, audio_path))
+    def diarise(self, transcript, audio_path, **kwargs):
+        self.calls.append((transcript, audio_path, kwargs))
         return transcript
+
+
+class BoomDiariser:
+    """Fake non-energy backend that always raises at runtime — stands in
+    for a pyannote model-load / gated-model failure."""
+
+    def diarise(self, transcript, audio_path, **kwargs):
+        raise RuntimeError("model load failed")
 
 
 @pytest.fixture(autouse=True)
@@ -594,16 +614,36 @@ def test_energy_diariser_failure_emits_warning_and_continues(tmp_path, loop_thre
     assert warnings and warnings[0]["source"] == "diarisation"
 
 
-def test_non_energy_diariser_called_without_mic_kwarg(tmp_path):
+def test_non_energy_diariser_receives_mic_and_derived_system_paths(tmp_path):
+    config = _make_config(tmp_path)
+    config.audio.temp_audio_dir = str(tmp_path)
+    (tmp_path / "a_system.wav").write_bytes(b"x" * 100)
     diariser = RecordingDiariser()
-    runner = _make_runner(_make_config(tmp_path), diariser=diariser)
+    runner = _make_runner(config, diariser=diariser)
 
     result = runner.run(
         tmp_path / "a.wav", "m1", started_at=1000.0, mic_audio_path=tmp_path / "mic.wav"
     )
 
     assert result.status == "complete"
-    assert len(diariser.calls) == 1  # would TypeError if mic kwarg were passed
+    assert len(diariser.calls) == 1
+    _, _, kwargs = diariser.calls[0]
+    assert kwargs["mic_audio_path"] == tmp_path / "mic.wav"
+    assert kwargs["system_audio_path"] == tmp_path / "a_system.wav"
+
+
+def test_diarise_degrades_to_energy_when_pyannote_raises(tmp_path):
+    events, emit = _collect_events()
+    runner = _make_runner(_make_config(tmp_path), emit=emit, diariser=BoomDiariser())
+    transcript = _make_transcript()
+    sys_wav, mic_wav = _make_source_wavs(tmp_path)
+
+    runner._diarise(transcript, sys_wav, mic_wav, "m1")
+
+    # Energy fallback labelled the segments (not left blank / no crash).
+    assert any(seg.speaker for seg in transcript.segments)
+    warnings = [e for e in events if e["type"] == "pipeline.warning"]
+    assert warnings and warnings[0]["source"] == "diarisation"
 
 
 # ----------------------------------------------------------------------

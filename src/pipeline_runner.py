@@ -482,17 +482,29 @@ class PipelineRunner:
             if isinstance(self._diariser, EnergyDiariser):
                 self._diariser.diarise(transcript, audio_path, mic_audio_path=mic_audio_path)
             else:
-                # PyAnnote works from the combined file and takes no
-                # mic path (passing one was a latent TypeError).
-                self._diariser.diarise(transcript, audio_path)
+                system_audio_path = derive_source_paths(
+                    audio_path, self._config.audio.temp_audio_dir
+                ).get("system")
+                self._diariser.diarise(
+                    transcript,
+                    audio_path,
+                    mic_audio_path=mic_audio_path,
+                    system_audio_path=system_audio_path,
+                )
         except Exception as e:
-            logger.error("Diarisation failed: %s", e, exc_info=True)
+            logger.warning("Diarisation backend failed (%s) — degrading to energy for this run", e)
             self._emit(
                 "pipeline.warning",
                 meeting_id=meeting_id,
                 source="diarisation",
-                message=f"Diarisation skipped: {e}",
+                message="Speaker separation unavailable; used basic Me/Remote labels.",
             )
+            try:
+                EnergyDiariser(self._config.diarisation).diarise(
+                    transcript, audio_path, mic_audio_path=mic_audio_path
+                )
+            except Exception as e2:
+                logger.warning("Energy fallback also failed: %s", e2)
 
     def _reapply_speaker_mappings(self, transcript, meeting_id: str | None) -> None:
         """Re-apply stored speaker renames to a freshly generated transcript.
