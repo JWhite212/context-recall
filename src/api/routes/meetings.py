@@ -248,6 +248,12 @@ async def set_meeting_tags(meeting_id: str, body: SetTagsRequest):
 
 @router.patch("/api/meetings/{meeting_id}", summary="Rename a meeting")
 async def rename_meeting(meeting_id: str, body: RenameMeetingRequest):
+    # Pydantic's min_length=1 lets "   " through — reject a title that is
+    # empty after stripping, before touching the row (I5).
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Title must not be empty")
+
     meeting = await _repo.get_meeting(meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
@@ -259,7 +265,7 @@ async def rename_meeting(meeting_id: str, body: RenameMeetingRequest):
     return await apply_rename(
         _repo,
         meeting,
-        body.title.strip(),
+        title,
         config=load_config(),
         event_bus=_event_bus,
         loop=asyncio.get_running_loop(),
