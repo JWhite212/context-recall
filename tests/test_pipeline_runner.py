@@ -9,6 +9,7 @@ and the DB bridge's degrade-to-no-op behaviour.
 
 import asyncio
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -441,6 +442,21 @@ def test_writers_invoked_and_warning_emitted_on_writer_error(tmp_path):
     warnings = [e for e in events if e["type"] == "pipeline.warning"]
     assert warnings and warnings[0]["source"] == "markdown"
     assert "disk full" in warnings[0]["message"]
+
+
+def test_writers_persist_markdown_path(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    md = FakeWriter(result=Path("/vault/note.md"))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, md_writer=md)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0)
+
+    _drain(loop_thread)
+    path_updates = [
+        c.kwargs for c in repo.update_meeting.call_args_list if "markdown_path" in c.kwargs
+    ]
+    assert path_updates and path_updates[0]["markdown_path"] == "/vault/note.md"
 
 
 def test_notion_reprocess_archives_old_page_and_persists_new_id(tmp_path, loop_thread):
