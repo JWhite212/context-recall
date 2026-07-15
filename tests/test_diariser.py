@@ -270,10 +270,10 @@ class TestFactory:
             create_diariser(config)
 
     def test_factory_pyannote_not_installed(self):
-        """Factory raises ValueError when pyannote is not installed."""
+        """Factory degrades to EnergyDiariser when pyannote is not installed."""
         config = DiarisationConfig(enabled=True, backend="pyannote")
-        with pytest.raises(ValueError, match="pyannote.audio"):
-            create_diariser(config)
+        diariser = create_diariser(config)
+        assert isinstance(diariser, EnergyDiariser)
 
     def test_factory_pyannote_with_mock(self):
         """When pyannote is available, factory returns PyAnnoteDiariser."""
@@ -287,3 +287,21 @@ class TestFactory:
             config = DiarisationConfig(enabled=True, backend="pyannote")
             diariser = create_diariser(config)
             assert type(diariser).__name__ == "PyAnnoteDiariser"
+
+
+def test_create_diariser_degrades_to_energy_without_pyannote(monkeypatch):
+    import builtins
+
+    from src.diariser import EnergyDiariser, create_diariser
+    from src.utils.config import DiarisationConfig
+
+    real_import = builtins.__import__
+
+    def _no_pyannote(name, *args, **kwargs):
+        if name.startswith("pyannote"):
+            raise ImportError("no pyannote")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_pyannote)
+    d = create_diariser(DiarisationConfig(backend="pyannote"))
+    assert isinstance(d, EnergyDiariser)
