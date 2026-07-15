@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { CalendarsSection } from "../CalendarsSection";
 import { makeWrapper } from "../../../test/queryWrapper";
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(async () => {}),
+}));
 
 describe("CalendarsSection", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -59,6 +64,7 @@ describe("CalendarsSection", () => {
       });
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
+    vi.mocked(openUrl).mockClear();
   });
 
   it("lists available calendars", async () => {
@@ -139,6 +145,26 @@ describe("CalendarsSection", () => {
       screen.getByRole("button", { name: /open system settings/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /sync now/i })).toBeDisabled();
+  });
+
+  it("clicking Open System Settings opens the Calendars pane via the opener plugin", async () => {
+    permissionStatus = "denied";
+    permissionGranted = false;
+    render(<CalendarsSection />, { wrapper: makeWrapper() });
+
+    const btn = await screen.findByRole("button", {
+      name: /open system settings/i,
+    });
+    fireEvent.click(btn);
+
+    // Must go through the Tauri opener plugin — a plain window.open() of a
+    // custom x-apple.systempreferences: scheme is silently dropped by the
+    // WKWebview and never reaches macOS.
+    await waitFor(() =>
+      expect(openUrl).toHaveBeenCalledWith(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars",
+      ),
+    );
   });
 
   it("does not show the permission banner when access is granted", async () => {
