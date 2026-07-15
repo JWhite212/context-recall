@@ -410,6 +410,16 @@ export async function setMeetingTags(
   });
 }
 
+export async function renameMeeting(
+  id: string,
+  title: string,
+): Promise<{ meeting_id: string; title: string; title_source: string }> {
+  return request(`/api/meetings/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 export async function getMeetingTags(): Promise<string[]> {
   const data = await request<{ tags: string[] }>("/api/meetings/tags");
   return data.tags;
