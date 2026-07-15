@@ -71,15 +71,42 @@ class DbBridge:
         """Fire-and-forget meeting update with loud failure logging (C3)."""
         if not meeting_id or self._repo is None:
             return
+        self._submit_write(
+            lambda: self._repo.update_meeting(meeting_id, **fields),
+            meeting_id,
+            sorted(fields.keys()),
+        )
+
+    def update_title_if_auto(self, meeting_id: str | None, title: str) -> None:
+        """Fire-and-forget conditional auto-title write (I4).
+
+        Delegates to the repository's atomic
+        ``UPDATE ... WHERE title_source != 'manual'`` so a rename issued
+        while the pipeline is in flight always wins over the auto-title.
+        """
+        if not meeting_id or self._repo is None:
+            return
+        self._submit_write(
+            lambda: self._repo.update_title_if_auto(meeting_id, title),
+            meeting_id,
+            ["title (if auto)", "title_source"],
+        )
+
+    def _submit_write(self, make_coro, meeting_id: str, fields_desc: list[str]) -> None:
+        """Schedule a repo write on the API loop; log loudly if dropped.
+
+        ``make_coro`` is a zero-arg factory so no coroutine is ever created
+        (and left un-awaited) when the loop is already gone.
+        """
         if self._loop is None or self._loop.is_closed():
             logger.error(
                 "DB update for meeting %s dropped: event loop is %s. Fields lost: %s",
                 meeting_id,
                 "closed" if self._loop and self._loop.is_closed() else "missing",
-                sorted(fields.keys()),
+                fields_desc,
             )
             return
-        coro = self._repo.update_meeting(meeting_id, **fields)
+        coro = make_coro()
         try:
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         except Exception:
@@ -281,7 +308,6 @@ class PipelineRunner:
             )
             self._update(
                 meeting_id,
-                title=SHORT_TRANSCRIPT_TITLE,
                 ended_at=started_at + duration_seconds,
                 duration_seconds=duration_seconds,
                 status="complete",
@@ -293,6 +319,14 @@ class PipelineRunner:
                 language=transcript.language,
                 word_count=transcript.word_count,
             )
+            # Title precedence is enforced at write time (I3/I4): the
+            # conditional write never clobbers a manual rename, and
+            # preserve_title skips the write entirely on reprocess.
+            if not preserve_title:
+                short_title = (calendar_fields or {}).get(
+                    "calendar_event_title"
+                ) or SHORT_TRANSCRIPT_TITLE
+                self._update_title_if_auto(meeting_id, short_title)
             self._update_fts(meeting_id)
             self._emit("pipeline.complete", meeting_id=meeting_id, title=SHORT_TRANSCRIPT_TITLE)
             return RunResult("short", title=SHORT_TRANSCRIPT_TITLE)
@@ -353,16 +387,24 @@ class PipelineRunner:
             template_name=template.name if template else "",
             template_source=template_source,
         )
-        if not preserve_title:
-            calendar_title = (calendar_fields or {}).get("calendar_event_title") or ""
-            persist_fields["title"] = calendar_title or summary.title or "Untitled Meeting"
-            persist_fields["title_source"] = "auto"
         self._update(meeting_id, **persist_fields)
         if calendar_fields and meeting_id:
             try:
                 self._update(meeting_id, **calendar_fields)
             except Exception as e:
                 logger.warning("Failed to save calendar data: %s", e)
+        # Title precedence is enforced at write time, not via a start-of-run
+        # snapshot (I4): the conditional UPDATE ... WHERE title_source !=
+        # 'manual' means a rename issued while this pipeline was in flight
+        # is never clobbered. preserve_title stays as the reprocess-time
+        # fast skip for meetings already known to be manually titled.
+        if not preserve_title:
+            auto_title = (
+                (calendar_fields or {}).get("calendar_event_title")
+                or summary.title
+                or "Untitled Meeting"
+            )
+            self._update_title_if_auto(meeting_id, auto_title)
         self._update_fts(meeting_id)
 
         # Step 5: Embed transcript segments for semantic search.
@@ -387,6 +429,10 @@ class PipelineRunner:
     def _update(self, meeting_id: str | None, **fields) -> None:
         if self._db is not None:
             self._db.update_meeting(meeting_id, **fields)
+
+    def _update_title_if_auto(self, meeting_id: str | None, title: str) -> None:
+        if self._db is not None:
+            self._db.update_title_if_auto(meeting_id, title)
 
     def _update_fts(self, meeting_id: str | None) -> None:
         if meeting_id and self._db_available():

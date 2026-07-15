@@ -271,6 +271,23 @@ class MeetingRepository:
             )
             await self._db.conn.commit()
 
+    async def update_title_if_auto(self, meeting_id: str, title: str) -> None:
+        """Set the pipeline's auto-derived title — unless the user renamed.
+
+        A single atomic statement: the ``WHERE title_source != 'manual'``
+        guard means a rename issued while a pipeline run was in flight
+        (meetings are renameable while transcribing/summarising) can never
+        be clobbered by the persist step (I4). NULL ``title_source`` is
+        treated as auto, defensively.
+        """
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                "UPDATE meetings SET title = ?, title_source = 'auto', updated_at = ?"
+                " WHERE id = ? AND COALESCE(title_source, 'auto') != 'manual'",
+                (title, time.time(), meeting_id),
+            )
+            await self._db.conn.commit()
+
     async def get_meeting(self, meeting_id: str) -> MeetingRecord | None:
         """Fetch a single meeting by ID."""
         cursor = await self._db.conn.execute("SELECT * FROM meetings WHERE id = ?", (meeting_id,))

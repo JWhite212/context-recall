@@ -48,6 +48,41 @@ async def test_update_meeting_invalid_field(repo: MeetingRepository):
 
 
 @pytest.mark.asyncio
+async def test_update_title_if_auto_writes_when_not_manual(repo: MeetingRepository):
+    meeting_id = await repo.create_meeting(started_at=time.time())
+    await repo.update_title_if_auto(meeting_id, "Auto Title")
+    meeting = await repo.get_meeting(meeting_id)
+    assert meeting.title == "Auto Title"
+    assert meeting.title_source == "auto"
+
+
+@pytest.mark.asyncio
+async def test_update_title_if_auto_never_clobbers_manual(repo: MeetingRepository):
+    """I4: the WHERE title_source != 'manual' guard is atomic at the DB —
+    a manually-renamed meeting keeps its title."""
+    meeting_id = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(meeting_id, title="My Name", title_source="manual")
+    await repo.update_title_if_auto(meeting_id, "Pipeline Title")
+    meeting = await repo.get_meeting(meeting_id)
+    assert meeting.title == "My Name"
+    assert meeting.title_source == "manual"
+
+
+@pytest.mark.asyncio
+async def test_update_title_if_auto_treats_null_source_as_auto(repo: MeetingRepository):
+    """A NULL title_source (defensive) must still count as auto-titled."""
+    meeting_id = await repo.create_meeting(started_at=time.time())
+    await repo._db.conn.execute(
+        "UPDATE meetings SET title_source = NULL WHERE id = ?", (meeting_id,)
+    )
+    await repo._db.conn.commit()
+    await repo.update_title_if_auto(meeting_id, "Auto Title")
+    meeting = await repo.get_meeting(meeting_id)
+    assert meeting.title == "Auto Title"
+    assert meeting.title_source == "auto"
+
+
+@pytest.mark.asyncio
 async def test_update_meeting_tags(repo: MeetingRepository):
     meeting_id = await repo.create_meeting(started_at=time.time())
     await repo.update_meeting(meeting_id, tags=["standup", "team"])
