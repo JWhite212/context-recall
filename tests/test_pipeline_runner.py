@@ -1401,6 +1401,62 @@ def test_llm_auto_assignment_skipped_when_already_assigned(tmp_path, loop_thread
     assigner_cls.assert_not_called()
 
 
+def test_extracted_items_inherit_llm_assigned_client_project(tmp_path, loop_thread, monkeypatch):
+    """LLM auto-assignment must run BEFORE action-item extraction so a
+    meeting the deterministic pre-pass left blank still hands its freshly
+    assigned client/project down to the extracted items (I2)."""
+    import src.tagging.assigner as assigner_mod
+    import src.tagging.repository as cp_mod
+    from src.tagging.assigner import Assignment
+
+    monkeypatch.setattr(cp_mod, "ClientProjectRepository", FakeCPRepo)
+
+    class FakeLlmAssigner:
+        def __init__(self, summarisation_config, config):
+            pass
+
+        def assign(self, roster, *, title, summary_markdown, attendees):
+            return Assignment(
+                client_id="c-acme", project_id="p-portal", confidence=0.9, method="llm"
+            )
+
+    monkeypatch.setattr(assigner_mod, "LlmAssigner", FakeLlmAssigner)
+
+    # Stateful meeting record: update_meeting mutates it, so the later
+    # get_meeting inside _extract_action_items sees the fresh assignment.
+    meeting = _unassigned_meeting()
+    repo = _make_repo()
+    repo.get_meeting = AsyncMock(return_value=meeting)
+
+    async def _apply_update(meeting_id, **fields):
+        for key, value in fields.items():
+            setattr(meeting, key, value)
+
+    repo.update_meeting = AsyncMock(side_effect=_apply_update)
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    config.action_items.auto_extract = True
+    runner = _make_runner(config, db=bridge)
+
+    ai_repo = MagicMock()
+    ai_repo.delete_extracted_for_meeting = AsyncMock()
+    ai_repo.create = AsyncMock()
+
+    with (
+        patch("src.action_items.extractor.ActionItemExtractor") as extractor_cls,
+        patch("src.action_items.repository.ActionItemRepository", return_value=ai_repo),
+        patch("src.analytics.engine.AnalyticsEngine") as engine_cls,
+    ):
+        extractor_cls.return_value.extract.return_value = [{"title": "Do the thing"}]
+        engine_cls.return_value.refresh_period = AsyncMock()
+        asyncio.run(runner._post_process_async("m1", _make_transcript(), 1000.0, False))
+
+    kwargs = ai_repo.create.call_args.kwargs
+    assert kwargs["client_id"] == "c-acme"
+    assert kwargs["project_id"] == "p-portal"
+    assert kwargs["tag_source"] == "inherited"
+
+
 def test_tracker_scan_runs_in_post_processing(tmp_path, loop_thread, monkeypatch):
     import src.trackers.repository as tracker_repo_mod
 
