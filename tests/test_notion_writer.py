@@ -497,3 +497,36 @@ class TestNotionPageIdentity:
     def test_archive_page_empty_id_is_noop(self):
         writer = _make_writer(api_key="k", database_id="db")
         assert writer.archive_page("") is False
+
+
+class TestNotionUpdatePageTitle:
+    """update_page_title(): best-effort PATCH of the title property."""
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_update_page_title_patches_title_property(self, mock_client_cls):
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+
+        writer = _make_writer(api_key="k", database_id="db")
+        ok = writer.update_page_title("page-123", "Renamed Meeting")
+
+        assert ok is True
+        title_prop = writer._config.properties["title"]
+        mock_client.pages.update.assert_called_once_with(
+            page_id="page-123",
+            properties={title_prop: {"title": NotionWriter._rich_text("Renamed Meeting")}},
+        )
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_update_page_title_failure_is_swallowed(self, mock_client_cls):
+        """A page the user already deleted must not raise."""
+        mock_client = MagicMock()
+        mock_client.pages.update.side_effect = RuntimeError("page gone")
+        mock_client_cls.return_value = mock_client
+
+        writer = _make_writer(api_key="k", database_id="db")
+        assert writer.update_page_title("gone-page", "New Title") is False
+
+    def test_update_page_title_empty_id_is_noop(self):
+        writer = _make_writer(api_key="k", database_id="db")
+        assert writer.update_page_title("", "New Title") is False
