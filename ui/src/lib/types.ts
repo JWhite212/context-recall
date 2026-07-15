@@ -480,6 +480,9 @@ export interface ActionItem {
   reminder_at: string | null;
   source: "extracted" | "manual";
   extracted_text: string | null;
+  client_id?: string | null;
+  project_id?: string | null;
+  tag_source?: string;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
