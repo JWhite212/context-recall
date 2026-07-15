@@ -85,3 +85,20 @@ def test_request_access_at_boot_requests_then_polls(monkeypatch):
     result = cp.request_access_at_boot(timeout_seconds=100.0, poll_interval=0.0)
     assert result == AUTHORIZED
     assert called["n"] == 1
+
+
+def test_boot_helper_delegates_to_module(monkeypatch):
+    """main.py's boot helper must call request_access_at_boot and log,
+    not reimplement polling."""
+    import src.main as main_mod
+
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        main_mod.calendar_permission,
+        "request_access_at_boot",
+        lambda **_kw: calls.__setitem__("n", calls["n"] + 1) or AUTHORIZED,
+    )
+    # Unbound call with a bare namespace as `self` — the helper uses no
+    # instance state.
+    main_mod.ContextRecall._request_calendar_permission_at_boot(object())
+    assert calls["n"] == 1

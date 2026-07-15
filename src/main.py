@@ -32,6 +32,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
+from src import calendar_permission
 from src.audio_capture import AudioCapture, AudioCaptureError
 from src.audio_cleanup import cleanup_temp_audio
 from src.audio_monitor import AudioMonitor
@@ -372,6 +373,15 @@ class ContextRecall:
                 break
             time.sleep(2.0)
         logger.info("Microphone permission at boot: %s", status)
+
+    def _request_calendar_permission_at_boot(self) -> None:
+        """Raise the calendar TCC prompt at daemon start when undetermined.
+
+        Runs on its own daemon thread — the dialog can sit unanswered for
+        minutes. Delegates the request+poll to calendar_permission so the
+        logic stays unit-tested there."""
+        status = calendar_permission.request_access_at_boot()
+        logger.info("Calendar permission at boot: %s", status)
 
     def _on_meeting_start(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting begins."""
@@ -1081,6 +1091,14 @@ class ContextRecall:
         threading.Thread(
             target=self._request_mic_permission_at_boot,
             name="mic-permission",
+            daemon=True,
+        ).start()
+
+        # Trigger the calendar permission dialog at boot too, on its own
+        # thread for the same reason (the dialog can sit unanswered).
+        threading.Thread(
+            target=self._request_calendar_permission_at_boot,
+            name="calendar-permission",
             daemon=True,
         ).start()
 
