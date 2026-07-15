@@ -37,6 +37,8 @@ export interface Meeting {
   created_at: number;
   updated_at: number;
   calendar_event_title: string;
+  title_source?: string;
+  markdown_path?: string;
   attendees_json: string;
   calendar_confidence: number;
   teams_join_url: string;
@@ -449,7 +451,8 @@ export type WSEvent =
       body: string;
       reference_id: string | null;
     }
-  | { type: "action_items.extracted"; meeting_id: string; count: number };
+  | { type: "action_items.extracted"; meeting_id: string; count: number }
+  | { type: "meeting.renamed"; meeting_id: string; title: string };
 
 /** Action item types. */
 export type ActionItemStatus = "open" | "in_progress" | "done" | "cancelled";
