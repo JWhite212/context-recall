@@ -1,8 +1,33 @@
+import sys
+import types
+from types import SimpleNamespace
+
 from src.calendar_events.reader import (
     CalendarReader,
     _events_from_extracted,
     is_meeting_like,
 )
+
+
+def _fake_eventkit() -> types.ModuleType:
+    """Minimal EventKit stand-in: enough for _ensure_store to alloc/init."""
+
+    class _Store:
+        pass
+
+    mod = types.ModuleType("EventKit")
+    mod.EKEntityTypeEvent = 0
+    mod.EKEventStore = SimpleNamespace(alloc=lambda: SimpleNamespace(init=lambda: _Store()))
+    return mod
+
+
+def _eventkit_reader_env(monkeypatch, status):
+    """Make EventKit 'importable' for the reader and pin the TCC status.
+
+    `status` is a dict {"v": ...} so tests can flip it mid-test."""
+    monkeypatch.setattr("src.calendar_events.reader._is_eventkit_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "EventKit", _fake_eventkit())
+    monkeypatch.setattr("src.calendar_permission.authorization_status", lambda: status["v"])
 
 
 def _extracted(**over):
@@ -66,3 +91,70 @@ def test_reader_unavailable_returns_empty_without_eventkit(monkeypatch):
     assert reader.available is False
     assert reader.list_events(0.0, 10_000.0) == []
     assert reader.list_calendars() == []
+
+
+def test_reader_already_authorized_skips_blocking_request(monkeypatch):
+    """When macOS already reports the grant, the store must be created
+    directly — no 60s blocking request. The conftest guard raises if
+    request_access fires, so passing proves the fast path."""
+    _eventkit_reader_env(monkeypatch, {"v": "authorized"})
+    reader = CalendarReader()
+    reader._ensure_store()
+    assert reader.available is True
+
+
+def test_reader_retries_after_unanswered_request(monkeypatch):
+    """Regression (I1): a not-yet-granted/timed-out request must NOT set
+    the permanent init latch — the next call (e.g. the sync tick after the
+    boot poller obtains the grant) must retry and succeed."""
+    status = {"v": "not_determined"}
+    _eventkit_reader_env(monkeypatch, status)
+    requests = {"n": 0}
+
+    def _unanswered(**_kw):
+        requests["n"] += 1
+        return None  # dialog not answered within the timeout
+
+    monkeypatch.setattr("src.calendar_permission.request_access", _unanswered)
+    reader = CalendarReader()
+    reader._ensure_store()
+    assert reader.available is False
+    assert requests["n"] == 1
+
+    # The boot poller (or the user) has now granted access.
+    status["v"] = "authorized"
+    reader._ensure_store()
+    assert reader.available is True
+    assert requests["n"] == 1  # fast path — no second request
+
+
+def test_reader_request_granted_initialises_and_latches(monkeypatch):
+    status = {"v": "not_determined"}
+    _eventkit_reader_env(monkeypatch, status)
+    requests = {"n": 0}
+
+    def _granted(**_kw):
+        requests["n"] += 1
+        return True
+
+    monkeypatch.setattr("src.calendar_permission.request_access", _granted)
+    reader = CalendarReader()
+    reader._ensure_store()
+    assert reader.available is True
+    reader._ensure_store()  # latched — no further request
+    assert requests["n"] == 1
+
+
+def test_reader_denied_never_requests_and_heals_on_settings_grant(monkeypatch):
+    """A determined-but-blocked status (denied) cannot prompt, so no
+    request may fire (the conftest guard raises if it does) — and it must
+    not latch: granting later in System Settings self-heals."""
+    status = {"v": "denied"}
+    _eventkit_reader_env(monkeypatch, status)
+    reader = CalendarReader()
+    reader._ensure_store()
+    assert reader.available is False
+
+    status["v"] = "authorized"
+    reader._ensure_store()
+    assert reader.available is True
