@@ -726,6 +726,7 @@ class PipelineRunner:
     ) -> None:
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="writing")
 
+        md_path: str | None = None
         for source, writer in (
             ("markdown", self._md_writer),
             ("notion", self._notion_writer),
@@ -735,6 +736,8 @@ class PipelineRunner:
             try:
                 result = writer.write(summary, transcript, started_at, duration_seconds)
                 logger.info("%s output: %s", source.capitalize(), result)
+                if source == "markdown" and result is not None:
+                    md_path = str(result)
             except Exception as e:
                 logger.error("%s write failed: %s", source.capitalize(), e, exc_info=True)
             if writer.last_error:
@@ -744,6 +747,9 @@ class PipelineRunner:
                     source=source,
                     message=str(writer.last_error),
                 )
+
+        if md_path and meeting_id:
+            self._update(meeting_id, markdown_path=md_path)
 
         # Reprocess: archive the previously written Notion page only once
         # its replacement exists — a failed write must not leave the
