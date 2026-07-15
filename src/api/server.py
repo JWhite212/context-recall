@@ -143,7 +143,7 @@ class ApiServer:
 
         # Initialise route dependencies.
         status_routes.init(self._get_daemon_state, self._get_active_meeting)
-        meetings_routes.init(self.repo)
+        meetings_routes.init(self.repo, event_bus=self.event_bus)
         config_routes.init(DEFAULT_CONFIG_PATH)
         recording_routes.init(
             self._start_recording,

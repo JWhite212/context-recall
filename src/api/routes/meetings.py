@@ -21,11 +21,13 @@ router = APIRouter()
 
 # Injected at startup.
 _repo = None
+_event_bus = None
 
 
-def init(repo):
-    global _repo
+def init(repo, event_bus=None):
+    global _repo, _event_bus
     _repo = repo
+    _event_bus = event_bus
 
 
 class MergeMeetingsRequest(BaseModel):
@@ -38,6 +40,10 @@ class SetLabelRequest(BaseModel):
 
 class SetTagsRequest(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=50)
+
+
+class RenameMeetingRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
 
 
 @router.get("/api/meetings", response_model=MeetingListResponse, summary="List meetings")
@@ -238,3 +244,23 @@ async def set_meeting_tags(meeting_id: str, body: SetTagsRequest):
             normalised.append(tag)
     await _repo.update_meeting(meeting_id, tags=normalised)
     return {"meeting_id": meeting_id, "tags": normalised}
+
+
+@router.patch("/api/meetings/{meeting_id}", summary="Rename a meeting")
+async def rename_meeting(meeting_id: str, body: RenameMeetingRequest):
+    meeting = await _repo.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    import asyncio
+
+    from src.meeting_rename import apply_rename
+
+    return await apply_rename(
+        _repo,
+        meeting,
+        body.title.strip(),
+        config=load_config(),
+        event_bus=_event_bus,
+        loop=asyncio.get_running_loop(),
+    )
