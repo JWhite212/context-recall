@@ -1,13 +1,14 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
-import { updateActionItem } from "../../lib/api";
+import { getClients, getProjects, updateActionItem } from "../../lib/api";
 import type { ActionItem, ActionItemStatus } from "../../lib/types";
 
 const STATUS_ICONS: Record<ActionItemStatus, string> = {
-  open: "\u25CB",
-  in_progress: "\u25D0",
-  done: "\u25CF",
-  cancelled: "\u2715",
+  open: "○",
+  in_progress: "◐",
+  done: "●",
+  cancelled: "✕",
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -31,6 +32,8 @@ interface Props {
 
 export function ActionItemCard({ item, onEdit }: Props) {
   const queryClient = useQueryClient();
+  const [isTagging, setIsTagging] = useState(false);
+
   const mutation = useMutation({
     mutationFn: (status: ActionItemStatus) =>
       updateActionItem(item.id, { status }),
@@ -41,6 +44,35 @@ export function ActionItemCard({ item, onEdit }: Props) {
       console.error("Failed to update action item status:", err);
     },
   });
+
+  const { data: clients } = useQuery({
+    queryKey: ["clients"],
+    queryFn: () => getClients(),
+  });
+  const { data: projects } = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => getProjects(),
+  });
+
+  const tagMutation = useMutation({
+    mutationFn: (patch: {
+      client_id?: string | null;
+      project_id?: string | null;
+    }) => updateActionItem(item.id, patch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["action-items"] });
+    },
+    onError: (err: Error) => {
+      console.error("Failed to update action item tag:", err);
+    },
+  });
+
+  const clientName = item.client_id
+    ? clients?.find((c) => c.id === item.client_id)?.name
+    : null;
+  const projectName = item.project_id
+    ? projects?.find((p) => p.id === item.project_id)?.name
+    : null;
 
   return (
     <div
@@ -67,7 +99,7 @@ export function ActionItemCard({ item, onEdit }: Props) {
         >
           {item.title}
         </p>
-        <div className="flex items-center gap-2 mt-1 text-xs text-text-muted">
+        <div className="flex items-center gap-2 mt-1 text-xs text-text-muted flex-wrap">
           {item.assignee && <span>{item.assignee}</span>}
           {item.due_date && (
             <span>Due {format(new Date(item.due_date), "MMM d")}</span>
@@ -75,7 +107,64 @@ export function ActionItemCard({ item, onEdit }: Props) {
           <span className={PRIORITY_COLORS[item.priority]}>
             {item.priority}
           </span>
+          {clientName && (
+            <span className="px-1.5 py-0.5 rounded bg-surface border border-border">
+              {clientName}
+            </span>
+          )}
+          {projectName && (
+            <span className="px-1.5 py-0.5 rounded bg-surface border border-border">
+              {projectName}
+            </span>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsTagging((v) => !v);
+            }}
+            aria-label="Edit client/project tag"
+            className="text-text-muted hover:text-text-primary transition-colors underline decoration-dotted"
+          >
+            Tag
+          </button>
         </div>
+        {isTagging && (
+          <div
+            className="flex items-center gap-2 mt-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <select
+              aria-label="Tag client"
+              className="px-2 py-1 text-xs bg-surface border border-border rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
+              value={item.client_id ?? ""}
+              onChange={(e) =>
+                tagMutation.mutate({ client_id: e.target.value || null })
+              }
+            >
+              <option value="">No client</option>
+              {clients?.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Tag project"
+              className="px-2 py-1 text-xs bg-surface border border-border rounded-lg text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent"
+              value={item.project_id ?? ""}
+              onChange={(e) =>
+                tagMutation.mutate({ project_id: e.target.value || null })
+              }
+            >
+              <option value="">No project</option>
+              {projects?.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
     </div>
   );
