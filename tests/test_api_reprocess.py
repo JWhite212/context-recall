@@ -88,6 +88,7 @@ def _make_meeting(meeting_id="m1", audio_path="/tmp/x.wav", **overrides):
     m.started_at = 1000.0
     m.attendees_json = overrides.get("attendees_json", "[]")
     m.notion_page_id = overrides.get("notion_page_id", "")
+    m.title_source = overrides.get("title_source", "auto")
     return m
 
 
@@ -235,6 +236,28 @@ def test_runner_receives_full_reprocess_context(tmp_path, _default_config):
     assert kwargs["preserve_mappings"] is True
     assert kwargs["notion_page_id"] == "old-page"
     assert kwargs["is_reprocess"] is True
+    assert kwargs["preserve_title"] is False
+
+
+def test_runner_preserves_manual_title_on_reprocess(tmp_path, _default_config):
+    """A user-renamed meeting (title_source == 'manual') must not have
+    its title reverted by a reprocess run."""
+    audio_file = tmp_path / "meeting_20260708_120000.wav"
+    audio_file.write_bytes(b"\x00" * 100)
+
+    meeting = _make_meeting(audio_path=str(audio_file), title_source="manual")
+    repo = _make_repo(meeting=meeting)
+    fake = FakeRunner()
+
+    app = _make_app(repo)
+    with TestClient(app) as c:
+        with _patch_runner(fake):
+            resp = c.post("/api/meetings/m1/reprocess", headers=_auth_headers())
+            assert resp.status_code == 202
+            _wait_for_drain(repo)
+
+    _, kwargs = fake.calls[0]
+    assert kwargs["preserve_title"] is True
 
 
 def test_runner_gets_no_mic_path_when_sources_swept(tmp_path):

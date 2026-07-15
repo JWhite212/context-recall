@@ -218,6 +218,7 @@ class PipelineRunner:
         notion_page_id: str | None = None,
         calendar_fields: dict | None = None,
         is_reprocess: bool = False,
+        preserve_title: bool = False,
     ) -> RunResult:
         """Run the post-capture pipeline over *audio_path*.
 
@@ -237,6 +238,9 @@ class PipelineRunner:
                 summary (live runs attach calendar match data here).
             is_reprocess: replace previously *extracted* action items
                 instead of appending duplicates.
+            preserve_title: skip writing title/title_source — the user
+                manually renamed this meeting (title_source == 'manual'),
+                and a re-run must not revert it.
         """
         # Step 1: Transcribe.
         logger.info("Transcribing audio...")
@@ -337,9 +341,7 @@ class PipelineRunner:
         logger.info("Summary generated in %.1fs", _time.monotonic() - summary_start)
 
         # Step 4: Persist transcript + summary, then refresh FTS.
-        self._update(
-            meeting_id,
-            title=summary.title or "Untitled Meeting",
+        persist_fields = dict(
             ended_at=started_at + duration_seconds,
             duration_seconds=duration_seconds,
             status="complete",
@@ -351,6 +353,11 @@ class PipelineRunner:
             template_name=template.name if template else "",
             template_source=template_source,
         )
+        if not preserve_title:
+            calendar_title = (calendar_fields or {}).get("calendar_event_title") or ""
+            persist_fields["title"] = calendar_title or summary.title or "Untitled Meeting"
+            persist_fields["title_source"] = "auto"
+        self._update(meeting_id, **persist_fields)
         if calendar_fields and meeting_id:
             try:
                 self._update(meeting_id, **calendar_fields)
