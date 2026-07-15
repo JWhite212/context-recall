@@ -448,6 +448,22 @@ export function MeetingDetail() {
     },
   });
 
+  // Parse the transcript once for the SpeakerPanel. Declared BEFORE the
+  // loading / error / not-found early returns so the hook order stays stable
+  // across the loading→loaded transition — a hook after those returns renders
+  // a different number of hooks between renders (React error #310).
+  const segments = useMemo<TranscriptSegment[]>(() => {
+    if (!meeting?.transcript_json) return [];
+    try {
+      const data = JSON.parse(meeting.transcript_json);
+      return (data.segments ?? []).filter((s: TranscriptSegment) =>
+        s.text?.trim(),
+      );
+    } catch {
+      return [];
+    }
+  }, [meeting?.transcript_json]);
+
   if (isLoading) {
     return (
       <div className="p-6">
@@ -489,21 +505,6 @@ export function MeetingDetail() {
   const hasTranscript = !!meeting.transcript_json;
   const hasSummary = !!meeting.summary_markdown;
   const hasAudio = !!meeting.audio_path;
-
-  // Parsed once here (separately from TranscriptView's own parse, which also
-  // tracks dropped-hallucination counts) so the SpeakerPanel can list
-  // detected speakers without needing TranscriptView to lift its state up.
-  const segments = useMemo<TranscriptSegment[]>(() => {
-    if (!meeting.transcript_json) return [];
-    try {
-      const data = JSON.parse(meeting.transcript_json);
-      return (data.segments ?? []).filter((s: TranscriptSegment) =>
-        s.text?.trim(),
-      );
-    } catch {
-      return [];
-    }
-  }, [meeting.transcript_json]);
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-3xl">
