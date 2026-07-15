@@ -478,13 +478,23 @@ class PipelineRunner:
             return
         logger.info("Running speaker diarisation...")
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="diarising")
+        # The energy comparison needs the SYSTEM-only source, not the merged
+        # mix: the merge RMS-normalises and amplifies both channels, so the
+        # merged file embeds a loud copy of the mic and the mic can never win
+        # the energy ratio — every segment would collapse to the remote label.
+        # Recover the surviving <stem>_system.wav; fall back to the merged
+        # file only if it is already gone (EnergyDiariser then raises and we
+        # degrade cleanly).
+        system_audio_path = derive_source_paths(audio_path, self._config.audio.temp_audio_dir).get(
+            "system"
+        )
+        energy_system_path = system_audio_path or audio_path
         try:
             if isinstance(self._diariser, EnergyDiariser):
-                self._diariser.diarise(transcript, audio_path, mic_audio_path=mic_audio_path)
+                self._diariser.diarise(
+                    transcript, energy_system_path, mic_audio_path=mic_audio_path
+                )
             else:
-                system_audio_path = derive_source_paths(
-                    audio_path, self._config.audio.temp_audio_dir
-                ).get("system")
                 self._diariser.diarise(
                     transcript,
                     audio_path,
@@ -501,7 +511,7 @@ class PipelineRunner:
             )
             try:
                 EnergyDiariser(self._config.diarisation).diarise(
-                    transcript, audio_path, mic_audio_path=mic_audio_path
+                    transcript, energy_system_path, mic_audio_path=mic_audio_path
                 )
             except Exception as e2:
                 logger.warning("Energy fallback also failed: %s", e2)

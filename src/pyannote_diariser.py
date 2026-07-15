@@ -80,11 +80,22 @@ class PyAnnoteDiariser:
 
         me = self._config.speaker_name
 
+        # The remote (system) channel — used by both the energy pre-pass and
+        # pyannote. It must be the SYSTEM-only source, never the merged
+        # positional audio_path (which embeds an amplified copy of the mic and
+        # would stop the user's own segments from ever being marked "Me"). Fall
+        # back to the merged file only when the system source is already gone.
+        remote_wav = (
+            system_audio_path
+            if system_audio_path is not None and Path(system_audio_path).exists()
+            else audio_path
+        )
+
         # Step 1: energy me/remote (only when the mic source survives).
         if mic_audio_path is not None and Path(mic_audio_path).exists():
             try:
                 EnergyDiariser(self._config).diarise(
-                    transcript, audio_path, mic_audio_path=mic_audio_path
+                    transcript, remote_wav, mic_audio_path=mic_audio_path
                 )
             except Exception as e:
                 logger.warning("Energy pre-pass failed (%s); treating all as remote", e)
@@ -92,11 +103,6 @@ class PyAnnoteDiariser:
                     seg.speaker = ""
 
         # Step 2: pyannote over the remote (system) channel.
-        remote_wav = (
-            system_audio_path
-            if system_audio_path is not None and Path(system_audio_path).exists()
-            else audio_path
-        )
         turns = self._speaker_turns(Path(remote_wav))
 
         # Step 3: overlay SPEAKER_NN onto every non-user segment.

@@ -253,3 +253,24 @@ def test_remote_segment_without_overlap_falls_back_to_remote_label(tmp_path):
     t = _transcript()
     d.diarise(t, system, mic_audio_path=mic, system_audio_path=system)
     assert all(seg.speaker == cfg.remote_label for seg in t.segments)
+
+
+def test_energy_prepass_uses_system_source_not_merged_positional(tmp_path):
+    # Regression: the energy me/remote pre-pass must compare the mic against
+    # the SYSTEM source (system_audio_path), not the merged mix that arrives
+    # as the positional audio_path. The merged mix embeds an amplified copy
+    # of the mic, so using it as the "system" channel stops the user's own
+    # segments from ever being marked "Me".
+    merged = tmp_path / "m.wav"  # the merged mix — loud (mic + system)
+    system = tmp_path / "m_system.wav"  # remote-only source — quiet
+    mic = tmp_path / "m_mic.wav"  # user talking — loud
+    _wav(merged, loud=True)
+    _wav(system, loud=False)
+    _wav(mic, loud=True)
+    d, cfg = _diariser_with_turns([(0.0, 3.0, "SPEAKER_00")])
+    t = _transcript()
+    d.diarise(t, merged, mic_audio_path=mic, system_audio_path=system)
+    # Mic dominates the quiet system source → every user segment is "Me".
+    # (If the pre-pass wrongly compared against the loud merged mix, the
+    # user segments would fall through to the pyannote SPEAKER_00 label.)
+    assert all(seg.speaker == cfg.speaker_name for seg in t.segments)
