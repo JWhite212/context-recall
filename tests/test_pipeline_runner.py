@@ -228,6 +228,62 @@ def test_full_run_persists_complete_and_updates_fts(tmp_path, loop_thread):
     assert types.index("pipeline.stage") < types.index("pipeline.complete")
 
 
+def test_auto_title_prefers_calendar_event_title(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    summariser = FakeSummariser(_make_summary(title="Discussion about the roadmap"))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, summariser=summariser)
+
+    runner.run(
+        tmp_path / "a.wav",
+        "m1",
+        started_at=1000.0,
+        calendar_fields={"calendar_event_title": "Weekly Sync"},
+    )
+
+    _drain(loop_thread)
+    persist_calls = [c.kwargs for c in repo.update_meeting.call_args_list]
+    complete = next(c for c in persist_calls if c.get("status") == "complete")
+    assert complete["title"] == "Weekly Sync"
+    assert complete["title_source"] == "auto"
+
+
+def test_auto_title_falls_back_to_summary_title(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    summariser = FakeSummariser(_make_summary(title="Roadmap chat"))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, summariser=summariser)
+
+    runner.run(tmp_path / "a.wav", "m1", started_at=1000.0, calendar_fields=None)
+
+    _drain(loop_thread)
+    persist_calls = [c.kwargs for c in repo.update_meeting.call_args_list]
+    complete = next(c for c in persist_calls if c.get("status") == "complete")
+    assert complete["title"] == "Roadmap chat"
+    assert complete["title_source"] == "auto"
+
+
+def test_preserve_title_leaves_manual_title_untouched(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    summariser = FakeSummariser(_make_summary(title="Roadmap chat"))
+    runner = _make_runner(_make_config(tmp_path), db=bridge, summariser=summariser)
+
+    runner.run(
+        tmp_path / "a.wav",
+        "m1",
+        started_at=1000.0,
+        calendar_fields={"calendar_event_title": "Weekly Sync"},
+        preserve_title=True,
+    )
+
+    _drain(loop_thread)
+    persist_calls = [c.kwargs for c in repo.update_meeting.call_args_list]
+    complete = next(c for c in persist_calls if c.get("status") == "complete")
+    assert "title" not in complete
+    assert "title_source" not in complete
+
+
 def test_empty_transcript_marks_error(tmp_path, loop_thread):
     repo = _make_repo()
     bridge = DbBridge(repo, loop_thread)

@@ -109,6 +109,7 @@ async def _do_reprocess(meeting, config) -> None:
             preserve_mappings=True,
             notion_page_id=(getattr(meeting, "notion_page_id", "") or None),
             is_reprocess=True,
+            preserve_title=(meeting.title_source == "manual"),
         )
         logger.info("Reprocessing finished for %s: %s", meeting.id, result.status)
     except Exception as e:
