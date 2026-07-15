@@ -97,10 +97,16 @@ class ClientProjectRepository:
         return [_row_to_dict(r) for r in await cursor.fetchall()]
 
     async def delete_client(self, client_id: str) -> bool:
-        """Delete a client; its projects survive unlinked, meetings unassign."""
+        """Delete a client; its projects survive unlinked, meetings and
+        action items unassign (the FKs are declarative-only, so the
+        SET NULL is done here by hand)."""
         async with self._db.write_lock:
             await self._db.conn.execute(
                 "UPDATE meetings SET client_id = NULL, updated_at = ? WHERE client_id = ?",
+                (time.time(), client_id),
+            )
+            await self._db.conn.execute(
+                "UPDATE action_items SET client_id = NULL, updated_at = ? WHERE client_id = ?",
                 (time.time(), client_id),
             )
             cursor = await self._db.conn.execute("DELETE FROM clients WHERE id = ?", (client_id,))
@@ -174,6 +180,10 @@ class ClientProjectRepository:
         async with self._db.write_lock:
             await self._db.conn.execute(
                 "UPDATE meetings SET project_id = NULL, updated_at = ? WHERE project_id = ?",
+                (time.time(), project_id),
+            )
+            await self._db.conn.execute(
+                "UPDATE action_items SET project_id = NULL, updated_at = ? WHERE project_id = ?",
                 (time.time(), project_id),
             )
             cursor = await self._db.conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
