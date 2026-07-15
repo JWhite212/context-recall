@@ -99,7 +99,10 @@ async def update_action_item(item_id: str, body: UpdateActionItemRequest):
     repo = _get_repo()
     if not await repo.get(item_id):
         raise HTTPException(status_code=404, detail="Action item not found")
-    fields = body.model_dump(exclude_none=True)
+    # exclude_unset (not exclude_none): an explicit null must reach the
+    # repo so PATCH {"client_id": null} clears the tag instead of being
+    # silently dropped; omitted fields are still left untouched.
+    fields = body.model_dump(exclude_unset=True)
     if "client_id" in fields or "project_id" in fields:
         fields["tag_source"] = "manual"
     if fields:
