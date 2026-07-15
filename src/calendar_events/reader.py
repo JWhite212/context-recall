@@ -10,6 +10,7 @@ import logging
 import threading
 from dataclasses import asdict, dataclass, field
 
+from src import calendar_permission
 from src.calendar_matcher import (
     _extract_attendee_info,
     _extract_teams_details,
@@ -88,43 +89,59 @@ class CalendarReader:
         self._init_lock = threading.Lock()
 
     def _ensure_store(self) -> None:
-        """Lazily create the EventKit store and request access (blocking auth wait).
+        """Lazily create the EventKit store, requesting access only when needed.
 
         Must be called from a worker thread (the API server offloads reads via
-        run_in_executor), never on the event loop. The lock serialises
-        concurrent first calls — two executor reads racing here used to both
-        run the (up to 60s) auth wait; now losers block until the winner
-        finishes and then return immediately.
+        run_in_executor), never on the event loop — the access request can
+        block for up to 60s. The lock serialises concurrent first calls.
+
+        Initialisation only latches (``_init_attempted``) once it SUCCEEDS,
+        or when EventKit itself is missing (which cannot change within a
+        process). A not-yet-granted or timed-out request leaves the reader
+        unlatched so a later call — e.g. the next scheduled sync tick after
+        the boot poller obtains the grant — retries and succeeds.
         """
         with self._init_lock:
             if self._init_attempted:
                 return
-            self._init_attempted = True
             if not _is_eventkit_available():
+                self._init_attempted = True
                 return
-            try:
-                import EventKit
+            status = calendar_permission.authorization_status()
+            if status == calendar_permission.AUTHORIZED:
+                # Already granted (boot poller, System Settings, a previous
+                # run): create the store WITHOUT the blocking request.
+                self._create_store()
+                self._init_attempted = True
+                return
+            if status in (
+                calendar_permission.DENIED,
+                calendar_permission.RESTRICTED,
+                calendar_permission.WRITE_ONLY,
+            ):
+                # Determined-but-blocked: requesting cannot prompt. Do not
+                # latch — a later grant in System Settings self-heals on
+                # the next call.
+                return
+            # NOT_DETERMINED (or UNKNOWN introspection failure): fire the
+            # request. May raise the system dialog and block until answered
+            # or timed out; the permission module prefers the macOS 14+
+            # full-access API.
+            if calendar_permission.request_access(timeout_seconds=60.0):
+                self._create_store()
+                self._init_attempted = True
 
-                self._store = EventKit.EKEventStore.alloc().init()
-                done = threading.Event()
-                result = [False]
+    def _create_store(self) -> None:
+        """Create the EKEventStore for an already-authorized process."""
+        try:
+            import EventKit
 
-                def on_access(granted, error):
-                    result[0] = granted
-                    if error:
-                        logger.warning("Calendar access error: %s", error)
-                    done.set()
-
-                self._store.requestAccessToEntityType_completion_(
-                    EventKit.EKEntityTypeEvent, on_access
-                )
-                if done.wait(timeout=60):
-                    self._authorized = result[0]
-                else:
-                    logger.warning("Calendar access request timed out")
-            except Exception as e:  # pragma: no cover - requires EventKit
-                logger.warning("Failed to initialise EventKit reader: %s", e)
-                self._store = None
+            self._store = EventKit.EKEventStore.alloc().init()
+            self._authorized = True
+        except Exception as e:  # pragma: no cover - requires EventKit
+            logger.warning("Failed to initialise EventKit reader: %s", e)
+            self._store = None
+            self._authorized = False
 
     @property
     def available(self) -> bool:
