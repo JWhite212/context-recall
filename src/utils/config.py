@@ -195,11 +195,11 @@ class NotionConfig:
 
 @dataclass
 class DiarisationConfig:
-    enabled: bool = False
+    enabled: bool = True
     speaker_name: str = "Me"  # Label for the local user.
     remote_label: str = "Remote"  # Label for remote participants.
     energy_ratio_threshold: float = 1.5  # How much louder one source must be.
-    backend: str = "energy"  # "energy" or "pyannote"
+    backend: str = "pyannote"  # "energy" or "pyannote"
     pyannote_model: str = "pyannote/speaker-diarization-3.1"
     num_speakers: int = 0  # 0 = auto-detect
 

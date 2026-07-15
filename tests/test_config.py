@@ -299,3 +299,11 @@ def test_auto_arm_config_overrides_from_yaml(tmp_path):
     assert cfg.auto_arm.enabled is True
     assert cfg.auto_arm.lead_minutes == 5
     assert cfg.auto_arm.meeting_process_names == ["zoom.us"]
+
+
+def test_diarisation_defaults_to_pyannote_enabled():
+    from src.utils.config import DiarisationConfig
+
+    cfg = DiarisationConfig()
+    assert cfg.enabled is True
+    assert cfg.backend == "pyannote"
