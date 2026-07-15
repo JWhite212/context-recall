@@ -112,5 +112,19 @@ describe("ActionItemCard", () => {
       expect(patch?.url).toContain("/api/action-items/i1");
       expect(patch?.body).toMatchObject({ client_id: "c1" });
     });
+
+    fireEvent.change(screen.getByLabelText("Tag project"), {
+      target: { value: "p1" },
+    });
+
+    await waitFor(() => {
+      const patch = calls.find(
+        (c) =>
+          c.method === "PATCH" &&
+          (c.body as { project_id?: string })?.project_id,
+      );
+      expect(patch?.url).toContain("/api/action-items/i1");
+      expect(patch?.body).toMatchObject({ project_id: "p1" });
+    });
   });
 });
