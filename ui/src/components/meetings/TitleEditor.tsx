@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { renameMeeting } from "../../lib/api";
 import { useToast } from "../common/Toast";
@@ -24,6 +24,11 @@ export function TitleEditor({
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(title);
 
+  // Enter disables the input, which blurs it, which re-enters commit() in
+  // the SAME tick — before React re-renders with rename.isPending=true. The
+  // ref closes that synchronous window; isPending covers later re-entries.
+  const committing = useRef(false);
+
   const rename = useMutation({
     mutationFn: (next: string) => renameMeeting(meetingId, next),
     onSuccess: (data) => {
@@ -36,15 +41,21 @@ export function TitleEditor({
       toast.error("Failed to rename meeting.");
       setEditing(false);
     },
+    onSettled: () => {
+      committing.current = false;
+    },
   });
 
   function commit() {
+    // Guard against the Enter -> disable -> blur double PATCH (M2).
+    if (committing.current || rename.isPending) return;
     const next = value.trim();
     if (!next || next === title) {
       setValue(title);
       setEditing(false);
       return;
     }
+    committing.current = true;
     rename.mutate(next);
   }
 
