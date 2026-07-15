@@ -189,3 +189,21 @@ async def test_patch_meeting_title_404(meetings_app):
     app, _repo, _bus = meetings_app
     client = TestClient(app)
     assert client.patch("/api/meetings/nope", json={"title": "x"}).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_patch_meeting_title_whitespace_only_422_and_no_write(meetings_app):
+    """I5: '   ' passes pydantic's min_length=1 but is an empty title after
+    strip — must be rejected without touching the row."""
+    app, repo, bus = meetings_app
+    mid = await repo.create_meeting(started_at=1.0, status="complete")
+    await repo.update_meeting(mid, title="Kept Title", title_source="auto")
+
+    client = TestClient(app)
+    resp = client.patch(f"/api/meetings/{mid}", json={"title": "   "})
+    assert resp.status_code == 422
+
+    m = await repo.get_meeting(mid)
+    assert m.title == "Kept Title"
+    assert m.title_source == "auto"
+    assert not any(e["type"] == "meeting.renamed" for e in bus.events)
