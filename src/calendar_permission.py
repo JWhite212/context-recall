@@ -100,10 +100,14 @@ def request_access(*, timeout_seconds: float = 15.0) -> bool | None:
                 logger.warning("Calendar access error: %s", error)
             done.set()
 
-        # macOS 14+ prefers requestFullAccessToEventsWithCompletion_; the
-        # older requestAccessToEntityType_completion_ still functions and
-        # keeps one path across OS versions (matches CalendarReader).
-        store.requestAccessToEntityType_completion_(EventKit.EKEntityTypeEvent, on_access)
+        # macOS 14 split calendar access into full-access and write-only;
+        # only the full-access request reliably grants read access there.
+        # Prefer the modern API when the store exposes it and fall back to
+        # the legacy entity-type request on older systems.
+        if hasattr(store, "requestFullAccessToEventsWithCompletion_"):
+            store.requestFullAccessToEventsWithCompletion_(on_access)
+        else:
+            store.requestAccessToEntityType_completion_(EventKit.EKEntityTypeEvent, on_access)
         if done.wait(timeout=timeout_seconds):
             return outcome.get("granted")
         logger.info(
