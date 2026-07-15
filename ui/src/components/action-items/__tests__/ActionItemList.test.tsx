@@ -111,6 +111,44 @@ describe("ActionItemList", () => {
     });
   });
 
+  it("changing the client filter resets the project filter", async () => {
+    render(<ActionItemList />, { wrapper: makeWrapper() });
+
+    await waitFor(() =>
+      expect(screen.getByText("Open item")).toBeInTheDocument(),
+    );
+
+    const projectSelect = screen.getByLabelText(
+      "Filter by project",
+    ) as HTMLSelectElement;
+    fireEvent.change(projectSelect, { target: { value: "p1" } });
+
+    await waitFor(() =>
+      expect(
+        calls.find(
+          (c) =>
+            c.url.includes("/api/action-items") &&
+            c.url.includes("project_id=p1"),
+        ),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.change(screen.getByLabelText("Filter by client"), {
+      target: { value: "c1" },
+    });
+
+    // The stale project must not linger in the select or the query.
+    expect(projectSelect.value).toBe("");
+    await waitFor(() => {
+      const refetch = calls.find(
+        (c) =>
+          c.url.includes("/api/action-items") && c.url.includes("client_id=c1"),
+      );
+      expect(refetch).toBeTruthy();
+      expect(refetch!.url).not.toContain("project_id");
+    });
+  });
+
   it("renders items under status group headers when grouped by status", async () => {
     render(<ActionItemList />, { wrapper: makeWrapper() });
 

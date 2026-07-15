@@ -256,7 +256,12 @@ export function ActionItemList() {
           aria-label="Filter by client"
           className={selectClass}
           value={clientFilter}
-          onChange={(e) => setClientFilter(e.target.value)}
+          onChange={(e) => {
+            setClientFilter(e.target.value);
+            // A project chosen under the previous client may be invisible
+            // in the new list yet still constrain the query — reset it.
+            setProjectFilter("");
+          }}
         >
           <option value="">All clients</option>
           {clients?.map((c) => (
