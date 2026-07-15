@@ -666,6 +666,15 @@ export async function triggerCalendarSync(): Promise<{ synced: number }> {
   return request<{ synced: number }>("/api/calendar/sync", { method: "POST" });
 }
 
+export async function getCalendarPermission(): Promise<{
+  status: string;
+  granted: boolean;
+}> {
+  return request<{ status: string; granted: boolean }>(
+    "/api/calendar/permission",
+  );
+}
+
 // --- Action Items ---
 
 export async function getActionItems(
