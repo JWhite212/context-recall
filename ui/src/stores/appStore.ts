@@ -55,6 +55,13 @@ interface AppState {
    *  Cleared on pipeline.complete / resetLive. */
   liveCalendarTitle: string | null;
 
+  /** The user's edited live title during recording. Because no meeting row
+   *  exists yet, it is applied via renameMeeting when pipeline.complete
+   *  arrives with the new meeting_id. null = user hasn't edited. Cleared on
+   *  pipeline.complete / resetLive. */
+  liveTitleOverride: string | null;
+  setLiveTitleOverride: (title: string | null) => void;
+
   /** Live audio levels (RMS, 0.0–1.0). */
   audioLevels: AudioLevels;
 
@@ -83,6 +90,8 @@ export const useAppStore = create<AppState>((set) => ({
   lastPipelineError: null,
   liveSegments: [],
   liveCalendarTitle: null,
+  liveTitleOverride: null,
+  setLiveTitleOverride: (title) => set({ liveTitleOverride: title }),
   audioLevels: { system: 0, mic: 0 },
   modelProgress: {},
 
@@ -144,6 +153,7 @@ export const useAppStore = create<AppState>((set) => ({
           lastPipelineError: null,
           liveSegments: [],
           liveCalendarTitle: null,
+          liveTitleOverride: null,
           audioLevels: { system: 0, mic: 0 },
         });
         break;
@@ -198,6 +208,7 @@ export const useAppStore = create<AppState>((set) => ({
       lastPipelineError: null,
       liveSegments: [],
       liveCalendarTitle: null,
+      liveTitleOverride: null,
       audioLevels: { system: 0, mic: 0 },
     }),
 }));

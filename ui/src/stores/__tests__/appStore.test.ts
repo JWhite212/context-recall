@@ -168,7 +168,7 @@ describe("appStore — warnings slice (Unit 14 diagnostics banner)", () => {
 describe("appStore — live calendar title (Feature 2 rename)", () => {
   beforeEach(() => {
     resetStore();
-    useAppStore.setState({ liveCalendarTitle: null });
+    useAppStore.setState({ liveCalendarTitle: null, liveTitleOverride: null });
   });
 
   it("seeds liveCalendarTitle from a meeting.calendar_match event", () => {
@@ -195,5 +195,24 @@ describe("appStore — live calendar title (Feature 2 rename)", () => {
     useAppStore.setState({ liveCalendarTitle: "Weekly Sync" });
     useAppStore.getState().resetLive();
     expect(useAppStore.getState().liveCalendarTitle).toBeNull();
+  });
+
+  it("setLiveTitleOverride stores the user's live edit", () => {
+    useAppStore.getState().setLiveTitleOverride("My Notes");
+    expect(useAppStore.getState().liveTitleOverride).toBe("My Notes");
+  });
+
+  it("clears liveTitleOverride on pipeline.complete and resetLive", () => {
+    useAppStore.setState({ liveTitleOverride: "My Notes" });
+    useAppStore.getState().handleEvent({
+      type: "pipeline.complete",
+      meeting_id: "m1",
+      title: "x",
+    });
+    expect(useAppStore.getState().liveTitleOverride).toBeNull();
+
+    useAppStore.setState({ liveTitleOverride: "Again" });
+    useAppStore.getState().resetLive();
+    expect(useAppStore.getState().liveTitleOverride).toBeNull();
   });
 });
