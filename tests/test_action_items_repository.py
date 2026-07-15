@@ -120,6 +120,23 @@ async def test_delete_extracted_scoped_to_meeting(ai_repo, meeting_id, repo):
 
 
 @pytest.mark.asyncio
+async def test_delete_extracted_preserves_manual_tags(ai_repo, meeting_id):
+    """A user's manual client/project tag on an extracted item (set via
+    PATCH, tag_source='manual') must survive reprocess even though the
+    item's ``source`` stays 'extracted' — only the untagged/inherited
+    extracted rows get replaced."""
+    keep = await ai_repo.create(meeting_id=meeting_id, title="tagged", source="extracted")
+    await ai_repo.update(keep, client_id="c1", tag_source="manual")
+    drop = await ai_repo.create(meeting_id=meeting_id, title="plain", source="extracted")
+
+    deleted = await ai_repo.delete_extracted_for_meeting(meeting_id)
+
+    assert deleted == 1
+    assert await ai_repo.get(keep) is not None
+    assert await ai_repo.get(drop) is None
+
+
+@pytest.mark.asyncio
 async def test_create_and_update_tags(ai_repo, meeting_id):
     item_id = await ai_repo.create(
         meeting_id=meeting_id, title="Ship it", client_id="c1", project_id="p1"

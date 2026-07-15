@@ -151,11 +151,16 @@ class ActionItemRepository:
 
         Reprocessing re-runs extraction against the fresh transcript, so
         the previous extraction round is replaced rather than duplicated.
-        Returns the number of rows deleted.
+        Rows the user has manually tagged (``tag_source='manual'``, set
+        via a PATCH) are spared even though their ``source`` is still
+        'extracted' — a reprocess must not clobber a user's manual
+        client/project tag. Returns the number of rows deleted.
         """
         async with self._db.write_lock:
             cursor = await self._db.conn.execute(
-                "DELETE FROM action_items WHERE meeting_id = ? AND source = 'extracted'",
+                "DELETE FROM action_items "
+                "WHERE meeting_id = ? AND source = 'extracted' "
+                "AND (tag_source IS NULL OR tag_source != 'manual')",
                 (meeting_id,),
             )
             await self._db.conn.commit()
