@@ -163,7 +163,11 @@ class ApiServer:
             self._calendar_reader = None
         self._calendar_sync = CalendarSyncJob(CalendarEventRepository(self.db))
         calendar_routes.init(self.repo, self._calendar_reader, self._calendar_sync)
-        export_routes.init(self.repo)
+
+        from src.insights.repository import InsightRepository
+
+        _insight_repo = InsightRepository(self.db)
+        export_routes.init(self.repo, _insight_repo)
         resummarise_routes.init(self.repo, self.event_bus)
         reprocess_routes.init(self.repo, self.event_bus, db=self.db)
         models_routes.init(self.event_bus, config_path=DEFAULT_CONFIG_PATH)
@@ -187,10 +191,9 @@ class ApiServer:
         ask_routes.init(self.repo, embedder)
 
         from src.automations.repository import AutomationRepository
-        from src.insights.repository import InsightRepository
         from src.trackers.repository import TrackerRepository
 
-        insights_routes.init(self.repo, InsightRepository(self.db))
+        insights_routes.init(self.repo, _insight_repo)
         trackers_routes.init(self.repo, TrackerRepository(self.db))
         automations_routes.init(self.repo, AutomationRepository(self.db))
 

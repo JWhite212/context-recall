@@ -47,6 +47,38 @@ def _rewrite_frontmatter_title(content: str, new_title: str) -> str:
     return content
 
 
+def render_insights_section(results: list[dict]) -> str:
+    """Render insight results into a ``## Insights`` markdown section.
+
+    Groups results by ``definition_name`` and renders each as a sub-heading
+    followed by bullets of its ``content`` — both list-mode and structured
+    results already carry a human-readable ``content`` string, so no
+    per-field formatting is needed here.
+
+    Returns ``""`` when *results* is empty so callers can skip appending an
+    empty section.
+    """
+    if not results:
+        return ""
+
+    grouped: dict[str, list[dict]] = {}
+    for result in results:
+        name = result.get("definition_name") or "Insights"
+        grouped.setdefault(name, []).append(result)
+
+    lines = ["## Insights", ""]
+    for definition_name, items in grouped.items():
+        lines.append(f"### {definition_name}")
+        lines.append("")
+        for item in items:
+            content = (item.get("content") or "").strip()
+            if content:
+                lines.append(f"- {content}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 class MarkdownWriter:
     """Writes meeting output to an Obsidian-compatible Markdown vault."""
 

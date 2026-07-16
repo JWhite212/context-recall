@@ -13,17 +13,26 @@ import yaml
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from src.output.markdown_writer import render_insights_section
+
 logger = logging.getLogger("contextrecall.api.export")
 
 router = APIRouter()
 
 _repo = None
+_insight_repo = None
 
 
-def init(repo) -> None:
-    """Inject the meeting repository."""
-    global _repo
+def init(repo, insight_repo=None) -> None:
+    """Inject the meeting repository and (optionally) the insight repository.
+
+    ``insight_repo`` is optional and defaults to ``None`` so existing callers
+    that only pass ``repo`` keep working; the Insights section is simply
+    omitted from the export when it isn't wired up.
+    """
+    global _repo, _insight_repo
     _repo = repo
+    _insight_repo = insight_repo
 
 
 @router.post("/api/export/{meeting_id}", summary="Export meeting as Markdown or JSON")
@@ -89,6 +98,15 @@ async def export_meeting(
             parts.append("```")
         except json.JSONDecodeError:
             pass
+
+    # Insights — fetched live from the DB, since they're extracted after
+    # the meeting's Obsidian note is already written (see MarkdownWriter).
+    if _insight_repo is not None:
+        results = await _insight_repo.results_for_meeting(meeting_id)
+        insights_section = render_insights_section(results)
+        if insights_section:
+            parts.append("")
+            parts.append(insights_section)
 
     content = "\n".join(parts)
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", meeting_id)
