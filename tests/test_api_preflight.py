@@ -1,5 +1,6 @@
 """Tests for src/api/routes/preflight.py — /api/preflight endpoint."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -10,6 +11,8 @@ import src.api.auth as auth_mod
 from src.api.auth import verify_token
 from src.api.routes import preflight as preflight_routes
 from src.audio_preflight import PreflightReport
+from src.system_audio import BlackHoleSystemCapture, ScreenCaptureKitSystemCapture
+from src.utils.config import AudioConfig
 
 TEST_TOKEN = "test-token-for-preflight-tests"
 
@@ -120,3 +123,53 @@ def test_preflight_endpoint_falls_back_when_config_fails():
             assert resp.status_code == 200, resp.text
             data = resp.json()
             assert data["blackhole_present"] is True
+
+
+def test_preflight_reports_screen_recording_granted_for_sck_backend():
+    """When the selected backend is ScreenCaptureKit, /api/preflight probes
+    its preflight() and surfaces the result under screen_recording — the
+    UI's mechanism for detecting Screen Recording TCC status."""
+    fake_report = PreflightReport(
+        blackhole_present=True,
+        blackhole_input_candidates=["BlackHole 2ch"],
+        mic_openable=True,
+        microphone_permission_likely=True,
+        default_input_index=0,
+        warnings=[],
+        errors=[],
+    )
+    fake_backend = ScreenCaptureKitSystemCapture(AudioConfig(), Path("/nonexistent/helper"))
+    app = _make_app()
+    with TestClient(app) as c:
+        with (
+            patch.object(ScreenCaptureKitSystemCapture, "preflight", return_value="granted"),
+            patch.object(preflight_routes, "select_system_backend", return_value=fake_backend),
+            patch.object(preflight_routes, "run_preflight", return_value=fake_report),
+        ):
+            resp = c.get("/api/preflight", headers=_auth_headers())
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["screen_recording"] == "granted"
+
+
+def test_preflight_reports_screen_recording_not_applicable_for_blackhole_backend():
+    """When BlackHole is the selected backend (SCK not in use), screen_recording
+    should be not_applicable rather than probing anything."""
+    fake_report = PreflightReport(
+        blackhole_present=True,
+        blackhole_input_candidates=["BlackHole 2ch"],
+        mic_openable=True,
+        microphone_permission_likely=True,
+        default_input_index=0,
+        warnings=[],
+        errors=[],
+    )
+    fake_backend = BlackHoleSystemCapture(AudioConfig())
+    app = _make_app()
+    with TestClient(app) as c:
+        with (
+            patch.object(preflight_routes, "select_system_backend", return_value=fake_backend),
+            patch.object(preflight_routes, "run_preflight", return_value=fake_report),
+        ):
+            resp = c.get("/api/preflight", headers=_auth_headers())
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["screen_recording"] == "not_applicable"

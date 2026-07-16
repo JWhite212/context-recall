@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from src.audio_preflight import run_preflight
+from src.system_audio import ScreenCaptureKitSystemCapture, select_system_backend
 from src.utils.config import AudioConfig, load_config
 
 logger = logging.getLogger("contextrecall.api.preflight")
@@ -33,4 +34,16 @@ async def preflight() -> dict[str, Any]:
         audio_config = AudioConfig()
 
     report = run_preflight(audio_config)
-    return report.to_dict()
+    result = report.to_dict()
+
+    # Report Screen Recording status when SCK is the active system backend.
+    screen_recording = "not_applicable"
+    try:
+        backend = select_system_backend(audio_config)
+        if isinstance(backend, ScreenCaptureKitSystemCapture):
+            screen_recording = backend.preflight()
+    except Exception as e:
+        logger.warning("Screen Recording preflight failed: %s", e)
+        screen_recording = "unknown"
+    result["screen_recording"] = screen_recording
+    return result
