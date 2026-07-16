@@ -49,6 +49,12 @@ datas += collect_data_files("speechbrain")
 # silently falls back to brute-force vector search.
 datas += collect_data_files("sqlite_vec")
 
+# The ScreenCaptureKit system-audio helper (macos/sck-audio-capture) is NOT
+# collected here — it is a separately-compiled Swift binary that build_daemon.sh
+# injects into Contents/Resources/ and signs inside-out after PyInstaller runs
+# (mirroring the mlx.metallib fixup). Keeping it out of the spec avoids a Swift
+# build step inside PyInstaller.
+
 a = Analysis(
     ["src/__main__.py"],
     pathex=["."],

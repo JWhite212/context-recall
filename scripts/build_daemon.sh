@@ -101,6 +101,29 @@ sign_adhoc() {
     codesign --force --sign - --identifier "$SIGN_IDENTIFIER" "$APP_DIR"
 }
 
+# --- Compile + inject the ScreenCaptureKit system-audio helper -------------
+# The daemon spawns this signed Swift binary to capture system audio via the
+# Screen Recording TCC service (works on macOS betas where the Microphone
+# service — and thus the BlackHole input — is broken). Sign it FIRST so the
+# outer-app seal below covers an already-signed nested binary (inside-out).
+HELPER_SRC="macos/sck-audio-capture/main.swift"
+HELPER_DEST="$APP_DIR/Contents/Resources/sck-audio-capture"
+HELPER_IDENTIFIER="dev.jamiewhite.contextrecall.sck"
+if command -v swiftc >/dev/null 2>&1 && [ -f "$HELPER_SRC" ]; then
+    echo "==> Compiling SCK audio helper"
+    swiftc -O "$HELPER_SRC" -o "$HELPER_DEST"
+    if [ "$SIGN_IDENTITY" = "-" ]; then
+        codesign --force --sign - --identifier "$HELPER_IDENTIFIER" "$HELPER_DEST"
+    else
+        codesign --force --sign "$SIGN_IDENTITY" --identifier "$HELPER_IDENTIFIER" \
+            --timestamp=none "$HELPER_DEST" 2>/dev/null || \
+            codesign --force --sign - --identifier "$HELPER_IDENTIFIER" "$HELPER_DEST"
+    fi
+    echo "==> SCK helper signed and placed at Contents/Resources/sck-audio-capture"
+else
+    echo "==> WARNING: swiftc or $HELPER_SRC missing — daemon degrades to BlackHole (no SCK)"
+fi
+
 if [ "$SIGN_IDENTITY" = "-" ]; then
     sign_adhoc
 else
