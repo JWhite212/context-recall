@@ -5,6 +5,7 @@ import {
   createAutomationRule,
   updateAutomationRule,
   deleteAutomationRule,
+  getInsightDefinitions,
 } from "../../lib/api";
 import type {
   AutomationRule,
@@ -12,6 +13,7 @@ import type {
   AutomationAction,
   AutomationConditionField,
   AutomationActionType,
+  InsightDefinition,
 } from "../../lib/types";
 import { useToast } from "../common/Toast";
 
@@ -38,6 +40,12 @@ const ACTION_TYPES: {
   },
   { value: "webhook", label: "POST webhook", placeholder: "https://…" },
   { value: "notify", label: "Notify me", placeholder: "message (optional)" },
+  { value: "run_insight", label: "Run insight", placeholder: "" },
+  {
+    value: "send_notes",
+    label: "Send notes to webhook",
+    placeholder: "https://…",
+  },
 ];
 
 interface CondRow {
@@ -50,6 +58,14 @@ interface ActionRow {
   id: number;
   type: AutomationActionType;
   value: string;
+  /** `run_insight`: selected definition id. */
+  definitionId?: string;
+  /** `send_notes`: webhook url. */
+  url?: string;
+  /** `send_notes`: optional shared secret. */
+  secret?: string;
+  /** `send_notes`: whether to include the full transcript. */
+  includeTranscript?: boolean;
 }
 
 // Stable per-row ids so React keys survive mid-list removal (index keys would
@@ -75,6 +91,23 @@ function buildAction(row: ActionRow): AutomationAction | null {
     const url = row.value.trim();
     return url ? { type: "webhook", url } : null;
   }
+  if (row.type === "run_insight") {
+    const definitionId = row.definitionId?.trim();
+    return definitionId
+      ? { type: "run_insight", definition_id: definitionId }
+      : null;
+  }
+  if (row.type === "send_notes") {
+    const url = row.url?.trim();
+    if (!url) return null;
+    const secret = row.secret?.trim();
+    return {
+      type: "send_notes",
+      url,
+      ...(secret ? { secret } : {}),
+      ...(row.includeTranscript ? { include_transcript: true } : {}),
+    };
+  }
   const message = row.value.trim();
   return message ? { type: "notify", message } : { type: "notify" };
 }
@@ -84,9 +117,17 @@ function conditionLabel(c: AutomationCondition): string {
   return `${field ? field.label : c.field} ${c.value}`;
 }
 
-function actionLabel(a: AutomationAction): string {
+function actionLabel(
+  a: AutomationAction,
+  insightDefinitions: InsightDefinition[] = [],
+): string {
   if (a.type === "apply_tag") return `apply tag: ${(a.tags ?? []).join(", ")}`;
   if (a.type === "webhook") return `webhook → ${a.url}`;
+  if (a.type === "run_insight") {
+    const def = insightDefinitions.find((d) => d.id === a.definition_id);
+    return `run insight: ${def ? def.name : a.definition_id}`;
+  }
+  if (a.type === "send_notes") return `send notes → ${a.url}`;
   return a.message ? `notify: ${a.message}` : "notify";
 }
 
@@ -131,6 +172,10 @@ export function AutomationsSection({ id }: { id?: string }) {
   const { data: rules = [], isLoading } = useQuery({
     queryKey: ["automation-rules"],
     queryFn: getAutomationRules,
+  });
+  const { data: insightDefinitions = [] } = useQuery({
+    queryKey: ["insight-definitions"],
+    queryFn: getInsightDefinitions,
   });
 
   const invalidate = () =>
@@ -219,7 +264,10 @@ export function AutomationsSection({ id }: { id?: string }) {
                     {rule.conditions.map(conditionLabel).join(", ")}
                   </p>
                   <p className="text-xs text-text-muted mt-0.5 truncate">
-                    → {rule.actions.map(actionLabel).join("; ")}
+                    →{" "}
+                    {rule.actions
+                      .map((a) => actionLabel(a, insightDefinitions))
+                      .join("; ")}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -324,7 +372,7 @@ export function AutomationsSection({ id }: { id?: string }) {
             {actions.map((a, i) => {
               const meta = ACTION_TYPES.find((t) => t.value === a.type);
               return (
-                <div key={a.id} className="flex items-center gap-1.5">
+                <div key={a.id} className="flex items-center gap-1.5 flex-wrap">
                   <select
                     value={a.type}
                     onChange={(e) =>
@@ -341,14 +389,68 @@ export function AutomationsSection({ id }: { id?: string }) {
                       </option>
                     ))}
                   </select>
-                  <input
-                    type="text"
-                    value={a.value}
-                    onChange={(e) => setAction(i, { value: e.target.value })}
-                    placeholder={meta?.placeholder}
-                    aria-label="Action value"
-                    className={FORM_INPUT}
-                  />
+                  {a.type === "run_insight" ? (
+                    <select
+                      value={a.definitionId ?? ""}
+                      onChange={(e) =>
+                        setAction(i, { definitionId: e.target.value })
+                      }
+                      aria-label="Insight"
+                      className={`${FORM_INPUT} w-auto`}
+                    >
+                      <option value="" disabled>
+                        Select insight…
+                      </option>
+                      {insightDefinitions.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : a.type === "send_notes" ? (
+                    <>
+                      <input
+                        type="text"
+                        value={a.url ?? ""}
+                        onChange={(e) => setAction(i, { url: e.target.value })}
+                        placeholder="https://…"
+                        aria-label="Webhook URL"
+                        className={FORM_INPUT}
+                      />
+                      <input
+                        type="text"
+                        value={a.secret ?? ""}
+                        onChange={(e) =>
+                          setAction(i, { secret: e.target.value })
+                        }
+                        placeholder="secret (optional)"
+                        aria-label="Webhook secret"
+                        className={FORM_INPUT}
+                      />
+                      <label className="text-xs text-text-muted flex items-center gap-1 shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={a.includeTranscript ?? false}
+                          onChange={(e) =>
+                            setAction(i, {
+                              includeTranscript: e.target.checked,
+                            })
+                          }
+                          aria-label="Include transcript"
+                        />
+                        Include transcript
+                      </label>
+                    </>
+                  ) : (
+                    <input
+                      type="text"
+                      value={a.value}
+                      onChange={(e) => setAction(i, { value: e.target.value })}
+                      placeholder={meta?.placeholder}
+                      aria-label="Action value"
+                      className={FORM_INPUT}
+                    />
+                  )}
                   {actions.length > 1 && (
                     <button
                       type="button"
