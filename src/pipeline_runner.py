@@ -942,6 +942,11 @@ class PipelineRunner:
         except Exception:
             logger.warning("Automations run failed", exc_info=True)
         try:
+            if self._config.notion.enabled and self._notion_writer:
+                await self._append_notion_insights(meeting_id)
+        except Exception:
+            logger.warning("Notion insight append failed", exc_info=True)
+        try:
             await self._refresh_analytics(started_at)
         except Exception:
             logger.warning("Analytics refresh failed", exc_info=True)
@@ -1100,6 +1105,28 @@ class PipelineRunner:
         await repo.replace_results_for_meeting(meeting_id, results)
         if results:
             self._emit("insights.extracted", meeting_id=meeting_id, count=len(results))
+
+    async def _append_notion_insights(self, meeting_id: str) -> None:
+        """Append the meeting's insights to its Notion page.
+
+        Runs last in post-processing so the global insight step AND any
+        ``run_insight`` automation results are included. The page was
+        (re)created earlier this run without insights, so a single append is
+        idempotent per run.
+        """
+        if self._db.database is None or not self._notion_writer:
+            return
+        meeting = await self._db.repo.get_meeting(meeting_id)
+        page_id = getattr(meeting, "notion_page_id", "") if meeting else ""
+        if not page_id:
+            return
+        from src.insights.repository import InsightRepository
+
+        results = await InsightRepository(self._db.database).results_for_meeting(meeting_id)
+        if not results:
+            return
+        # Blocking Notion HTTP — keep it off the API event loop.
+        await asyncio.to_thread(self._notion_writer.append_insights, page_id, results)
 
     async def _run_automations(self, meeting_id: str) -> None:
         from src.automations.evaluator import build_meeting_context, matches

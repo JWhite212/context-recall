@@ -530,3 +530,78 @@ class TestNotionUpdatePageTitle:
     def test_update_page_title_empty_id_is_noop(self):
         writer = _make_writer(api_key="k", database_id="db")
         assert writer.update_page_title("", "New Title") is False
+
+
+def _block_text(block: dict) -> str:
+    """Extract the plain text from a heading/bullet Notion block."""
+    body = block.get(block["type"], {})
+    return "".join(seg.get("text", {}).get("content", "") for seg in body.get("rich_text", []))
+
+
+class TestAppendInsights:
+    """Tests for append_insights() — renders insights into an existing page."""
+
+    _RESULTS = [
+        {
+            "definition_name": "Questions",
+            "content": "Is it live?",
+            "speaker": "Sam",
+            "fields": None,
+        },
+        {"definition_name": "Questions", "content": "When?", "speaker": "", "fields": None},
+        {
+            "definition_name": "Client Call Details",
+            "content": "Go-live: 2026-09-02 · Blockers: X; Y",
+            "speaker": "",
+            "fields": {"go_live_date": "2026-09-02"},
+        },
+    ]
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_appends_grouped_blocks(self, mock_client_cls):
+        client = MagicMock()
+        mock_client_cls.return_value = client
+        writer = _make_writer(api_key="k", database_id="db")
+
+        assert writer.append_insights("page-123", self._RESULTS) is True
+
+        client.blocks.children.append.assert_called_once()
+        kwargs = client.blocks.children.append.call_args.kwargs
+        assert kwargs["block_id"] == "page-123"
+        children = kwargs["children"]
+        assert children[0]["type"] == "heading_2"  # "Insights"
+        texts = [_block_text(b) for b in children]
+        assert "Insights" in texts
+        assert "Questions" in texts  # H3 group heading
+        assert "Client Call Details" in texts
+        assert any("Is it live?" in t for t in texts)
+        assert any("Go-live: 2026-09-02" in t for t in texts)  # structured content bullet
+        # three content bullets, one per result
+        assert sum(1 for b in children if b["type"] == "bulleted_list_item") == 3
+
+    def test_empty_results_is_noop(self):
+        writer = _make_writer(api_key="k", database_id="db")
+        assert writer.append_insights("page-123", []) is False
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_batches_over_100_blocks(self, mock_client_cls):
+        client = MagicMock()
+        mock_client_cls.return_value = client
+        writer = _make_writer(api_key="k", database_id="db")
+        results = [
+            {"definition_name": "Q", "content": f"q{i}", "speaker": "", "fields": None}
+            for i in range(120)
+        ]
+
+        assert writer.append_insights("page-123", results) is True
+        assert client.blocks.children.append.call_count >= 2  # >100 blocks -> batched
+
+    @patch("src.output.notion_writer.NotionClient")
+    def test_append_error_is_swallowed_returns_false(self, mock_client_cls):
+        client = MagicMock()
+        client.blocks.children.append.side_effect = _api_error(400)
+        mock_client_cls.return_value = client
+        writer = _make_writer(api_key="k", database_id="db")
+
+        assert writer.append_insights("page-123", self._RESULTS) is False
+        assert writer.last_error
