@@ -307,3 +307,25 @@ def test_diarisation_defaults_to_pyannote_enabled():
     cfg = DiarisationConfig()
     assert cfg.enabled is True
     assert cfg.backend == "pyannote"
+
+
+def test_audio_config_system_capture_backend_default():
+    from src.utils.config import AudioConfig
+
+    assert AudioConfig().system_capture_backend == "auto"
+
+
+def test_audio_config_system_capture_backend_accepts_known_values():
+    from src.utils.config import AudioConfig
+
+    for value in ("auto", "blackhole", "screencapturekit"):
+        assert AudioConfig(system_capture_backend=value).system_capture_backend == value
+
+
+def test_audio_config_system_capture_backend_rejects_unknown():
+    import pytest
+
+    from src.utils.config import AudioConfig
+
+    with pytest.raises(ValueError, match="system_capture_backend"):
+        AudioConfig(system_capture_backend="coreaudio")

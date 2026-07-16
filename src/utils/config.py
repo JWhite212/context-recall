@@ -100,12 +100,25 @@ class AudioConfig:
     # would suppress legitimate quiet audio, so we reject those values
     # at config-load time.
     silence_alert_threshold: float = 1e-5
+    # System-audio capture backend. "auto" prefers ScreenCaptureKit when the
+    # OS supports it (macOS 13+) and the signed helper is bundled, else the
+    # BlackHole loopback. "blackhole" / "screencapturekit" force a backend.
+    # SCK captures system output via the Screen Recording TCC service, which
+    # keeps working on macOS betas where the Microphone service (and thus the
+    # BlackHole input) is broken.
+    system_capture_backend: str = "auto"
 
     def __post_init__(self) -> None:
         if not (1e-7 <= self.silence_alert_threshold <= 1e-2):
             raise ValueError(
                 "silence_alert_threshold must be between 1e-7 and 1e-2, "
                 f"got {self.silence_alert_threshold!r}"
+            )
+        valid_backends = {"auto", "blackhole", "screencapturekit"}
+        if self.system_capture_backend not in valid_backends:
+            raise ValueError(
+                "system_capture_backend must be one of "
+                f"{sorted(valid_backends)}, got {self.system_capture_backend!r}"
             )
 
 
