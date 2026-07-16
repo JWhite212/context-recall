@@ -38,6 +38,7 @@ import type {
   SpeakerMapping,
   StatusResponse,
   InsightDefinition,
+  InsightField,
   MeetingInsightResult,
   AutomationRule,
   AutomationCondition,
@@ -967,6 +968,8 @@ export async function createInsightDefinition(def: {
   name: string;
   prompt: string;
   enabled?: boolean;
+  output_mode?: InsightDefinition["output_mode"];
+  fields?: InsightField[] | null;
 }): Promise<InsightDefinition> {
   return request<InsightDefinition>("/api/insight-definitions", {
     method: "POST",
@@ -976,7 +979,12 @@ export async function createInsightDefinition(def: {
 
 export async function updateInsightDefinition(
   id: string,
-  fields: Partial<Pick<InsightDefinition, "name" | "prompt" | "enabled">>,
+  fields: Partial<
+    Pick<
+      InsightDefinition,
+      "name" | "prompt" | "enabled" | "output_mode" | "fields"
+    >
+  >,
 ): Promise<InsightDefinition> {
   return request<InsightDefinition>(
     `/api/insight-definitions/${encodeURIComponent(id)}`,

@@ -4,18 +4,26 @@ import { InsightResults } from "../MeetingInsights";
 import type { MeetingInsightResult } from "../../../lib/types";
 
 const results: MeetingInsightResult[] = [
-  { definition_id: "d1", definition_name: "Risks", content: "a", speaker: "" },
+  {
+    definition_id: "d1",
+    definition_name: "Risks",
+    content: "a",
+    speaker: "",
+    fields: null,
+  },
   {
     definition_id: "d1",
     definition_name: "Risks",
     content: "b",
     speaker: "Me",
+    fields: null,
   },
   {
     definition_id: "d2",
     definition_name: "Decisions",
     content: "c",
     speaker: "",
+    fields: null,
   },
 ];
 
