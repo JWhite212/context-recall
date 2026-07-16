@@ -22,6 +22,7 @@ from src.pipeline_runner import (
     SHORT_TRANSCRIPT_TITLE,
     DbBridge,
     PipelineRunner,
+    _run_insight_definition_ids,
     derive_source_paths,
 )
 from src.summariser import MeetingSummary
@@ -1692,6 +1693,80 @@ def test_post_processing_extracts_insights(tmp_path, loop_thread):
             )
         )
 
+    ins_repo.replace_results_for_meeting.assert_awaited_once()
+
+
+def test_run_insight_definition_ids_collects_targeted_ids_only():
+    """Pure helper: gathers definition_ids from run_insight actions, ignoring others."""
+    rules = [
+        {"id": "r1", "actions": [{"type": "run_insight", "definition_id": "d1"}]},
+        {"id": "r2", "actions": [{"type": "apply_tag", "tags": ["x"]}]},
+        {
+            "id": "r3",
+            "actions": [
+                {"type": "run_insight", "definition_id": "d2"},
+                {"type": "webhook", "url": "https://x"},
+            ],
+        },
+        {"id": "r4", "actions": [{"type": "run_insight"}]},  # no definition_id -> ignored
+        {"id": "r5", "actions": None},
+    ]
+    assert _run_insight_definition_ids(rules) == {"d1", "d2"}
+    assert _run_insight_definition_ids([]) == set()
+    assert _run_insight_definition_ids(None) == set()
+
+
+def test_extract_insights_excludes_run_insight_targeted_definitions(tmp_path, loop_thread):
+    """The global step must not also run a definition an enabled run_insight
+    rule already targets — that definition should run ONLY via the rule."""
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread, database=MagicMock())
+    config = _make_config(tmp_path)
+    config.insights.enabled = True
+    config.insights.auto_extract = True
+    runner = _make_runner(config, db=bridge)
+
+    ins_repo = MagicMock()
+    ins_repo.list_definitions = AsyncMock(
+        return_value=[
+            {"id": "d1", "name": "Risks", "prompt": "p1"},
+            {"id": "d2", "name": "Client Call", "prompt": "p2"},
+        ]
+    )
+    ins_repo.replace_results_for_meeting = AsyncMock()
+
+    auto_repo = MagicMock()
+    auto_repo.list_rules = AsyncMock(
+        return_value=[
+            {
+                "id": "r1",
+                "name": "Targeted",
+                "enabled": True,
+                "actions": [{"type": "run_insight", "definition_id": "d2"}],
+            }
+        ]
+    )
+
+    with (
+        patch("src.insights.extractor.InsightExtractor") as ext_cls,
+        patch("src.insights.repository.InsightRepository", return_value=ins_repo),
+        patch("src.automations.repository.AutomationRepository", return_value=auto_repo),
+        patch("src.analytics.engine.AnalyticsEngine") as engine_cls,
+    ):
+        ext_cls.return_value.extract.return_value = [
+            {"definition_id": "d1", "definition_name": "Risks", "content": "a", "speaker": ""}
+        ]
+        engine_cls.return_value.refresh_period = AsyncMock()
+        asyncio.run(
+            runner._post_process_async(
+                "m1", _make_transcript(), started_at=1000.0, is_reprocess=False
+            )
+        )
+
+    # Only the untargeted definition (d1) reaches the extractor; d2 is left
+    # for the run_insight rule to populate on matching meetings only.
+    called_definitions = ext_cls.return_value.extract.call_args.args[1]
+    assert [d["id"] for d in called_definitions] == ["d1"]
     ins_repo.replace_results_for_meeting.assert_awaited_once()
 
 
