@@ -427,6 +427,48 @@ class ContextRecall:
         status = calendar_permission.request_access_at_boot()
         logger.info("Calendar permission at boot: %s", status)
 
+    def _request_screen_recording_at_boot(self) -> None:
+        """Register the daemon in the Screen Recording list at boot when SCK
+        is the active system-audio backend.
+
+        ScreenCaptureKit captures system audio via the Screen Recording TCC
+        service. A launchd daemon can't be added through System Settings' "+"
+        (that resolves the nested daemon app to the outer bundle), and a failed
+        capture never registers it, so we call CGRequestScreenCaptureAccess()
+        to register the daemon's own code identity — the user then toggles it
+        on to capture system audio. Own thread: the request can surface a
+        prompt that sits unanswered. No-op when BlackHole is the backend."""
+        try:
+            from src.system_audio import (
+                ScreenCaptureKitSystemCapture,
+                select_system_backend,
+            )
+
+            backend = select_system_backend(self._config.audio)
+        except Exception:
+            logger.debug("Screen Recording boot check skipped", exc_info=True)
+            return
+        if not isinstance(backend, ScreenCaptureKitSystemCapture):
+            return  # BlackHole backend needs the mic grant, not Screen Recording.
+
+        from src.screen_recording_permission import (
+            GRANTED,
+            request_screen_recording_access,
+            screen_recording_status,
+        )
+
+        if screen_recording_status() == GRANTED:
+            logger.info("Screen Recording permission at boot: granted.")
+            return
+        logger.info(
+            "Screen Recording not yet granted — registering the daemon via "
+            "CGRequestScreenCaptureAccess so it appears in System Settings → "
+            "Privacy & Security → Screen Recording. Enable it there to capture "
+            "system audio via ScreenCaptureKit."
+        )
+        request_screen_recording_access()
+        logger.info("Screen Recording permission at boot: %s", screen_recording_status())
+
     def _on_meeting_start(self, event: MeetingEvent) -> None:
         """Called by the detector when a Teams meeting begins."""
         logger.info("Starting audio capture...")
@@ -1148,6 +1190,16 @@ class ContextRecall:
         threading.Thread(
             target=self._request_calendar_permission_at_boot,
             name="calendar-permission",
+            daemon=True,
+        ).start()
+
+        # Register the daemon in the Screen Recording list at boot when SCK is
+        # the system-audio backend — it can't be added via System Settings' "+"
+        # (that resolves to the outer bundle), so the daemon must request under
+        # its own identity for the user to be able to grant it. Own thread.
+        threading.Thread(
+            target=self._request_screen_recording_at_boot,
+            name="screen-recording-permission",
             daemon=True,
         ).start()
 
