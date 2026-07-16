@@ -246,6 +246,32 @@ describe("insight definitions", () => {
       prompt: "p",
     });
   });
+
+  it("creates a structured insight definition with fields", async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: input.toString(), init });
+        return new Response(JSON.stringify({ id: "x" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    ) as unknown as typeof fetch;
+
+    await createInsightDefinition({
+      name: "Client Call",
+      prompt: "p",
+      enabled: true,
+      output_mode: "structured",
+      fields: [{ key: "go_live", label: "Go-live", type: "date" }],
+    });
+
+    const call = calls.find((c) => c.init?.method === "POST");
+    const body = JSON.parse(call?.init?.body as string);
+    expect(body.output_mode).toBe("structured");
+    expect(body.fields[0].type).toBe("date");
+  });
 });
 
 describe("automation rules", () => {

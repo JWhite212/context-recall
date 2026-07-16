@@ -668,12 +668,23 @@ export interface TrackerHit {
   meeting_started_at?: number;
 }
 
+/** A single structured field extracted by a `structured`-mode insight. */
+export type InsightFieldType = "text" | "number" | "date" | "boolean" | "list";
+
+export interface InsightField {
+  key: string;
+  label: string;
+  type: InsightFieldType;
+}
+
 /** A user-defined insight (LLM extraction) definition. */
 export interface InsightDefinition {
   id: string;
   name: string;
   prompt: string;
   enabled: boolean;
+  output_mode: "list" | "structured";
+  fields: InsightField[] | null;
   created_at: number;
   updated_at: number;
 }
@@ -684,6 +695,7 @@ export interface MeetingInsightResult {
   definition_name: string;
   content: string;
   speaker: string;
+  fields: Record<string, unknown> | null;
 }
 
 export type AutomationConditionField =
@@ -694,7 +706,8 @@ export interface AutomationCondition {
   value: string;
 }
 
-export type AutomationActionType = "apply_tag" | "webhook" | "notify";
+export type AutomationActionType =
+  "apply_tag" | "webhook" | "notify" | "run_insight" | "send_notes";
 
 export interface AutomationAction {
   type: AutomationActionType;
@@ -702,6 +715,12 @@ export interface AutomationAction {
   url?: string;
   format?: string;
   message?: string;
+  /** `run_insight`: which insight definition to run. */
+  definition_id?: string;
+  /** `send_notes`: whether to include the full transcript alongside notes. */
+  include_transcript?: boolean;
+  /** `send_notes`: optional shared secret sent with the webhook payload. */
+  secret?: string;
 }
 
 export interface AutomationRule {
