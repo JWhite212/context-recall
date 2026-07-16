@@ -106,4 +106,105 @@ describe("InsightsSection", () => {
       }),
     );
   });
+
+  it("disables submit in structured mode with no field rows", async () => {
+    render(<InsightsSection id="insights" />, { wrapper: makeWrapper() });
+    await waitFor(() => expect(screen.getByText("Risks")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Insight name"), {
+      target: { value: "Go-live tracker" },
+    });
+    fireEvent.change(screen.getByLabelText("Insight prompt"), {
+      target: { value: "Track the go-live date" },
+    });
+    fireEvent.click(screen.getByLabelText(/structured/i));
+
+    expect(screen.getByRole("button", { name: /add insight/i })).toBeDisabled();
+  });
+
+  it("disables submit in structured mode with only a blank-label field row", async () => {
+    render(<InsightsSection id="insights" />, { wrapper: makeWrapper() });
+    await waitFor(() => expect(screen.getByText("Risks")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Insight name"), {
+      target: { value: "Go-live tracker" },
+    });
+    fireEvent.change(screen.getByLabelText("Insight prompt"), {
+      target: { value: "Track the go-live date" },
+    });
+    fireEvent.click(screen.getByLabelText(/structured/i));
+    fireEvent.click(screen.getByRole("button", { name: /add field/i }));
+
+    expect(screen.getByRole("button", { name: /add insight/i })).toBeDisabled();
+  });
+
+  it("enables submit with one valid field and excludes blank rows from the payload", async () => {
+    render(<InsightsSection id="insights" />, { wrapper: makeWrapper() });
+    await waitFor(() => expect(screen.getByText("Risks")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Insight name"), {
+      target: { value: "Go-live tracker" },
+    });
+    fireEvent.change(screen.getByLabelText("Insight prompt"), {
+      target: { value: "Track the go-live date" },
+    });
+    fireEvent.click(screen.getByLabelText(/structured/i));
+
+    // A blank-label row that should be excluded from the submitted payload.
+    fireEvent.click(screen.getByRole("button", { name: /add field/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /add field/i }));
+    const labelInputs = screen.getAllByPlaceholderText(/field label/i);
+    fireEvent.change(labelInputs[1], {
+      target: { value: "Go-live date" },
+    });
+    const typeSelects = screen.getAllByLabelText(/field type/i);
+    fireEvent.change(typeSelects[1], {
+      target: { value: "date" },
+    });
+
+    const submitButton = screen.getByRole("button", { name: /add insight/i });
+    expect(submitButton).not.toBeDisabled();
+    fireEvent.click(submitButton);
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([, init]) => init?.method === "POST",
+      );
+      expect(postCall).toBeTruthy();
+    });
+
+    const [, init] = fetchMock.mock.calls.find(
+      ([, i]) => i?.method === "POST",
+    )!;
+    const body = JSON.parse(init?.body as string);
+    expect(body.fields).toEqual([
+      expect.objectContaining({
+        key: "go_live_date",
+        label: "Go-live date",
+        type: "date",
+      }),
+    ]);
+  });
+
+  it("disables submit when two field rows share the same label (duplicate key)", async () => {
+    render(<InsightsSection id="insights" />, { wrapper: makeWrapper() });
+    await waitFor(() => expect(screen.getByText("Risks")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Insight name"), {
+      target: { value: "Go-live tracker" },
+    });
+    fireEvent.change(screen.getByLabelText("Insight prompt"), {
+      target: { value: "Track the go-live date" },
+    });
+    fireEvent.click(screen.getByLabelText(/structured/i));
+
+    fireEvent.click(screen.getByRole("button", { name: /add field/i }));
+    fireEvent.click(screen.getByRole("button", { name: /add field/i }));
+    const labelInputs = screen.getAllByPlaceholderText(/field label/i);
+    fireEvent.change(labelInputs[0], { target: { value: "Go-live date" } });
+    fireEvent.change(labelInputs[1], { target: { value: "Go-live date" } });
+
+    expect(screen.getByRole("button", { name: /add insight/i })).toBeDisabled();
+  });
 });
