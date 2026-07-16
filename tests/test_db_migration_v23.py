@@ -37,6 +37,36 @@ async def test_v22_db_migrates_to_v23_with_new_columns(tmp_path):
         await db2.close()
 
 
+async def test_v23_migration_survives_missing_insight_tables(tmp_path):
+    """Legacy/partial DBs that reach the v23 block without insight tables.
+
+    A DB created fresh has the insight tables from the v1 bootstrap, but a
+    partially-constructed or legacy DB rewound below 23 may not (mirrors the
+    v19/v21/v22 defensive fixtures). The v23 ALTERs must not hard-fail with
+    'no such table' in that case.
+    """
+    db_path = tmp_path / "legacy16.db"
+    db = Database(db_path=db_path)
+    await db.connect()
+    await db.conn.execute("DROP TABLE insight_definitions")
+    await db.conn.execute("DROP TABLE insight_results")
+    await db.conn.execute("PRAGMA user_version = 16")
+    await db.conn.commit()
+    await db.close()
+
+    db2 = Database(db_path=db_path)
+    await db2.connect()  # must not raise sqlite3.OperationalError
+    try:
+        cur = await db2.conn.execute("PRAGMA user_version")
+        assert (await cur.fetchone())[0] == SCHEMA_VERSION == 23
+        cur = await db2.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='app_metadata'"
+        )
+        assert await cur.fetchone() is not None
+    finally:
+        await db2.close()
+
+
 async def test_get_set_meta_roundtrip(tmp_path):
     from src.db.repository import MeetingRepository
 

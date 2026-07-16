@@ -959,11 +959,23 @@ class Database:
 
         if current_version < 23:
             # Structured (typed) insights + a generic key/value store.
-            await _safe_add_column(
-                self.conn, "insight_definitions", "output_mode", "TEXT", "'list'"
+            # Guard the ALTERs: a partial/legacy DB entering here at >=16 may
+            # lack the insight tables (mirrors the v19/v21/v22 defensive checks).
+            cur = await self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='insight_definitions'"
             )
-            await _safe_add_column(self.conn, "insight_definitions", "fields_json", "TEXT", "NULL")
-            await _safe_add_column(self.conn, "insight_results", "fields_json", "TEXT", "NULL")
+            if await cur.fetchone() is not None:
+                await _safe_add_column(
+                    self.conn, "insight_definitions", "output_mode", "TEXT", "'list'"
+                )
+                await _safe_add_column(
+                    self.conn, "insight_definitions", "fields_json", "TEXT", "NULL"
+                )
+            cur = await self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='insight_results'"
+            )
+            if await cur.fetchone() is not None:
+                await _safe_add_column(self.conn, "insight_results", "fields_json", "TEXT", "NULL")
             await self.conn.executescript(APP_METADATA_SQL)
             await self.conn.execute("PRAGMA user_version = 23")
             await self.conn.commit()
