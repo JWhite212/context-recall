@@ -54,6 +54,20 @@ async def test_structured_requires_nonempty_fields(_wire):
         await route.create_insight_definition(body)
 
 
+async def test_structured_rejects_duplicate_field_keys(_wire):
+    body = route.InsightCreate(
+        name="Bad",
+        prompt="p",
+        output_mode="structured",
+        fields=[
+            route.InsightField(key="status", label="Status", type="text"),
+            route.InsightField(key="status", label="Status Again", type="text"),
+        ],
+    )
+    with pytest.raises(HTTPException):
+        await route.create_insight_definition(body)
+
+
 async def test_update_structured_passes_fields_through():
     fake = _FakeRepo(existing={"output_mode": "list", "fields": None})
     route.init(repo=object(), insight_repo=fake)
@@ -75,5 +89,19 @@ async def test_update_clearing_fields_while_structured_rejected():
     )
     route.init(repo=object(), insight_repo=fake)
     body = route.InsightUpdate(fields=[])
+    with pytest.raises(HTTPException):
+        await route.update_insight_definition("id1", body)
+
+
+async def test_update_rejects_duplicate_field_keys():
+    fake = _FakeRepo(existing={"output_mode": "list", "fields": None})
+    route.init(repo=object(), insight_repo=fake)
+    body = route.InsightUpdate(
+        output_mode="structured",
+        fields=[
+            route.InsightField(key="status", label="Status", type="text"),
+            route.InsightField(key="status", label="Status Again", type="text"),
+        ],
+    )
     with pytest.raises(HTTPException):
         await route.update_insight_definition("id1", body)
