@@ -35,3 +35,6 @@ build/
 # Node
 ui/node_modules/
 # Log files are stored outside the repo (~/Library/Logs/Context Recall/)
+
+# Swift SCK helper dev build output (compiled locally via scripts/build_sck_helper.sh)
+macos/sck-audio-capture/.build/
