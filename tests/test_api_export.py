@@ -66,10 +66,12 @@ async def test_export_markdown_with_transcript(client):
     c, repo = client
     mid = await repo.create_meeting(started_at=time.time())
 
-    transcript_json = json.dumps([
-        {"start": 0, "end": 5, "text": "Hello everyone.", "speaker": "Me"},
-        {"start": 5, "end": 10, "text": "Let's begin.", "speaker": "Remote"},
-    ])
+    transcript_json = json.dumps(
+        [
+            {"start": 0, "end": 5, "text": "Hello everyone.", "speaker": "Me"},
+            {"start": 5, "end": 10, "text": "Let's begin.", "speaker": "Remote"},
+        ]
+    )
 
     await repo.update_meeting(
         mid,
@@ -131,3 +133,60 @@ async def test_export_meeting_not_found(client):
     c, _ = client
     resp = c.post("/api/export/nonexistent-id?format=markdown", headers=_auth_headers())
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_export_markdown_includes_insights_when_repo_wired(db: Database):
+    """When an InsightRepository is injected, the export appends an Insights
+    section built from its stored results (fetched live, since insights are
+    extracted after the pipeline's own markdown write)."""
+    original = auth_mod._auth_token
+    auth_mod._auth_token = TEST_TOKEN
+    try:
+        repo = MeetingRepository(db)
+        mid = await repo.create_meeting(started_at=time.time())
+        await repo.update_meeting(mid, title="Client Call", status="complete")
+
+        class FakeInsightRepo:
+            async def results_for_meeting(self, meeting_id):
+                assert meeting_id == mid
+                return [
+                    {"definition_name": "Questions", "content": "Is it live?", "fields": None},
+                ]
+
+        export_routes.init(repo, FakeInsightRepo())
+        app = FastAPI()
+        auth_deps = [Depends(verify_token)]
+        app.include_router(export_routes.router, dependencies=auth_deps)
+
+        with TestClient(app) as c:
+            resp = c.post(f"/api/export/{mid}?format=markdown", headers=_auth_headers())
+        assert resp.status_code == 200
+        body = resp.text
+        assert "## Insights" in body
+        assert "Questions" in body
+        assert "Is it live?" in body
+    finally:
+        auth_mod._auth_token = original
+        export_routes.init(repo)  # restore module state for subsequent tests
+
+
+@pytest.mark.asyncio
+async def test_export_markdown_omits_insights_section_when_none_stored(client):
+    """No insights recorded for the meeting -> no Insights section, even
+    with the repo wired up."""
+    c, repo = client
+    mid = await repo.create_meeting(started_at=time.time())
+    await repo.update_meeting(mid, title="Quiet Meeting", status="complete")
+
+    class EmptyInsightRepo:
+        async def results_for_meeting(self, meeting_id):
+            return []
+
+    export_routes.init(repo, EmptyInsightRepo())
+    try:
+        resp = c.post(f"/api/export/{mid}?format=markdown", headers=_auth_headers())
+        assert resp.status_code == 200
+        assert "## Insights" not in resp.text
+    finally:
+        export_routes.init(repo)  # restore module state for subsequent tests
