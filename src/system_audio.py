@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import platform
 import signal
 import subprocess
 import sys
@@ -267,3 +268,41 @@ class ScreenCaptureKitSystemCapture(SystemAudioBackend):
             logger.error("SCK helper failed: %s", reason)
         self._proc = None
         self._reader = None
+
+
+def _macos_at_least(major: int) -> bool:
+    """True when the current macOS major version is >= major."""
+    try:
+        version = platform.mac_ver()[0]
+        return int(version.split(".")[0]) >= major
+    except (ValueError, IndexError):
+        return False
+
+
+def select_system_backend(config: AudioConfig) -> SystemAudioBackend:
+    """Choose the system-audio backend from config + host capabilities.
+
+    "auto" prefers ScreenCaptureKit (macOS 13+ and helper bundled), else
+    BlackHole. Screen Recording *permission* is handled at runtime by the SCK
+    driver, not here — a first-run undetermined grant still takes the SCK path.
+    """
+    backend = config.system_capture_backend
+    if backend == "blackhole":
+        return BlackHoleSystemCapture(config)
+
+    helper = resolve_helper_path()
+    if backend == "screencapturekit":
+        if helper is None:
+            raise AudioCaptureError(
+                "system_capture_backend=screencapturekit but the SCK helper "
+                "binary was not found (run scripts/build_sck_helper.sh or rebuild "
+                "the daemon)."
+            )
+        return ScreenCaptureKitSystemCapture(config, helper)
+
+    # auto
+    if _macos_at_least(13) and helper is not None:
+        logger.info("System-audio backend: ScreenCaptureKit (auto)")
+        return ScreenCaptureKitSystemCapture(config, helper)
+    logger.info("System-audio backend: BlackHole (auto fallback)")
+    return BlackHoleSystemCapture(config)
