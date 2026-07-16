@@ -31,7 +31,12 @@ def is_voice_id_available() -> bool:
         import torchaudio  # noqa: F401
 
         return True
-    except ImportError:
+    except (ImportError, OSError):
+        # OSError/FileNotFoundError, not just ImportError: a mis-bundled
+        # speechbrain (source shipped but a submodule dir absent) raises
+        # FileNotFoundError at import time from its lazy submodule loader.
+        # Treat any import-time failure as "unavailable" so voice-ID degrades
+        # gracefully instead of crashing the caller.
         return False
 
 

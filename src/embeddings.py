@@ -19,7 +19,10 @@ def is_embeddings_available() -> bool:
         import sentence_transformers  # noqa: F401
 
         return True
-    except ImportError:
+    except (ImportError, OSError):
+        # Any import-time failure (missing module OR a mis-bundled dependency
+        # raising FileNotFoundError/OSError) means embeddings are unavailable;
+        # degrade to keyword search instead of crashing.
         return False
 
 
