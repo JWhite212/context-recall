@@ -308,6 +308,48 @@ class TestAudioCaptureEdgeCases:
         audio = np.array([1e-11, -1e-11], dtype=np.float64)
         assert AudioCapture._rms_dbfs(audio) == -100.0
 
+    def test_merge_falls_back_to_mic_only_when_system_absent(self, tmp_path):
+        """C1: the SCK helper opens its output WAV lazily, so an early
+        failure (e.g. Screen Recording not granted) can leave NO system
+        file at all. On a healthy Mac with a working mic, discarding the
+        whole merge in that case is silent data loss — fall back to a
+        mic-only merge instead."""
+        config = AudioConfig(
+            temp_audio_dir=str(tmp_path),
+            sample_rate=16000,
+            keep_source_files=True,
+        )
+        capture = AudioCapture(config)
+
+        mic_path = tmp_path / "mic.wav"
+        signal = np.full(16000, 0.5, dtype=np.float32)
+        sf.write(str(mic_path), signal, 16000, subtype="PCM_16")
+
+        capture._system_path = tmp_path / "does_not_exist_system.wav"
+        capture._mic_path = mic_path
+        capture._output_path = tmp_path / "output.wav"
+
+        capture._merge_sources()
+
+        assert capture._output_path is not None
+        assert capture._output_path.exists()
+        assert capture._output_path.stat().st_size > 44
+        output_audio, _ = sf.read(str(capture._output_path), dtype="float32")
+        assert np.max(np.abs(output_audio)) > 0.0
+
+    def test_merge_aborts_when_no_source(self, tmp_path):
+        """Neither system nor mic audio exists — nothing to merge."""
+        config = AudioConfig(temp_audio_dir=str(tmp_path), sample_rate=16000)
+        capture = AudioCapture(config)
+
+        capture._system_path = tmp_path / "missing_system.wav"
+        capture._mic_path = tmp_path / "missing_mic.wav"
+        capture._output_path = tmp_path / "output.wav"
+
+        capture._merge_sources()
+
+        assert capture._output_path is None
+
 
 # ---------------------------------------------------------------------------
 # Streaming RMS tests

@@ -332,24 +332,29 @@ class AudioCapture:
         Merge the separate source WAV files into a single normalised
         output file using chunked streaming to keep memory usage low.
 
-        Dispatches to single- or dual-source merge based on whether
-        a mic recording is available.
+        Dispatches to dual-source, system-only, or (when the system file is
+        entirely absent — e.g. an early SCK failure before it ever opened
+        its output WAV) a mic-only fallback so a healthy mic recording is
+        never discarded just because the system source never materialised.
         """
-        if not self._system_path or not self._system_path.exists():
-            logger.error("System audio file missing — cannot merge.")
-            self._output_path = None
-            return
-
         has_mic = (
             self._mic_path is not None
             and self._mic_path.exists()
             and self._mic_path.stat().st_size > 44  # WAV header only = empty.
         )
 
-        if has_mic:
+        if not self._system_path or not self._system_path.exists():
+            if has_mic:
+                logger.warning("System audio file missing — falling back to mic-only merge.")
+                self._merge_single_source(self._mic_path)
+            else:
+                logger.error("No usable audio source — cannot merge.")
+                self._output_path = None
+                return
+        elif has_mic:
             self._merge_dual_source()
         else:
-            self._merge_single_source()
+            self._merge_single_source(self._system_path)
 
         # Clean up source files (keep them if needed for diarisation).
         if not self._config.keep_source_files:
@@ -359,23 +364,24 @@ class AudioCapture:
                 self._mic_path.unlink()
             logger.debug("Deleted temporary source files.")
 
-    def _merge_single_source(self) -> None:
-        """Normalise a single system-audio source via chunked streaming."""
-        system_rms = self._streaming_rms(self._system_path)
+    def _merge_single_source(self, source_path: Path | None = None) -> None:
+        """Normalise a single audio source (system by default; mic on fallback)."""
+        source_path = source_path or self._system_path
+        source_rms = self._streaming_rms(source_path)
         logger.info(
-            "System audio: RMS=%.1f dBFS",
-            self._rms_dbfs_from_rms(system_rms),
+            "Source audio: RMS=%.1f dBFS",
+            self._rms_dbfs_from_rms(source_rms),
         )
 
-        if system_rms < 1e-10:
+        if source_rms < 1e-10:
             # Silent — just copy the file as-is.
-            shutil.copy2(str(self._system_path), str(self._output_path))
-            logger.info("System audio is silent — copied without processing.")
+            shutil.copy2(str(source_path), str(self._output_path))
+            logger.info("Source audio is silent — copied without processing.")
             return
 
-        gain = TARGET_RMS_LINEAR / system_rms
+        gain = TARGET_RMS_LINEAR / source_rms
 
-        with sf.SoundFile(str(self._system_path), mode="r") as src:
+        with sf.SoundFile(str(source_path), mode="r") as src:
             with sf.SoundFile(
                 str(self._output_path),
                 mode="w",
