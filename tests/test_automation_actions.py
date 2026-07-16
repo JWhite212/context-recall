@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from src.automations.executor import ActionExecutor
+from src.automations.payload import sign_payload
 from src.utils.config import SummarisationConfig
 
 
@@ -78,9 +79,9 @@ async def test_run_insight_writes_scoped_results(monkeypatch):
 async def test_send_notes_posts_signed_payload(monkeypatch):
     posted = {}
 
-    async def fake_post(url, json_body, headers):
+    async def fake_post(url, *, content, headers):
         posted["url"] = url
-        posted["body"] = json_body
+        posted["content"] = content
         posted["headers"] = headers
         return True
 
@@ -108,8 +109,10 @@ async def test_send_notes_posts_signed_payload(monkeypatch):
     }
     await ex.run_rule(rule, context={}, meeting_id="m1", run_side_effects=True)
     assert posted["url"] == "https://x.test/hook"
-    assert posted["body"]["name"] == "Armacell UAT"
+    assert json.loads(posted["content"])["name"] == "Armacell UAT"
     assert "x-signature" in posted["headers"]
+    # Locks the contract: the bytes we signed must be the exact bytes posted.
+    assert sign_payload(posted["content"], "whsec_1") == posted["headers"]["x-signature"]
 
 
 async def test_send_notes_skipped_when_not_side_effects(monkeypatch):
@@ -124,7 +127,7 @@ async def test_send_notes_skipped_when_not_side_effects(monkeypatch):
             "summarisation_config": None,
         },
     )
-    monkeypatch.setattr(ex, "_post_json", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(ex, "_post_json", lambda *a, content=None, headers=None: called.append(1))
     rule = {"name": "R", "actions": [{"type": "send_notes", "url": "https://x", "secret": ""}]}
     await ex.run_rule(rule, context={}, meeting_id="m1", run_side_effects=False)
     assert called == []

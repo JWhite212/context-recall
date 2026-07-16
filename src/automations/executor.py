@@ -92,17 +92,17 @@ class ActionExecutor:
             insights,
             include_transcript=bool(action.get("include_transcript")),
         )
+        body = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         secret = action.get("secret") or ""
         if secret:
-            body = json.dumps(payload).encode("utf-8")
             headers["x-signature"] = sign_payload(body, secret)
-        await self._post_json(url, payload, headers)
+        await self._post_json(url, content=body, headers=headers)
 
-    async def _post_json(self, url: str, json_body: dict, headers: dict) -> bool:
+    async def _post_json(self, url: str, *, content: bytes = None, headers: dict = None) -> bool:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(url, json=json_body, headers=headers)
+                resp = await client.post(url, content=content, headers=headers)
                 resp.raise_for_status()
             return True
         except Exception as e:
