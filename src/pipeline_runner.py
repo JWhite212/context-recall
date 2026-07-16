@@ -40,6 +40,23 @@ EMPTY_TRANSCRIPT_ERROR = "Transcript is empty. The audio may be silent or corrup
 MIN_SUMMARISABLE_WORDS = 5
 
 
+def _run_insight_definition_ids(rules: list[dict]) -> set[str]:
+    """Collect insight definition_ids targeted by enabled ``run_insight`` actions.
+
+    These definitions are meant to run ONLY when a rule's conditions match
+    (the design intent behind ``run_insight``); the global insight-extraction
+    step must exclude them so they don't also run unconditionally on every
+    meeting. Pure and unit-testable: takes the rule dicts already filtered to
+    enabled rules (e.g. from ``AutomationRepository.list_rules(enabled_only=True)``).
+    """
+    targeted: set[str] = set()
+    for rule in rules or []:
+        for action in rule.get("actions") or []:
+            if action.get("type") == "run_insight" and action.get("definition_id"):
+                targeted.add(action["definition_id"])
+    return targeted
+
+
 class DbBridge:
     """Thread-safe database access for pipeline threads.
 
@@ -1048,6 +1065,7 @@ class PipelineRunner:
         )
 
     async def _extract_insights(self, meeting_id: str, transcript) -> None:
+        from src.automations.repository import AutomationRepository
         from src.insights.extractor import InsightExtractor
         from src.insights.repository import InsightRepository
 
@@ -1055,6 +1073,23 @@ class PipelineRunner:
             return
         repo = InsightRepository(self._db.database)
         definitions = await repo.list_definitions(enabled_only=True)
+        # Definitions targeted by an enabled run_insight automation rule run
+        # ONLY on matching meetings via that rule (see _run_automations,
+        # which runs after this step) — exclude them from the unconditional
+        # global extraction so they aren't also run on every meeting.
+        try:
+            auto_repo = AutomationRepository(self._db.database)
+            rules = await auto_repo.list_rules(enabled_only=True)
+            targeted = _run_insight_definition_ids(rules)
+        except Exception:
+            logger.warning(
+                "Could not load automation rules for insight-extraction filtering; "
+                "running all enabled definitions globally",
+                exc_info=True,
+            )
+            targeted = set()
+        if targeted:
+            definitions = [d for d in definitions if d["id"] not in targeted]
         results = []
         if definitions:
             extractor = InsightExtractor(self._config.summarisation)
