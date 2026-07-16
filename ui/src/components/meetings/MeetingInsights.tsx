@@ -2,13 +2,32 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   draftFollowupEmail,
+  getInsightDefinitions,
   getMeetingAutomations,
   getMeetingInsights,
   getMeetingTrackerHits,
   getTalkStats,
 } from "../../lib/api";
 import { useToast } from "../common/Toast";
-import type { EmailDraft, MeetingInsightResult } from "../../lib/types";
+import type {
+  EmailDraft,
+  InsightDefinition,
+  MeetingInsightResult,
+} from "../../lib/types";
+
+/** Turns a `field.key` like "go_live_date" into "go live date". */
+function humaniseKey(key: string): string {
+  return key.replace(/_/g, " ");
+}
+
+/** Renders one structured field's value: arrays join, empties become "—". */
+function formatFieldValue(value: unknown): string {
+  if (value == null || value === "") return "—";
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "—" : value.join("; ");
+  }
+  return String(value);
+}
 
 /** Pills naming the automation rules that fired on a meeting. */
 export function AutomationBadges({ names }: { names: string[] }) {
@@ -28,11 +47,14 @@ export function AutomationBadges({ names }: { names: string[] }) {
   );
 }
 
-/** Custom insight results grouped by definition, rendered as labelled lists. */
+/** Custom insight results grouped by definition, rendered as labelled lists
+ * (or, for structured-mode results, labelled key→value cards). */
 export function InsightResults({
   results,
+  definitions,
 }: {
   results: MeetingInsightResult[];
+  definitions?: InsightDefinition[];
 }) {
   if (results.length === 0) return null;
   const groups = new Map<string, MeetingInsightResult[]>();
@@ -41,34 +63,74 @@ export function InsightResults({
     if (items) items.push(r);
     else groups.set(r.definition_name, [r]);
   }
+  const definitionsById = new Map<string, InsightDefinition>();
+  for (const def of definitions ?? []) definitionsById.set(def.id, def);
+  const labelFor = (definitionId: string, key: string): string => {
+    const field = definitionsById
+      .get(definitionId)
+      ?.fields?.find((f) => f.key === key);
+    return field?.label ?? humaniseKey(key);
+  };
   return (
     <div className="flex flex-col gap-2">
-      {[...groups.entries()].map(([name, items]) => (
-        <div key={name}>
-          <p className="text-[10px] uppercase tracking-wide text-text-muted mb-1">
-            {name}
-          </p>
-          <ul className="flex flex-col gap-0.5">
-            {items.map((item, i) => (
-              <li
-                key={`${name}-${i}`}
-                className="text-xs text-text-secondary flex gap-1.5"
-              >
-                <span className="text-text-muted/60">•</span>
-                <span>
-                  {item.content}
-                  {item.speaker && (
-                    <span className="text-text-muted/60">
-                      {" "}
-                      — {item.speaker}
+      {[...groups.entries()].map(([name, items]) => {
+        const listItems = items.filter((item) => item.fields == null);
+        const fieldItems = items.filter((item) => item.fields != null);
+        return (
+          <div key={name}>
+            <p className="text-[10px] uppercase tracking-wide text-text-muted mb-1">
+              {name}
+            </p>
+            {listItems.length > 0 && (
+              <ul className="flex flex-col gap-0.5">
+                {listItems.map((item, i) => (
+                  <li
+                    key={`${name}-list-${i}`}
+                    className="text-xs text-text-secondary flex gap-1.5"
+                  >
+                    <span className="text-text-muted/60">•</span>
+                    <span>
+                      {item.content}
+                      {item.speaker && (
+                        <span className="text-text-muted/60">
+                          {" "}
+                          — {item.speaker}
+                        </span>
+                      )}
                     </span>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {fieldItems.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                {fieldItems.map((item, i) => (
+                  <div
+                    key={`${name}-card-${i}`}
+                    className="rounded-md border border-border bg-surface p-2 flex flex-col gap-1"
+                  >
+                    {Object.entries(item.fields as Record<string, unknown>).map(
+                      ([key, value]) => (
+                        <div
+                          key={key}
+                          className="flex justify-between gap-3 text-xs"
+                        >
+                          <span className="text-text-muted">
+                            {labelFor(item.definition_id, key)}
+                          </span>
+                          <span className="text-text-secondary text-right">
+                            {formatFieldValue(value)}
+                          </span>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -107,6 +169,11 @@ export function MeetingInsights({
   const { data: insightResults = [] } = useQuery({
     queryKey: ["meeting-insights", meetingId],
     queryFn: () => getMeetingInsights(meetingId),
+  });
+
+  const { data: insightDefinitions = [] } = useQuery({
+    queryKey: ["insight-definitions"],
+    queryFn: getInsightDefinitions,
   });
 
   const { data: firedAutomations = [] } = useQuery({
@@ -197,7 +264,10 @@ export function MeetingInsights({
       )}
 
       {/* Custom insights */}
-      <InsightResults results={insightResults} />
+      <InsightResults
+        results={insightResults}
+        definitions={insightDefinitions}
+      />
 
       {/* Fired automation rules */}
       <AutomationBadges names={firedAutomations.map((a) => a.name)} />
