@@ -1,5 +1,6 @@
 """Data access for custom insight definitions and their per-meeting results."""
 
+import json
 import logging
 import time
 import uuid
@@ -19,20 +20,45 @@ class InsightRepository:
     def __init__(self, db: Database) -> None:
         self._db = db
 
-    async def create(self, name: str, prompt: str, enabled: bool = True) -> str:
+    async def create(
+        self,
+        name: str,
+        prompt: str,
+        enabled: bool = True,
+        output_mode: str = "list",
+        fields: list[dict] | None = None,
+    ) -> str:
         insight_id = str(uuid.uuid4())
         now = time.time()
         async with self._db.write_lock:
             await self._db.conn.execute(
                 "INSERT INTO insight_definitions "
-                "(id, name, prompt, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (insight_id, name, prompt, 1 if enabled else 0, now, now),
+                "(id, name, prompt, enabled, output_mode, fields_json, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    insight_id,
+                    name,
+                    prompt,
+                    1 if enabled else 0,
+                    output_mode,
+                    json.dumps(fields) if fields else None,
+                    now,
+                    now,
+                ),
             )
             await self._db.conn.commit()
         return insight_id
 
-    async def update(self, insight_id, *, name=None, prompt=None, enabled=None) -> None:
+    async def update(
+        self,
+        insight_id,
+        *,
+        name=None,
+        prompt=None,
+        enabled=None,
+        output_mode=None,
+        fields=None,
+    ) -> None:
         sets, vals = [], []
         if name is not None:
             sets.append("name = ?")
@@ -43,6 +69,12 @@ class InsightRepository:
         if enabled is not None:
             sets.append("enabled = ?")
             vals.append(1 if enabled else 0)
+        if output_mode is not None:
+            sets.append("output_mode = ?")
+            vals.append(output_mode)
+        if fields is not None:
+            sets.append("fields_json = ?")
+            vals.append(json.dumps(fields) if fields else None)
         if not sets:
             return
         sets.append("updated_at = ?")
@@ -79,14 +111,40 @@ class InsightRepository:
 
     @staticmethod
     def _row_to_dict(row) -> dict:
+        raw_fields = row["fields_json"] if "fields_json" in row.keys() else None
+        try:
+            fields = json.loads(raw_fields) if raw_fields else None
+        except (ValueError, TypeError):
+            fields = None
         return {
             "id": row["id"],
             "name": row["name"],
             "prompt": row["prompt"],
             "enabled": bool(row["enabled"]),
+            "output_mode": row["output_mode"] if "output_mode" in row.keys() else "list",
+            "fields": fields,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+    async def _insert_results(self, meeting_id: str, results: list[dict], now: float) -> None:
+        for r in results:
+            f = r.get("fields")
+            await self._db.conn.execute(
+                "INSERT INTO insight_results "
+                "(definition_id, definition_name, meeting_id, content, speaker, "
+                "fields_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    r["definition_id"],
+                    r["definition_name"],
+                    meeting_id,
+                    r["content"],
+                    r.get("speaker", ""),
+                    json.dumps(f) if f is not None else None,
+                    now,
+                ),
+            )
 
     async def replace_results_for_meeting(self, meeting_id: str, results: list[dict]) -> int:
         now = time.time()
@@ -94,35 +152,43 @@ class InsightRepository:
             await self._db.conn.execute(
                 "DELETE FROM insight_results WHERE meeting_id = ?", (meeting_id,)
             )
-            for r in results:
-                await self._db.conn.execute(
-                    "INSERT INTO insight_results "
-                    "(definition_id, definition_name, meeting_id, content, speaker, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        r["definition_id"],
-                        r["definition_name"],
-                        meeting_id,
-                        r["content"],
-                        r.get("speaker", ""),
-                        now,
-                    ),
-                )
+            await self._insert_results(meeting_id, results, now)
+            await self._db.conn.commit()
+        return len(results)
+
+    async def replace_results_for_definition(
+        self, meeting_id: str, definition_id: str, results: list[dict]
+    ) -> int:
+        now = time.time()
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                "DELETE FROM insight_results WHERE meeting_id = ? AND definition_id = ?",
+                (meeting_id, definition_id),
+            )
+            await self._insert_results(meeting_id, results, now)
             await self._db.conn.commit()
         return len(results)
 
     async def results_for_meeting(self, meeting_id: str) -> list[dict]:
         cursor = await self._db.conn.execute(
-            "SELECT definition_id, definition_name, content, speaker "
+            "SELECT definition_id, definition_name, content, speaker, fields_json "
             "FROM insight_results WHERE meeting_id = ? ORDER BY id",
             (meeting_id,),
         )
-        return [
-            {
-                "definition_id": r["definition_id"],
-                "definition_name": r["definition_name"],
-                "content": r["content"],
-                "speaker": r["speaker"],
-            }
-            for r in await cursor.fetchall()
-        ]
+        out = []
+        for r in await cursor.fetchall():
+            raw = r["fields_json"]
+            try:
+                fields = json.loads(raw) if raw else None
+            except (ValueError, TypeError):
+                fields = None
+            out.append(
+                {
+                    "definition_id": r["definition_id"],
+                    "definition_name": r["definition_name"],
+                    "content": r["content"],
+                    "speaker": r["speaker"],
+                    "fields": fields,
+                }
+            )
+        return out
