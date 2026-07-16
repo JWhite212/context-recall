@@ -46,6 +46,23 @@ class AudioCaptureError(Exception):
     """Raised when audio capture encounters an unrecoverable error."""
 
 
+def select_system_backend(config: AudioConfig):
+    """Resolve the system-audio backend (ScreenCaptureKit / BlackHole).
+
+    A thin module-level wrapper around ``src.system_audio.select_system_backend``.
+    The real import is deferred to first call, not done at module load, because
+    ``src.system_audio`` imports ``AudioCaptureError`` from *this* module —
+    importing it back at module top here would be a genuine circular import.
+    Defining this as a real module-level function (rather than a bare import
+    statement inline in ``start()``) keeps the deferred-import behaviour while
+    leaving it independently patchable via
+    ``patch("src.audio_capture.select_system_backend", ...)`` in tests.
+    """
+    from src.system_audio import select_system_backend as _select_system_backend
+
+    return _select_system_backend(config)
+
+
 class AudioCapture:
     """
     Captures audio from the BlackHole virtual device and the local
@@ -61,7 +78,7 @@ class AudioCapture:
         self._output_path: Path | None = None
         self._system_path: Path | None = None
         self._mic_path: Path | None = None
-        self._blackhole_idx: int | None = None
+        self._system_backend = None  # set in start(); type: SystemAudioBackend | None
         self._mic_idx: int | None = None
 
         # Audio level callback: called with (system_rms, mic_rms) ~10/sec.
@@ -106,26 +123,6 @@ class AudioCapture:
         os.makedirs(config.temp_audio_dir, exist_ok=True)
         os.chmod(config.temp_audio_dir, 0o700)
 
-    def _find_device(self, name: str, kind: str = "input") -> int:
-        """
-        Locate a device index by name substring. Raises AudioCaptureError
-        if not found.
-        """
-        devices = sd.query_devices()
-        for idx, device in enumerate(devices):
-            if name.lower() in device["name"].lower() and device["max_input_channels"] > 0:
-                logger.info(f"Found {kind} device: '{device['name']}' (index {idx})")
-                return idx
-
-        available = [
-            f"  [{i}] {d['name']} (in={d['max_input_channels']})"
-            for i, d in enumerate(devices)
-            if d["max_input_channels"] > 0
-        ]
-        raise AudioCaptureError(
-            f"Device '{name}' not found. Available input devices:\n" + "\n".join(available)
-        )
-
     def _find_default_input_device(self) -> int | None:
         """Resolve the microphone device index, or None if no real mic exists.
 
@@ -147,7 +144,7 @@ class AudioCapture:
         except Exception:
             return None
 
-        exclude = {self._blackhole_idx} if self._blackhole_idx is not None else set()
+        exclude: set[int] = set()
         idx = resolve_default_mic_index(devices, default_idx, exclude=exclude)
         if idx is None:
             return None
@@ -170,39 +167,34 @@ class AudioCapture:
         return np.mean(data, axis=1)
 
     def _record_loop(self) -> None:
-        """
-        Runs on a background thread. Opens input streams on BlackHole
-        and (optionally) the microphone. Each stream writes directly
-        to its own WAV file — no real-time mixing, no clock-drift issues.
-        """
+        """Background thread: drive the system backend + mic stream, then merge."""
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         base = Path(self._config.temp_audio_dir)
-
         self._system_path = base / f"meeting_{timestamp}_system.wav"
         self._output_path = base / f"meeting_{timestamp}.wav"
 
         use_mic = self._config.mic_enabled and self._mic_idx is not None
         if use_mic:
             self._mic_path = base / f"meeting_{timestamp}_mic.wav"
-            logger.info("Dual-source recording: BlackHole (system) + mic")
+            logger.info("Dual-source recording: system backend + mic")
         else:
             self._mic_path = None
-            logger.info("Single-source recording: BlackHole (system) only")
+            logger.info("Single-source recording: system backend only")
 
-        system_file = None
+        backend = self._system_backend
         mic_file = None
-        system_stream = None
         mic_stream = None
+        latest_mic_rms = [0.0]
 
         try:
-            # Open output WAV files.
-            system_file = sf.SoundFile(
-                str(self._system_path),
-                mode="w",
-                samplerate=self._config.sample_rate,
-                channels=1,
-                subtype="PCM_16",
-            )
+            # Forward live-audio + stream-status through shims that read the
+            # current AudioCapture callbacks each call (main.py toggles
+            # on_audio_data around the live transcriber).
+            backend.on_audio_data = self._forward_audio_data
+            backend.on_stream_status = self._forward_stream_status
+            backend.start(self._system_path)
+            if backend.last_error is not None:
+                raise backend.last_error
 
             if use_mic:
                 mic_file = sf.SoundFile(
@@ -213,61 +205,22 @@ class AudioCapture:
                     subtype="PCM_16",
                 )
 
-            # Track latest RMS for level metering.
-            latest_system_rms = [0.0]
-            latest_mic_rms = [0.0]
+                def mic_callback(indata, frames, time_info, status):
+                    if status:
+                        logger.warning("Mic audio status: %s", status)
+                        if self.on_stream_status is not None:
+                            try:
+                                self.on_stream_status("mic", str(status))
+                            except Exception:
+                                pass
+                    if self._recording:
+                        mono = self._to_mono(indata)
+                        mic_file.write(mono)
+                        if self.on_audio_level is not None:
+                            latest_mic_rms[0] = float(np.sqrt(np.mean(mono**2)))
 
-            # Callbacks write directly to their respective files.
-            def system_callback(indata, frames, time_info, status):
-                if status:
-                    logger.warning("System audio status: %s", status)
-                    if self.on_stream_status is not None:
-                        try:
-                            self.on_stream_status("system", str(status))
-                        except Exception:
-                            pass
-                if self._recording:
-                    mono = self._to_mono(indata)
-                    system_file.write(mono)
-                    if self.on_audio_data is not None:
-                        try:
-                            self.on_audio_data(mono)
-                        except Exception:
-                            pass
-                    if self.on_audio_level is not None:
-                        latest_system_rms[0] = float(np.sqrt(np.mean(mono**2)))
-
-            def mic_callback(indata, frames, time_info, status):
-                if status:
-                    logger.warning("Mic audio status: %s", status)
-                    if self.on_stream_status is not None:
-                        try:
-                            self.on_stream_status("mic", str(status))
-                        except Exception:
-                            pass
-                if self._recording:
-                    mono = self._to_mono(indata)
-                    mic_file.write(mono)
-                    if self.on_audio_level is not None:
-                        latest_mic_rms[0] = float(np.sqrt(np.mean(mono**2)))
-
-            # Determine mic channel count.
-            mic_channels = 1
-            if use_mic:
                 mic_info = sd.query_devices(self._mic_idx)
                 mic_channels = min(mic_info["max_input_channels"], 2)
-
-            # Open streams.
-            system_stream = sd.InputStream(
-                device=self._blackhole_idx,
-                samplerate=self._config.sample_rate,
-                channels=2,  # BlackHole 2ch always provides stereo.
-                dtype="float32",
-                callback=system_callback,
-                blocksize=1024,
-            )
-
-            if use_mic:
                 mic_stream = sd.InputStream(
                     device=self._mic_idx,
                     samplerate=self._config.sample_rate,
@@ -276,76 +229,78 @@ class AudioCapture:
                     callback=mic_callback,
                     blocksize=1024,
                 )
-
-            system_stream.start()
-            if mic_stream:
                 mic_stream.start()
 
-            logger.info("Audio stream(s) opened. Capturing...")
+            logger.info("Capture running (system backend + %s).", "mic" if use_mic else "no mic")
 
-            # Wait until recording is stopped, emitting levels ~10/sec.
             while self._recording:
                 now = time.monotonic()
                 if self.on_audio_level and now - self._last_level_time >= LEVEL_EMIT_INTERVAL:
                     self._last_level_time = now
                     try:
-                        self.on_audio_level(latest_system_rms[0], latest_mic_rms[0])
+                        self.on_audio_level(backend.latest_rms, latest_mic_rms[0])
                     except Exception:
                         pass
                 time.sleep(0.05)
 
         except Exception as e:
             logger.error("Audio capture failed: %s", e, exc_info=True)
-            self._last_error = AudioCaptureError(f"Failed to capture audio: {e}")
+            self._last_error = (
+                e
+                if isinstance(e, AudioCaptureError)
+                else AudioCaptureError(f"Failed to capture audio: {e}")
+            )
             self._output_path = None
             self._recording = False
-            # Notify the orchestrator BEFORE signalling merge-complete so the
-            # UI sees pipeline.error the moment the failure is observed,
-            # rather than after wait_for_merge eventually returns.
             if self.on_capture_error is not None:
                 try:
                     self.on_capture_error(self._last_error)
                 except Exception:
                     logger.exception("on_capture_error callback raised")
-            # Signal merge-complete on the failure path so callers waiting
-            # on wait_for_merge unblock immediately rather than after the
-            # 120s timeout. There is no merged file to consume — callers
-            # must check last_error / output_path before reading.
             self._merge_complete.set()
             return
 
         finally:
-            # Always clean up streams and files, regardless of exit path.
-            for stream in (system_stream, mic_stream):
-                if stream is not None:
-                    try:
-                        stream.stop()
-                        stream.close()
-                    except Exception:
-                        pass
-            for fh in (system_file, mic_file):
-                if fh is not None:
-                    try:
-                        fh.close()
-                    except Exception:
-                        pass
+            try:
+                if backend is not None:
+                    backend.stop()
+            except Exception:
+                pass
+            if mic_stream is not None:
+                try:
+                    mic_stream.stop()
+                    mic_stream.close()
+                except Exception:
+                    pass
+            if mic_file is not None:
+                try:
+                    mic_file.close()
+                except Exception:
+                    pass
             self._streams_stopped.set()
 
-        logger.info(
-            "System audio: %s (%d KB)",
-            self._system_path,
-            self._system_path.stat().st_size / 1024,
-        )
-        if self._mic_path and self._mic_path.exists():
-            logger.info(
-                "Mic audio:    %s (%d KB)",
-                self._mic_path,
-                self._mic_path.stat().st_size / 1024,
-            )
+        # Surface a non-fatal backend warning (e.g. Screen Recording not granted).
+        if backend is not None and backend.last_warning and not self._last_warning:
+            self._last_warning = backend.last_warning
 
-        # Merge sources into the final output file.
         self._merge_sources()
         self._merge_complete.set()
+
+    def _forward_audio_data(self, mono: np.ndarray) -> None:
+        cb = self.on_audio_data
+        if cb is not None:
+            try:
+                cb(mono)
+            except Exception:
+                pass
+
+    def _forward_stream_status(self, source: str, status: str) -> None:
+        cb = self.on_stream_status
+        if cb is not None:
+            try:
+                cb(source, status)
+            except Exception:
+                pass
 
     def _streaming_rms(self, path: Path) -> float:
         """
@@ -558,9 +513,8 @@ class AudioCapture:
             # Safe here: no streams are open while _recording is False.
             refresh_input_devices()
 
-            self._blackhole_idx = self._find_device(
-                self._config.blackhole_device_name, kind="BlackHole"
-            )
+            # Select the system-audio backend (SCK / BlackHole).
+            self._system_backend = select_system_backend(self._config)
 
             # Reset session-scoped diagnostics so the orchestrator only
             # sees warnings/errors from THIS recording, not the previous one.

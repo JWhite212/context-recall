@@ -1872,7 +1872,6 @@ def test_capture_merge_pending_lifecycle(tmp_path):
 
     with (
         patch.object(AudioCapture, "_record_loop"),
-        patch.object(AudioCapture, "_find_device", return_value=0),
         patch.object(AudioCapture, "_find_default_input_device", return_value=None),
     ):
         capture.start()
