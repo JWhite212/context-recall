@@ -172,8 +172,9 @@ class Summariser:
         # until the first summarisation request. The check is cheap
         # and runs even for claude-only configs (which keep the
         # default localhost URL).
-        if self._config.ollama_base_url:
-            self._validate_ollama_url(self._config.ollama_base_url)
+        ollama_base_url = getattr(self._config, "ollama_base_url", None)
+        if ollama_base_url:
+            self._validate_ollama_url(ollama_base_url)
 
     def _get_claude_client(self) -> anthropic.Anthropic:
         """Lazy-initialise the Anthropic client with explicit timeouts."""

@@ -1086,7 +1086,16 @@ class PipelineRunner:
         matched = [r for r in rules if matches(context, r)]
         if not matched:
             return
-        executor = ActionExecutor(self._db.repo, self._emit)
+        from src.action_items.repository import ActionItemRepository
+        from src.insights.repository import InsightRepository
+
+        services = {
+            "meeting": meeting,
+            "insight_repo": InsightRepository(self._db.database),
+            "action_items_repo": ActionItemRepository(self._db.database),
+            "summarisation_config": self._config.summarisation,
+        }
+        executor = ActionExecutor(self._db.repo, self._emit, services=services)
         for rule in matched:
             already = await auto_repo.has_dispatched(rule["id"], meeting_id)
             await executor.run_rule(rule, context, meeting_id, run_side_effects=not already)
