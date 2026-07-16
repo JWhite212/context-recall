@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
+import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -161,3 +164,106 @@ class BlackHoleSystemCapture(SystemAudioBackend):
             except Exception:
                 pass
             self._file = None
+
+
+class ScreenCaptureKitSystemCapture(SystemAudioBackend):
+    """System source backed by the signed Swift SCK helper subprocess.
+
+    Captures system OUTPUT via the Screen Recording TCC service — the escape
+    hatch for macOS builds where the Microphone service zeros the BlackHole
+    input. Never captures the microphone.
+    """
+
+    _STOP_TIMEOUT = 30.0
+
+    def __init__(self, config: AudioConfig, helper_path: Path) -> None:
+        super().__init__()
+        self._config = config
+        self._helper = helper_path
+        self._proc: subprocess.Popen | None = None
+        self._reader: threading.Thread | None = None
+
+    def preflight(self) -> str:
+        try:
+            result = subprocess.run(
+                [str(self._helper), "--check-permission"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception as e:
+            logger.warning("SCK preflight failed: %s", e)
+            return "unknown"
+        token = (result.stdout or "").strip().splitlines()
+        value = token[-1] if token else ""
+        return value if value in ("granted", "denied") else "unknown"
+
+    def start(self, output_path: Path) -> None:
+        try:
+            self._proc = subprocess.Popen(
+                [
+                    str(self._helper),
+                    "--output",
+                    str(output_path),
+                    "--sample-rate",
+                    str(self._config.sample_rate),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as e:
+            self.last_error = AudioCaptureError(f"Failed to launch SCK helper: {e}")
+            logger.error("%s", self.last_error)
+            return
+        self._reader = threading.Thread(
+            target=self._read_levels, name="sck-rms-reader", daemon=True
+        )
+        self._reader.start()
+        logger.info("ScreenCaptureKit system capture started -> %s", output_path)
+
+    def _read_levels(self) -> None:
+        proc = self._proc
+        if proc is None or proc.stdout is None:
+            return
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("rms="):
+                try:
+                    self._latest_rms = float(line[4:])
+                except ValueError:
+                    pass
+
+    def stop(self) -> None:
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            proc.send_signal(signal.SIGTERM)
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=self._STOP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            logger.warning("SCK helper did not exit in %.0fs — killing", self._STOP_TIMEOUT)
+            proc.kill()
+            proc.wait(timeout=5)
+        if self._reader is not None:
+            self._reader.join(timeout=5)
+        stderr = ""
+        try:
+            if proc.stderr is not None:
+                stderr = proc.stderr.read() or ""
+        except Exception:
+            pass
+        if proc.returncode not in (0, -signal.SIGTERM):
+            reason = stderr.strip() or f"SCK helper exited {proc.returncode}"
+            self.last_error = AudioCaptureError(reason)
+            self.last_warning = (
+                "System audio capture failed — grant Screen Recording in System "
+                "Settings → Privacy & Security → Screen Recording, then "
+                f"re-record. ({reason})"
+            )
+            logger.error("SCK helper failed: %s", reason)
+        self._proc = None
+        self._reader = None

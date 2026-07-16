@@ -2,6 +2,8 @@
 
 import stat
 import sys
+import textwrap
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -111,3 +113,84 @@ def test_blackhole_backend_callback_forwards_data_and_rms(tmp_path):
         assert received[0].ndim == 1  # downmixed to mono
         assert backend.latest_rms > 0.0
         MockFile.return_value.write.assert_called()  # wrote mono to the file
+
+
+def _write_stub_helper(tmp_path, body_python) -> Path:
+    """Create an executable python 'helper' honouring the CLI contract.
+
+    Shebang pins to the *current* interpreter (sys.executable) rather than
+    `#!/usr/bin/env python3` — the stub imports soundfile/numpy, which live in
+    this worktree's venv, not necessarily whatever "python3" resolves to via
+    the ambient shell PATH the test happens to run under.
+    """
+    helper = tmp_path / "stub-helper"
+    helper.write_text(f"#!{sys.executable}\n" + textwrap.dedent(body_python))
+    helper.chmod(0o755)
+    return helper
+
+
+CAPTURE_STUB = """
+    import sys, signal, time
+    if "--check-permission" in sys.argv:
+        print("granted"); sys.exit(0)
+    out = sys.argv[sys.argv.index("--output") + 1]
+    stop = {"v": False}
+    signal.signal(signal.SIGTERM, lambda *a: stop.__setitem__("v", True))
+    # Write a tiny valid 16k mono PCM16 WAV up front.
+    import soundfile as sf, numpy as np
+    sf.write(out, np.zeros(16000, dtype="float32"), 16000, subtype="PCM_16")
+    while not stop["v"]:
+        print("rms=0.010000", flush=True)
+        time.sleep(0.05)
+    sys.exit(0)
+"""
+
+ERROR_STUB = """
+    import sys
+    if "--check-permission" in sys.argv:
+        print("denied"); sys.exit(0)
+    sys.stderr.write("error=screen recording denied\\n")
+    sys.exit(3)
+"""
+
+
+def test_sck_preflight_reports_granted(tmp_path):
+    helper = _write_stub_helper(tmp_path, CAPTURE_STUB)
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path))
+    backend = sa.ScreenCaptureKitSystemCapture(cfg, helper)
+    assert backend.preflight() == "granted"
+
+
+def test_sck_capture_updates_rms_and_finalises(tmp_path):
+    helper = _write_stub_helper(tmp_path, CAPTURE_STUB)
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path))
+    backend = sa.ScreenCaptureKitSystemCapture(cfg, helper)
+    out = tmp_path / "meeting_x_system.wav"
+    backend.start(out)
+    # Give the reader thread a moment to parse an rms= line.
+    for _ in range(40):
+        if backend.latest_rms > 0:
+            break
+        time.sleep(0.05)
+    backend.stop()
+    assert backend.latest_rms > 0.0
+    assert out.exists()
+    assert backend.last_error is None
+
+
+def test_sck_nonzero_exit_sets_error(tmp_path):
+    helper = _write_stub_helper(tmp_path, ERROR_STUB)
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path))
+    backend = sa.ScreenCaptureKitSystemCapture(cfg, helper)
+    out = tmp_path / "meeting_x_system.wav"
+    backend.start(out)
+    # The stub exits near-instantly on the error path. Wait for it to exit on
+    # its own (bounded poll, no fixed sleep) so stop()'s SIGTERM doesn't race
+    # it and mask the real exit(3) with a "killed by signal" outcome.
+    for _ in range(40):
+        if backend._proc is not None and backend._proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    backend.stop()
+    assert backend.last_error is not None
+    assert "screen recording" in (backend.last_warning or "").lower()
