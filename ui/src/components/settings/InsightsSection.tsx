@@ -93,6 +93,16 @@ export function InsightsSection({ id }: { id?: string }) {
   const removeField = (index: number) =>
     setFields((prev) => prev.filter((_, i) => i !== index));
 
+  // Blank-label rows are dropped before validation/submit — they can't
+  // produce a usable slugified key.
+  const validFields = fields.filter((field) => field.label.trim());
+  const validFieldKeys = validFields.map((field) =>
+    slugifyFieldKey(field.label),
+  );
+  const hasDuplicateKeys =
+    new Set(validFieldKeys).size !== validFieldKeys.length;
+  const structuredInvalid = validFields.length === 0 || hasDuplicateKeys;
+
   const create = useMutation({
     mutationFn: () => {
       const base = { name: name.trim(), prompt: prompt.trim() };
@@ -100,7 +110,7 @@ export function InsightsSection({ id }: { id?: string }) {
         return createInsightDefinition({
           ...base,
           output_mode: "structured",
-          fields: fields.map((field) => ({
+          fields: validFields.map((field) => ({
             key: slugifyFieldKey(field.label),
             label: field.label,
             type: field.type,
@@ -280,7 +290,12 @@ export function InsightsSection({ id }: { id?: string }) {
           <button
             type="button"
             onClick={() => create.mutate()}
-            disabled={!name.trim() || !prompt.trim() || create.isPending}
+            disabled={
+              !name.trim() ||
+              !prompt.trim() ||
+              create.isPending ||
+              (outputMode === "structured" && structuredInvalid)
+            }
             className="self-end px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
           >
             Add insight
