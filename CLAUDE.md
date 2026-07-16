@@ -56,13 +56,13 @@ Do **not** sign with the keychain's "Apple Development" identity — without an 
 ```bash
 # Python
 pip install -r requirements-dev.lock
-python3 -m pytest tests/ -v            # Full Python suite (~1030 tests)
+python3 -m pytest tests/ -v            # Full Python suite (~1180 tests)
 python3 -m pytest tests/ -x            # Stop on first failure
 ruff check src/ tests/                 # Lint check
 
 # UI
 cd ui
-npm test                               # vitest run (~100 tests)
+npm test                               # vitest run (~155 tests)
 npx tsc --noEmit                       # TypeScript type check
 
 # Rust (Tauri shell)
@@ -124,13 +124,13 @@ TeamsDetector  ──►  AudioCapture  ──►  Transcriber  ──►  Diari
 
 **`src/api/server.py`** — `ApiServer` class. Spins up a uvicorn server in a background thread on the orchestrator's lifecycle. Exposes its asyncio loop as `self.loop` so the pipeline thread can use `asyncio.run_coroutine_threadsafe` to write to the DB without owning an event loop. Also owns `self.repo` (the `MeetingRepository`) and a connection-manager (`src/api/websocket.py`) used for real-time pipeline events.
 
-**`src/api/routes/`** — 25 router modules (status, meetings, config, recording, devices, diagnostics, support_bundle, export, resummarise, reprocess, models, templates, search, speakers, people, clients, ask, meeting_insights, trackers, calendar, action_items, series, analytics, notifications, prep). Each registers under bearer-token auth (`src/api/auth.py`). The orchestrator emits pipeline lifecycle events (`pipeline.stage`, `pipeline.warning`, `pipeline.error`, `pipeline.complete`, `transcript.segment`) via the WebSocket event bus; the UI drives all its state off those plus REST polls.
+**`src/api/routes/`** — 29 router modules (status, meetings, config, recording, devices, diagnostics, support_bundle, export, resummarise, reprocess, models, templates, search, speakers, people, clients, ask, meeting_insights, trackers, calendar, action_items, series, analytics, notifications, prep, auth, automations, insights, preflight). `insights` and `automations` are the custom-insight and rules-engine routes (see Intelligence modules). Each registers under bearer-token auth (`src/api/auth.py`). The orchestrator emits pipeline lifecycle events (`pipeline.stage`, `pipeline.warning`, `pipeline.error`, `pipeline.complete`, `transcript.segment`) via the WebSocket event bus; the UI drives all its state off those plus REST polls.
 
 **`src/api/routes/reprocess.py`** — POST `/api/meetings/{id}/reprocess`. Submits the FULL shared pipeline as a background task and returns 202 immediately (C4 fix). Recovers surviving source WAVs from the temp dir for diarisation, re-applies stored speaker renames, archives + replaces the previous Notion page (`meetings.notion_page_id`), replaces extracted action items, and refreshes the meeting's own analytics period.
 
 ### DB
 
-**`src/db/database.py` + `src/db/repository.py`** — SQLite via `aiosqlite`. Migrations are numbered (`SCHEMA_VERSION` is the head; `tests/test_db_migration_v20.py` is the latest). Schema covers meetings (incl. `notion_page_id` and client/project assignment columns), segments, speaker mappings (person-linked), people + voice profiles, clients + projects, keyword trackers + hits, templates, action items, analytics rollups, prep briefings, series memberships, notification dispatches, and an FTS5 mirror for full-text search. `segment_embeddings_vec` is a `sqlite-vec` virtual table populated by `src/embeddings.py` for semantic search.
+**`src/db/database.py` + `src/db/repository.py`** — SQLite via `aiosqlite`. Migrations are numbered (`SCHEMA_VERSION` is the head — currently **23**; `tests/test_db_migration_v23.py` is the latest). Schema covers meetings (incl. `notion_page_id` and client/project assignment columns), segments, speaker mappings (person-linked), people + voice profiles, clients + projects, keyword trackers + hits, templates, action items, analytics rollups, prep briefings, series memberships, notification dispatches, insight definitions + results (custom and structured LLM insights), automation rules + dispatches, an `app_metadata` key/value store, and an FTS5 mirror for full-text search. `segment_embeddings_vec` is a `sqlite-vec` virtual table populated by `src/embeddings.py` for semantic search.
 
 ### Intelligence modules
 
@@ -148,6 +148,8 @@ These run after the core pipeline finishes (via `_run_post_processing`), each no
 - **`src/tagging/`** — client/project store + auto-assignment: deterministic pre-pass (attendee email domains, calendar-title aliases, series inheritance) before summarisation with description injection into the prompt (`Summariser.summarise(extra_context=...)`), LLM classifier in post-processing for the rest. Manual assignments are never overwritten.
 - **`src/trackers/`** — keyword trackers: `scanner.py` (word-boundary matching) + repository; scanned in post-processing, reprocess-safe (`replace_hits_for_meeting`).
 - **`src/talk_stats.py`** — pure per-speaker talk-time/turns/monologue computation from `transcript_json`.
+- **`src/insights/`** — user-defined LLM insight extractions run per meeting (`insight_definitions`). Two output modes: **list** (a flat list of `{content, speaker}`) or **structured** (user-defined typed fields — text/number/date/boolean/list — coerced into one record + a human-readable rendering). `extractor.py` (dual Claude/Ollama backend, structured prompt returns a JSON object) + `repository.py` (definitions + reprocess-safe results; `replace_results_for_definition` scopes a re-run to one definition so an automation `run_insight` can't clobber the global step).
+- **`src/automations/`** — post-meeting rules engine. Pure `evaluator.py` (conditions `tag`/`client`/`project`/`title_contains`/`attendee_domain`, combined `all`/`any`) → `executor.py` actions `apply_tag`/`notify`/`webhook`/`run_insight`/`send_notes`. `run_insight` runs a specific insight on matching meetings (ungated, reprocess-safe); `send_notes` POSTs a **Circleback-schema** payload (id/name/createdAt/duration/tags/attendees/notes/actionItems/insights) HMAC-signed as `x-signature` (gated on `run_side_effects`). Definitions targeted by an enabled `run_insight` rule are **excluded from the global insight step** (`_extract_insights`) so they run only on matching meetings. Rules seeded once at boot via `src/insights/seed.py` (idempotent, `app_metadata['insights_seed_version']`).
 
 ### UI
 
@@ -157,13 +159,13 @@ These run after the core pipeline finishes (via `_run_post_processing`), each no
 
 ### Config
 
-**`src/utils/config.py`** — Typed dataclass config loaded from `config.yaml`. `_build_dataclass()` ignores unknown keys for forward-compatibility. Paths with `~` are expanded via `_expand_path()`. Sections: `detection`, `audio`, `transcription`, `summarisation`, `diarisation`, `calendar`, `markdown`, `notion`, `logging`, `api`, `retention`, `action_items`, `series`, `analytics`, `notifications`, `prep`, `voice_id`, `tagging`.
+**`src/utils/config.py`** — Typed dataclass config loaded from `config.yaml`. `_build_dataclass()` ignores unknown keys for forward-compatibility. Paths with `~` are expanded via `_expand_path()`. Sections: `detection`, `audio`, `transcription`, `summarisation`, `diarisation`, `calendar`, `markdown`, `notion`, `logging`, `api`, `retention`, `action_items`, `series`, `analytics`, `notifications`, `prep`, `voice_id`, `tagging`, `insights`, `automations`, `auto_arm`.
 
 ## Key Constraints
 
 - **macOS + Apple Silicon only**: relies on BlackHole virtual audio driver, `pgrep`, `lsof`, `osascript`, and `mlx_whisper` (MLX is Apple-Silicon only). The CI matrix marks the MLX/Tauri jobs as Apple-Silicon only (commit `554ede5`).
 - **`config.yaml` is gitignored** — contains API keys. `config.example.yaml` is the tracked template.
-- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~1030 tests. Tests never load real ML models (sentence-transformers/speechbrain are faked or unavailable).
+- **Python tests**: pytest + pytest-asyncio. `python3 -m pytest tests/ -v`. ~1180 tests. Tests never load real ML models (sentence-transformers/speechbrain are faked or unavailable).
 - **UI tests**: vitest 4. `cd ui && npm test`. Pure UI; Tauri shell is not booted.
 - **Rust check**: `cd ui/src-tauri && cargo check` (requires the daemon-resource stub above).
 - **Linting**: ruff for Python (`ruff check src/ tests/`); tsc for TypeScript (`cd ui && npx tsc --noEmit`).
