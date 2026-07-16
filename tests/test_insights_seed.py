@@ -1,10 +1,10 @@
 """Tests for one-time tailored starter-content seeding (insights + automations)."""
 
+from src.automations.repository import AutomationRepository
 from src.db.database import Database
 from src.db.repository import MeetingRepository
 from src.insights.repository import InsightRepository
-from src.automations.repository import AutomationRepository
-from src.insights.seed import seed_starter_content, SEED_VERSION
+from src.insights.seed import SEED_VERSION, seed_starter_content
 
 
 async def _repos(tmp_path):
