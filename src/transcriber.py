@@ -100,6 +100,26 @@ class Transcript:
             "dropped_segments": [asdict(s) for s in self.dropped_segments],
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> "Transcript":
+        """Deserialise from the dict shape produced by `to_dict` (symmetric)."""
+        data = data or {}
+        segs = [
+            TranscriptSegment(
+                start=float(s.get("start", 0.0)),
+                end=float(s.get("end", 0.0)),
+                text=s.get("text", ""),
+                speaker=s.get("speaker", ""),
+            )
+            for s in data.get("segments", [])
+        ]
+        return cls(
+            segments=segs,
+            language=data.get("language", ""),
+            language_probability=data.get("language_probability", 0.0),
+            duration_seconds=data.get("duration_seconds", 0.0),
+        )
+
 
 class Transcriber:
     """
