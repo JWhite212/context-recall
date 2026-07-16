@@ -47,6 +47,7 @@ from src.output.notion_writer import NotionWriter
 from src.pipeline_runner import DbBridge, PipelineRunner
 from src.silent_input_detector import SilentInputDetector
 from src.summariser import Summariser
+from src.system_audio import ScreenCaptureKitSystemCapture
 from src.transcriber import Transcriber
 from src.utils.config import load_config, materialise_default_config
 from src.utils.paths import audio_dir as default_audio_dir
@@ -118,6 +119,13 @@ class ContextRecall:
 
         self._meeting_started_at: float = 0.0
         self._active_meeting_id: str | None = None
+
+        # Remembers the last capture warning already surfaced as a
+        # pipeline.warning, so the post-merge SCK "grant Screen Recording"
+        # warning (set at the end of the capture loop, after the start-time
+        # _emit_capture_warnings() window) is emitted exactly once and a
+        # start-time mic warning is never re-emitted (I2).
+        self._last_emitted_capture_warning: str | None = None
 
         # Background processing executor for non-blocking pipeline runs.
         self._processing_executor = concurrent.futures.ThreadPoolExecutor(
@@ -250,7 +258,22 @@ class ContextRecall:
         """
         warning = getattr(self._capture, "last_warning", None)
         if warning:
+            self._last_emitted_capture_warning = str(warning)
             self._emit("pipeline.warning", source="mic", message=str(warning))
+
+    def _emit_late_capture_warning(self) -> None:
+        """Surface a capture warning that appeared AFTER start() (I2).
+
+        The SCK backend records its "grant Screen Recording" hint at the end
+        of the capture loop (ScreenCaptureKitSystemCapture.stop), which is
+        after _emit_capture_warnings() already ran. Called once the merge is
+        done; deduplicated against whatever _emit_capture_warnings already
+        emitted so a start-time mic warning is never repeated.
+        """
+        warning = getattr(self._capture, "last_warning", None)
+        if warning and str(warning) != self._last_emitted_capture_warning:
+            self._last_emitted_capture_warning = str(warning)
+            self._emit("pipeline.warning", source="system", message=str(warning))
 
     def _ensure_audio_routing(self) -> None:
         """Route system audio into the capture loopback before recording.
@@ -290,19 +313,32 @@ class ContextRecall:
                 mic_rms=round(mic_rms, 6),
             )
             if self._silent_input_detector.observe(system_rms=system_rms, now=time.monotonic()):
-                logger.warning(
-                    "System audio source delivered silence for the alert "
-                    "window — BlackHole may be installed but not routed."
-                )
+                backend = getattr(self._capture, "_system_backend", None)
+                if isinstance(backend, ScreenCaptureKitSystemCapture):
+                    logger.warning(
+                        "System audio source delivered silence for the alert "
+                        "window — Screen Recording may not be granted."
+                    )
+                    message = (
+                        "No system audio detected. Grant Screen Recording in "
+                        "System Settings → Privacy & Security → Screen Recording, "
+                        "then re-record."
+                    )
+                else:
+                    logger.warning(
+                        "System audio source delivered silence for the alert "
+                        "window — BlackHole may be installed but not routed."
+                    )
+                    message = (
+                        "No system audio detected. If you are using BlackHole, "
+                        "make sure your system output is routed to it via a "
+                        "Multi-Output Device in Audio MIDI Setup."
+                    )
                 self._emit(
                     "pipeline.warning",
                     type="silent_input",
                     source="system",
-                    message=(
-                        "No system audio detected. If you are using BlackHole, "
-                        "make sure your system output is routed to it via a "
-                        "Multi-Output Device in Audio MIDI Setup."
-                    ),
+                    message=message,
                 )
 
         self._capture.on_audio_level = _on_level
@@ -717,6 +753,11 @@ class ContextRecall:
                 )
                 self._db_update(meeting_id, status="error")
                 return
+            # The capture loop sets its backend warning (e.g. the SCK "grant
+            # Screen Recording" hint) only at the very end, after the merge —
+            # too late for the start-time _emit_capture_warnings(). Surface it
+            # now, idempotently so a start-time mic warning isn't repeated (I2).
+            self._emit_late_capture_warning()
 
         # If the capture thread reported a typed error (e.g. mic permission
         # denied, device unavailable), surface it before pretending we have

@@ -111,15 +111,21 @@ HELPER_DEST="$APP_DIR/Contents/Resources/sck-audio-capture"
 HELPER_IDENTIFIER="dev.jamiewhite.contextrecall.sck"
 if command -v swiftc >/dev/null 2>&1 && [ -f "$HELPER_SRC" ]; then
     echo "==> Compiling SCK audio helper"
-    swiftc -O "$HELPER_SRC" -o "$HELPER_DEST"
-    if [ "$SIGN_IDENTITY" = "-" ]; then
-        codesign --force --sign - --identifier "$HELPER_IDENTIFIER" "$HELPER_DEST"
-    else
-        codesign --force --sign "$SIGN_IDENTITY" --identifier "$HELPER_IDENTIFIER" \
-            --timestamp=none "$HELPER_DEST" 2>/dev/null || \
+    # A present-but-broken main.swift must NOT abort the whole daemon build
+    # under `set -euo pipefail`: degrade to a BlackHole-only daemon instead.
+    if swiftc -O "$HELPER_SRC" -o "$HELPER_DEST"; then
+        if [ "$SIGN_IDENTITY" = "-" ]; then
             codesign --force --sign - --identifier "$HELPER_IDENTIFIER" "$HELPER_DEST"
+        else
+            codesign --force --sign "$SIGN_IDENTITY" --identifier "$HELPER_IDENTIFIER" \
+                --timestamp=none "$HELPER_DEST" 2>/dev/null || \
+                codesign --force --sign - --identifier "$HELPER_IDENTIFIER" "$HELPER_DEST"
+        fi
+        echo "==> SCK helper signed and placed at Contents/Resources/sck-audio-capture"
+    else
+        echo "==> WARNING: SCK helper failed to compile — daemon will degrade to BlackHole (no SCK)"
+        rm -f "$HELPER_DEST"
     fi
-    echo "==> SCK helper signed and placed at Contents/Resources/sck-audio-capture"
 else
     echo "==> WARNING: swiftc or $HELPER_SRC missing — daemon degrades to BlackHole (no SCK)"
 fi
