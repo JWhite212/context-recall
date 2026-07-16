@@ -21,22 +21,27 @@ func fail(_ message: String) -> Never {
 }
 
 final class SystemAudioCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
+    let audioQueue = DispatchQueue(label: "sck.audio")
     private let outURL: URL
     private let sampleRate: Double
     private let outFormat: AVAudioFormat
     private var file: AVAudioFile?
     private var converter: AVAudioConverter?
     private var lastEmit = Date(timeIntervalSince1970: 0)
+    private var stopped = false
 
     init(outputPath: String, sampleRate: Double) {
         self.outURL = URL(fileURLWithPath: outputPath)
         self.sampleRate = sampleRate
-        self.outFormat = AVAudioFormat(
+        guard let outFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
             sampleRate: sampleRate,
             channels: 1,
             interleaved: true
-        )!
+        ) else {
+            fail("invalid sample rate \(sampleRate)")
+        }
+        self.outFormat = outFormat
         super.init()
     }
 
@@ -58,12 +63,21 @@ final class SystemAudioCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     func finalizeAndExit() {
-        self.file = nil  // AVAudioFile finalises the WAV header on release.
+        // Runs on the main queue (signal handler). Serialize with the audio
+        // queue so any in-flight write completes before we nil out `file` —
+        // SCK does not guarantee the sample-handler queue has drained when
+        // stopCapture() returns. Setting `stopped` here also stops the
+        // handler from reopening (and truncating) the file on a late buffer.
+        audioQueue.sync {
+            stopped = true
+            self.file = nil  // AVAudioFile finalises the WAV header on release.
+        }
         exit(0)
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
+        guard !stopped else { return }
         guard type == .audio, CMSampleBufferDataIsReady(sampleBuffer) else { return }
         guard let fmtDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(fmtDesc) else { return }
@@ -101,8 +115,14 @@ final class SystemAudioCapturer: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         if err != nil || outBuffer.frameLength == 0 { return }
 
+        if file == nil {
+            do {
+                try openFile()
+            } catch {
+                fail("failed to open output file: \(error)")
+            }
+        }
         do {
-            if file == nil { try openFile() }
             try file?.write(from: outBuffer)
         } catch {
             fail("write failed: \(error)")
@@ -157,7 +177,7 @@ func runCapture(outputPath: String, sampleRate: Int) async {
         let stream = SCStream(filter: filter, configuration: makeConfig(sampleRate: sampleRate),
                               delegate: capturer)
         try stream.addStreamOutput(capturer, type: .audio,
-                                   sampleHandlerQueue: DispatchQueue(label: "sck.audio"))
+                                   sampleHandlerQueue: capturer.audioQueue)
 
         // Finalise cleanly on SIGTERM/SIGINT (the daemon stops us this way).
         for sig in [SIGTERM, SIGINT] { signal(sig, SIG_IGN) }
@@ -202,7 +222,6 @@ if let srIdx = args.firstIndex(of: "--sample-rate"), srIdx + 1 < args.count,
     sampleRate = sr
 }
 
-let sem = DispatchSemaphore(value: 0)
-Task { await runCapture(outputPath: outputPath, sampleRate: sampleRate); sem.signal() }
+Task { await runCapture(outputPath: outputPath, sampleRate: sampleRate) }
 // runCapture only returns on error (success exits via signal handler).
 RunLoop.main.run()
