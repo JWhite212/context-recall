@@ -11,6 +11,7 @@ docs/superpowers/specs/2026-07-16-screencapturekit-system-audio-design.md.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import platform
 import signal
@@ -231,9 +232,11 @@ class ScreenCaptureKitSystemCapture(SystemAudioBackend):
             line = line.strip()
             if line.startswith("rms="):
                 try:
-                    self._latest_rms = float(line[4:])
+                    value = float(line[4:])
                 except ValueError:
-                    pass
+                    continue
+                if math.isfinite(value):
+                    self._latest_rms = value
 
     def stop(self) -> None:
         proc = self._proc

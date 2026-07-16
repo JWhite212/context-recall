@@ -1,5 +1,6 @@
 """Tests for the system-audio backend abstraction."""
 
+import math
 import stat
 import sys
 import textwrap
@@ -216,6 +217,35 @@ def test_sck_nonzero_exit_sets_error(tmp_path):
     backend.stop()
     assert backend.last_error is not None
     assert "screen recording" in (backend.last_warning or "").lower()
+
+
+class _FakeStdout:
+    """Minimal stand-in for a Popen.stdout text-mode pipe: iterable of lines."""
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    def __iter__(self):
+        return iter(self._lines)
+
+
+class _FakeProc:
+    def __init__(self, lines: list[str]) -> None:
+        self.stdout = _FakeStdout(lines)
+
+
+def test_read_levels_ignores_non_finite_rms(tmp_path):
+    """M1: a garbled 'rms=inf' (or 'rms=nan') line from the SCK helper must
+    not poison latest_rms — Infinity/NaN is invalid JSON and would break the
+    WebSocket bus downstream."""
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path))
+    backend = sa.ScreenCaptureKitSystemCapture(cfg, Path("/nonexistent/helper"))
+    backend._proc = _FakeProc(["rms=inf\n", "rms=0.050000\n", "rms=nan\n"])
+
+    backend._read_levels()
+
+    assert math.isfinite(backend.latest_rms)
+    assert backend.latest_rms == pytest.approx(0.05)
 
 
 def test_select_backend_explicit_blackhole(tmp_path):
