@@ -23,7 +23,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 _vec_available = False
 
@@ -369,6 +369,13 @@ CREATE INDEX IF NOT EXISTS idx_automation_dispatches_meeting
     ON automation_dispatches(meeting_id);
 """
 
+APP_METADATA_SQL = """
+CREATE TABLE IF NOT EXISTS app_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
 VOICE_PROFILES_SQL = """
 CREATE TABLE IF NOT EXISTS voice_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -422,6 +429,8 @@ _ALLOWED_TABLES = frozenset(
         "projects",
         "trackers",
         "tracker_hits",
+        "insight_definitions",
+        "insight_results",
     }
 )
 _ALLOWED_COL_TYPES = frozenset({"TEXT", "REAL", "INTEGER", "BLOB"})
@@ -669,6 +678,13 @@ class Database:
             await self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_action_items_project ON action_items(project_id)"
             )
+            # Structured insights + app metadata (v23).
+            await _safe_add_column(
+                self.conn, "insight_definitions", "output_mode", "TEXT", "'list'"
+            )
+            await _safe_add_column(self.conn, "insight_definitions", "fields_json", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "insight_results", "fields_json", "TEXT", "NULL")
+            await self.conn.executescript(APP_METADATA_SQL)
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -940,5 +956,18 @@ class Database:
             await self.conn.commit()
             logger.info("Database migrated to version 22 (action-item tags)")
             current_version = 22
+
+        if current_version < 23:
+            # Structured (typed) insights + a generic key/value store.
+            await _safe_add_column(
+                self.conn, "insight_definitions", "output_mode", "TEXT", "'list'"
+            )
+            await _safe_add_column(self.conn, "insight_definitions", "fields_json", "TEXT", "NULL")
+            await _safe_add_column(self.conn, "insight_results", "fields_json", "TEXT", "NULL")
+            await self.conn.executescript(APP_METADATA_SQL)
+            await self.conn.execute("PRAGMA user_version = 23")
+            await self.conn.commit()
+            logger.info("Database migrated to version 23 (structured insights + app_metadata)")
+            current_version = 23
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

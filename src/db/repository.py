@@ -1257,3 +1257,19 @@ class MeetingRepository:
             (limit,),
         )
         return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_meta(self, key: str) -> str | None:
+        """Read a value from the generic app_metadata KV store."""
+        cur = await self._db.conn.execute("SELECT value FROM app_metadata WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return row["value"] if row else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        """Upsert a value into the generic app_metadata KV store."""
+        async with self._db.write_lock:
+            await self._db.conn.execute(
+                "INSERT INTO app_metadata (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            await self._db.conn.commit()
