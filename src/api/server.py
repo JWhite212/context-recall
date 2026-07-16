@@ -347,6 +347,18 @@ class ApiServer:
         await self.db.connect()
         self.repo = MeetingRepository(self.db)
 
+        # One-time starter content (idempotent; guarded by app_metadata marker).
+        try:
+            from src.automations.repository import AutomationRepository
+            from src.insights.repository import InsightRepository
+            from src.insights.seed import seed_starter_content
+
+            await seed_starter_content(
+                self.repo, InsightRepository(self.db), AutomationRepository(self.db)
+            )
+        except Exception:
+            logger.warning("Starter-content seeding failed", exc_info=True)
+
         # Recover meetings orphaned by a previous daemon process that died
         # mid-pipeline (Bug C2). Without this, rows stay in 'transcribing'
         # forever and the UI offers no recovery action for them.
