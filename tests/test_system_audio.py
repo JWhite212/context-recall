@@ -194,3 +194,45 @@ def test_sck_nonzero_exit_sets_error(tmp_path):
     backend.stop()
     assert backend.last_error is not None
     assert "screen recording" in (backend.last_warning or "").lower()
+
+
+def test_select_backend_explicit_blackhole(tmp_path):
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path), system_capture_backend="blackhole")
+    with patch("src.system_audio.resolve_helper_path", return_value=Path("/x/helper")):
+        assert isinstance(sa.select_system_backend(cfg), sa.BlackHoleSystemCapture)
+
+
+def test_select_backend_explicit_sck_without_helper_raises(tmp_path):
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path), system_capture_backend="screencapturekit")
+    with patch("src.system_audio.resolve_helper_path", return_value=None):
+        import pytest
+
+        with pytest.raises(AudioCaptureError):
+            sa.select_system_backend(cfg)
+
+
+def test_select_backend_auto_prefers_sck_when_available(tmp_path):
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path), system_capture_backend="auto")
+    with (
+        patch("src.system_audio.resolve_helper_path", return_value=tmp_path / "helper"),
+        patch("src.system_audio._macos_at_least", return_value=True),
+    ):
+        assert isinstance(sa.select_system_backend(cfg), sa.ScreenCaptureKitSystemCapture)
+
+
+def test_select_backend_auto_falls_back_without_helper(tmp_path):
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path), system_capture_backend="auto")
+    with (
+        patch("src.system_audio.resolve_helper_path", return_value=None),
+        patch("src.system_audio._macos_at_least", return_value=True),
+    ):
+        assert isinstance(sa.select_system_backend(cfg), sa.BlackHoleSystemCapture)
+
+
+def test_select_backend_auto_falls_back_on_old_macos(tmp_path):
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path), system_capture_backend="auto")
+    with (
+        patch("src.system_audio.resolve_helper_path", return_value=tmp_path / "helper"),
+        patch("src.system_audio._macos_at_least", return_value=False),
+    ):
+        assert isinstance(sa.select_system_backend(cfg), sa.BlackHoleSystemCapture)
