@@ -317,6 +317,52 @@ class NotionWriter:
         logger.info("Notion page created: %s", page_url)
         return page_url
 
+    def append_insights(self, page_id: str, results: list[dict]) -> bool:
+        """Append an "Insights" block group to an existing Notion page.
+
+        Groups ``results`` by ``definition_name`` and renders each result's
+        human-readable ``content`` as a bullet — matching the markdown export
+        (``render_insights_section``). Appending is idempotent per pipeline run
+        because the page was freshly created/replaced (without insights) in the
+        same run's synchronous write, so no prior insight blocks exist.
+
+        Returns ``True`` on success, ``False`` on empty ``results`` or a Notion
+        error (in which case ``last_error`` is set).
+        """
+        if not results:
+            return False
+
+        blocks: list[dict] = [self._heading_block("Insights", level=2)]
+        grouped: dict[str, list[dict]] = {}
+        for r in results:
+            grouped.setdefault(r.get("definition_name") or "Insights", []).append(r)
+        for name, items in grouped.items():
+            blocks.append(self._heading_block(name, level=3))
+            for item in items:
+                content = (item.get("content") or "").strip()
+                if content:
+                    blocks.append(self._bullet_block(content))
+
+        client = self._get_client()
+        # Notion caps children at 100 blocks per request.
+        for i in range(0, len(blocks), 100):
+            batch = blocks[i : i + 100]
+            try:
+                self._call_with_retry(
+                    lambda batch=batch: client.blocks.children.append(
+                        block_id=page_id,
+                        children=batch,
+                    ),
+                    description="blocks.children.append (insights)",
+                )
+            except (APIResponseError, HTTPResponseError) as e:
+                self.last_error = (
+                    f"Notion insight append failed (status {getattr(e, 'status', '?')}): {e}"
+                )
+                logger.error("Notion insight append failed: %s", self.last_error)
+                return False
+        return True
+
     def archive_page(self, page_id: str) -> bool:
         """Archive a previously created page (best-effort).
 

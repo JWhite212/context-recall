@@ -10,6 +10,7 @@ and the DB bridge's degrade-to-no-op behaviour.
 import asyncio
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -1815,3 +1816,50 @@ def test_post_processing_runs_automations(tmp_path, loop_thread):
 
     auto_repo.record_dispatch.assert_awaited_once_with("r1", "m1")
     repo.update_meeting.assert_any_await("m1", tags=["Type/Discovery", "Reviewed"])
+
+
+# ----------------------------------------------------------------------
+# Notion insight append (post-processing tail)
+# ----------------------------------------------------------------------
+
+
+def _notion_db(page_id):
+    """A minimal db bridge whose meeting carries the given notion_page_id."""
+    meeting = SimpleNamespace(notion_page_id=page_id)
+    return SimpleNamespace(
+        database=object(),
+        repo=SimpleNamespace(get_meeting=AsyncMock(return_value=meeting)),
+    )
+
+
+async def test_append_notion_insights_calls_writer(monkeypatch, tmp_path):
+    notion = MagicMock()
+    runner = _make_runner(_make_config(tmp_path), db=_notion_db("page-1"), notion_writer=notion)
+    results = [{"definition_name": "Q", "content": "c", "fields": None}]
+    monkeypatch.setattr(
+        "src.insights.repository.InsightRepository",
+        lambda _db: SimpleNamespace(results_for_meeting=AsyncMock(return_value=results)),
+    )
+
+    await runner._append_notion_insights("m1")
+
+    notion.append_insights.assert_called_once()
+    assert notion.append_insights.call_args.args == ("page-1", results)
+
+
+async def test_append_notion_insights_noop_without_page_id(tmp_path):
+    notion = MagicMock()
+    runner = _make_runner(_make_config(tmp_path), db=_notion_db(""), notion_writer=notion)
+    await runner._append_notion_insights("m1")
+    notion.append_insights.assert_not_called()
+
+
+async def test_append_notion_insights_noop_without_results(monkeypatch, tmp_path):
+    notion = MagicMock()
+    runner = _make_runner(_make_config(tmp_path), db=_notion_db("page-1"), notion_writer=notion)
+    monkeypatch.setattr(
+        "src.insights.repository.InsightRepository",
+        lambda _db: SimpleNamespace(results_for_meeting=AsyncMock(return_value=[])),
+    )
+    await runner._append_notion_insights("m1")
+    notion.append_insights.assert_not_called()
