@@ -22,22 +22,17 @@ MOCK_DEVICES = [
 
 
 class TestAudioCaptureDeviceLookup:
-    """Tests for _find_device() and _find_default_input_device()."""
+    """Tests for _find_default_input_device().
+
+    The BlackHole device lookup itself (formerly ``_find_device``) moved to
+    ``BlackHoleSystemCapture._find_blackhole`` — see
+    tests/test_system_audio.py.
+    """
 
     @pytest.fixture
     def capture(self, tmp_path) -> AudioCapture:
         config = AudioConfig(temp_audio_dir=str(tmp_path))
         return AudioCapture(config)
-
-    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
-    def test_find_device_success(self, mock_qd, capture):
-        idx = capture._find_device("BlackHole", kind="input")
-        assert idx == 0
-
-    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
-    def test_find_device_not_found(self, mock_qd, capture):
-        with pytest.raises(AudioCaptureError):
-            capture._find_device("NonExistentDevice")
 
     @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
     @patch("src.audio_capture.sd.default", new_callable=MagicMock)
@@ -77,7 +72,7 @@ class TestAudioCaptureDeviceLookup:
 
         capture.start()
 
-        assert capture._blackhole_idx == 0
+        assert capture._system_backend is not None
         assert capture._mic_idx == 1
 
         capture._recording = False
@@ -99,9 +94,8 @@ class TestAudioCaptureStartStop:
         return AudioCapture(config)
 
     @patch.object(AudioCapture, "_record_loop")
-    @patch.object(AudioCapture, "_find_device", return_value=0)
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    def test_double_start_is_noop(self, mock_default, mock_find, mock_record, capture):
+    def test_double_start_is_noop(self, mock_default, mock_record, capture):
         capture.start()
         first_thread = capture._thread
 
@@ -376,11 +370,8 @@ class TestNonBlockingStop:
     """Tests for stop(blocking=False) and wait_for_merge()."""
 
     @patch.object(AudioCapture, "_record_loop")
-    @patch.object(AudioCapture, "_find_device", return_value=0)
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    def test_non_blocking_stop_returns_promptly(
-        self, mock_default, mock_find, mock_record, tmp_path
-    ):
+    def test_non_blocking_stop_returns_promptly(self, mock_default, mock_record, tmp_path):
         """stop(blocking=False) should return without waiting for the merge."""
         config = AudioConfig(temp_audio_dir=str(tmp_path))
         capture = AudioCapture(config)
@@ -414,9 +405,8 @@ class TestNonBlockingStop:
 
         assert capture.wait_for_merge(timeout=0.05) is False
 
-    @patch.object(AudioCapture, "_find_device", return_value=0)
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    def test_start_resets_events(self, mock_default, mock_find, tmp_path):
+    def test_start_resets_events(self, mock_default, tmp_path):
         """start() should clear both lifecycle events."""
         config = AudioConfig(temp_audio_dir=str(tmp_path))
         capture = AudioCapture(config)
@@ -591,23 +581,26 @@ class TestStreamOpenFailureSignaling:
         assert capture.last_error is None
 
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
-    @patch("src.audio_capture.sd.InputStream")
+    @patch("src.audio_capture.select_system_backend")
     def test_stream_start_failure_sets_merge_complete_and_last_error(
-        self, mock_input_stream, mock_qd, mock_default, capture
+        self, mock_select_backend, mock_default, capture
     ):
-        """When InputStream.start() raises, the audio thread must:
+        """When the system backend's start() raises, the audio thread must:
         1. Record the error in capture.last_error so callers can surface it.
         2. Set _merge_complete so wait_for_merge returns immediately, not
            after the 120s timeout.
         """
-        # Simulate macOS denying microphone permission. PortAudio surfaces
-        # this as an exception from .start(), not from the constructor.
-        mock_stream_instance = MagicMock()
-        mock_stream_instance.start.side_effect = Exception(
+        # Simulate macOS denying microphone/screen-recording permission —
+        # PortAudio (or the SCK helper) surfaces this as an exception raised
+        # from the backend's start(), not from construction.
+        fake_backend = MagicMock()
+        fake_backend.latest_rms = 0.0
+        fake_backend.last_error = None
+        fake_backend.last_warning = None
+        fake_backend.start.side_effect = Exception(
             "PaErrorCode -9986: invalid device or permission denied"
         )
-        mock_input_stream.return_value = mock_stream_instance
+        mock_select_backend.return_value = fake_backend
 
         capture.start()
         # Wait for the background thread to hit the failure and exit.
@@ -648,14 +641,16 @@ class TestCaptureErrorCallback:
         assert capture.on_capture_error is None
 
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
-    @patch("src.audio_capture.sd.InputStream")
+    @patch("src.audio_capture.select_system_backend")
     def test_on_capture_error_invoked_with_audio_capture_error(
-        self, mock_input_stream, mock_qd, mock_default, capture
+        self, mock_select_backend, mock_default, capture
     ):
-        mock_stream_instance = MagicMock()
-        mock_stream_instance.start.side_effect = Exception("device disconnected")
-        mock_input_stream.return_value = mock_stream_instance
+        fake_backend = MagicMock()
+        fake_backend.latest_rms = 0.0
+        fake_backend.last_error = None
+        fake_backend.last_warning = None
+        fake_backend.start.side_effect = Exception("device disconnected")
+        mock_select_backend.return_value = fake_backend
 
         received: list[AudioCaptureError] = []
         capture.on_capture_error = lambda err: received.append(err)
@@ -669,16 +664,18 @@ class TestCaptureErrorCallback:
         assert "device disconnected" in str(received[0])
 
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
-    @patch("src.audio_capture.sd.InputStream")
+    @patch("src.audio_capture.select_system_backend")
     def test_on_capture_error_fires_before_merge_complete(
-        self, mock_input_stream, mock_qd, mock_default, capture
+        self, mock_select_backend, mock_default, capture
     ):
         """The callback must run BEFORE _merge_complete is set so callers
         waiting on wait_for_merge don't race ahead of the error signal."""
-        mock_stream_instance = MagicMock()
-        mock_stream_instance.start.side_effect = Exception("kapow")
-        mock_input_stream.return_value = mock_stream_instance
+        fake_backend = MagicMock()
+        fake_backend.latest_rms = 0.0
+        fake_backend.last_error = None
+        fake_backend.last_warning = None
+        fake_backend.start.side_effect = Exception("kapow")
+        mock_select_backend.return_value = fake_backend
 
         merge_set_when_called: list[bool] = []
         capture.on_capture_error = lambda err: merge_set_when_called.append(
@@ -694,16 +691,18 @@ class TestCaptureErrorCallback:
         )
 
     @patch.object(AudioCapture, "_find_default_input_device", return_value=None)
-    @patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES)
-    @patch("src.audio_capture.sd.InputStream")
+    @patch("src.audio_capture.select_system_backend")
     def test_on_capture_error_callback_exception_is_swallowed(
-        self, mock_input_stream, mock_qd, mock_default, capture
+        self, mock_select_backend, mock_default, capture
     ):
         """A misbehaving callback must not poison the capture thread —
         _merge_complete must still be set so wait_for_merge can return."""
-        mock_stream_instance = MagicMock()
-        mock_stream_instance.start.side_effect = Exception("kapow")
-        mock_input_stream.return_value = mock_stream_instance
+        fake_backend = MagicMock()
+        fake_backend.latest_rms = 0.0
+        fake_backend.last_error = None
+        fake_backend.last_warning = None
+        fake_backend.start.side_effect = Exception("kapow")
+        mock_select_backend.return_value = fake_backend
 
         capture.on_capture_error = MagicMock(side_effect=RuntimeError("callback broke"))
 
@@ -728,9 +727,16 @@ class TestStreamStatusCallback:
         assert capture.on_stream_status is None
 
     def test_system_callback_invokes_on_stream_status_when_status_truthy(self, capture, tmp_path):
-        """Drive the inner system_callback synthesised inside _record_loop
-        by mocking InputStream so we can capture the callback function and
-        invoke it with a non-empty status flag."""
+        """Drive the inner system callback (now owned by BlackHoleSystemCapture)
+        and the mic callback (still owned by AudioCapture._record_loop).
+
+        ``src.audio_capture.sd`` and ``src.system_audio.sd`` are the *same*
+        imported ``sounddevice`` module object, so a single query_devices /
+        InputStream patch intercepts both call sites — the system stream
+        opens first (inside backend.start()), then the mic stream (inside
+        _record_loop), so call order still distinguishes them exactly as it
+        did pre-refactor.
+        """
         received: list[tuple[str, str]] = []
         capture.on_stream_status = lambda source, status: received.append((source, status))
 
@@ -738,7 +744,6 @@ class TestStreamStatusCallback:
 
         def fake_input_stream(*args, **kwargs):
             stream = MagicMock()
-            # The first InputStream constructed is the system stream.
             if "system" not in captured_callbacks:
                 captured_callbacks["system"] = kwargs["callback"]
             else:
@@ -746,7 +751,6 @@ class TestStreamStatusCallback:
             return stream
 
         with (
-            patch.object(AudioCapture, "_find_device", return_value=0),
             patch.object(AudioCapture, "_find_default_input_device", return_value=1),
             patch(
                 "src.audio_capture.sd.query_devices",
@@ -757,6 +761,7 @@ class TestStreamStatusCallback:
             patch("src.audio_capture.sd.InputStream", side_effect=fake_input_stream),
         ):
             capture._config.mic_enabled = True
+            capture._config.system_capture_backend = "blackhole"
             capture.start()
             # Give the record loop a beat to install the callbacks.
             for _ in range(50):
@@ -793,21 +798,17 @@ class TestStreamStatusCallback:
 
         captured_callbacks: dict[str, object] = {}
 
-        def fake_input_stream(*args, **kwargs):
-            stream = MagicMock()
-            if "system" not in captured_callbacks:
-                captured_callbacks["system"] = kwargs["callback"]
-            else:
-                captured_callbacks["mic"] = kwargs["callback"]
-            return stream
+        def fake_system_input_stream(*args, **kwargs):
+            captured_callbacks["system"] = kwargs["callback"]
+            return MagicMock()
 
         with (
-            patch.object(AudioCapture, "_find_device", return_value=0),
             patch.object(AudioCapture, "_find_default_input_device", return_value=None),
-            patch("src.audio_capture.sd.query_devices", return_value=MOCK_DEVICES),
-            patch("src.audio_capture.sd.InputStream", side_effect=fake_input_stream),
+            patch("src.system_audio.sd.query_devices", return_value=MOCK_DEVICES),
+            patch("src.system_audio.sd.InputStream", side_effect=fake_system_input_stream),
         ):
             capture._config.mic_enabled = False
+            capture._config.system_capture_backend = "blackhole"
             capture.start()
             for _ in range(50):
                 if "system" in captured_callbacks:
@@ -948,3 +949,53 @@ class TestDeviceRefreshOnStart:
         capture._recording = False
         if capture._thread and capture._thread.is_alive():
             capture._thread.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Task 7: AudioCapture delegates the system source to a SystemAudioBackend
+# (SCK / BlackHole) selected via select_system_backend(). Mic capture and the
+# RMS-normalised merge stay owned by AudioCapture unchanged.
+# ---------------------------------------------------------------------------
+
+
+class TestSystemBackendIntegration:
+    @pytest.fixture
+    def capture(self, tmp_path):
+        return AudioCapture(AudioConfig(temp_audio_dir=str(tmp_path), mic_enabled=False))
+
+    def test_record_loop_uses_selected_backend(self, capture, tmp_path):
+        fake_backend = MagicMock()
+        fake_backend.latest_rms = 0.0
+        fake_backend.last_error = None
+        fake_backend.last_warning = None
+
+        def fake_start(path):
+            # Simulate the backend writing a valid system WAV.
+            sf.write(str(path), np.full(16000, 0.2, dtype="float32"), 16000, subtype="PCM_16")
+
+        fake_backend.start.side_effect = fake_start
+
+        with patch("src.audio_capture.select_system_backend", return_value=fake_backend):
+            capture.start()
+            time.sleep(0.2)
+            out = capture.stop(blocking=True)
+            capture.wait_for_merge(timeout=10)
+
+        fake_backend.start.assert_called_once()
+        fake_backend.stop.assert_called_once()
+        assert out is not None and out.exists()
+
+    def test_backend_warning_propagates(self, capture):
+        fake_backend = MagicMock()
+        fake_backend.latest_rms = 0.0
+        fake_backend.last_error = None
+        fake_backend.last_warning = "grant Screen Recording"
+        fake_backend.start.side_effect = lambda path: sf.write(
+            str(path), np.zeros(16000, dtype="float32"), 16000, subtype="PCM_16"
+        )
+        with patch("src.audio_capture.select_system_backend", return_value=fake_backend):
+            capture.start()
+            time.sleep(0.1)
+            capture.stop(blocking=True)
+            capture.wait_for_merge(timeout=10)
+        assert capture.last_warning == "grant Screen Recording"

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 import src.system_audio as sa
 from src.audio_capture import AudioCaptureError
@@ -60,6 +61,27 @@ BH_DEVICES = [
     {"name": "BlackHole 2ch", "max_input_channels": 2},
     {"name": "MacBook Pro Mic", "max_input_channels": 1},
 ]
+
+
+def test_find_blackhole_success(tmp_path):
+    """Moved from tests/test_audio_capture.py::TestAudioCaptureDeviceLookup —
+    the BlackHole device lookup now lives on BlackHoleSystemCapture."""
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path))
+    backend = sa.BlackHoleSystemCapture(cfg)
+    with patch("src.system_audio.sd.query_devices", return_value=BH_DEVICES):
+        idx = backend._find_blackhole("BlackHole")
+    assert idx == 0
+
+
+def test_find_blackhole_not_found(tmp_path):
+    """Moved from tests/test_audio_capture.py::TestAudioCaptureDeviceLookup."""
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path))
+    backend = sa.BlackHoleSystemCapture(cfg)
+    with (
+        patch("src.system_audio.sd.query_devices", return_value=BH_DEVICES),
+        pytest.raises(AudioCaptureError),
+    ):
+        backend._find_blackhole("NonExistentDevice")
 
 
 def test_blackhole_backend_finds_device_and_opens_stream(tmp_path):
