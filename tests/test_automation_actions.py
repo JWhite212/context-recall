@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 from src.automations.executor import ActionExecutor
+from src.utils.config import SummarisationConfig
 
 
 class _InsightRepo:
@@ -65,7 +66,7 @@ async def test_run_insight_writes_scoped_results(monkeypatch):
         "meeting": _meeting(),
         "insight_repo": irepo,
         "action_items_repo": None,
-        "summarisation_config": SimpleNamespace(backend="ollama"),
+        "summarisation_config": SummarisationConfig(backend="ollama"),
     }
     ex = ActionExecutor(repo=None, emit=lambda *a, **k: None, services=services)
     rule = {"name": "R", "actions": [{"type": "run_insight", "definition_id": "d1"}]}
