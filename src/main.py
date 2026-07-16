@@ -305,6 +305,9 @@ class ContextRecall:
         for the new session and emits pipeline.warning when prolonged
         silence is observed on the system source."""
         self._silent_input_detector.reset()
+        # Scope the late-capture-warning dedup to this session so an identical
+        # SCK "grant Screen Recording" warning re-surfaces on a later meeting.
+        self._last_emitted_capture_warning = None
 
         def _on_level(system_rms: float, mic_rms: float) -> None:
             self._emit(
