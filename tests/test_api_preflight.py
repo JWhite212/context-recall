@@ -151,6 +151,34 @@ def test_preflight_reports_screen_recording_granted_for_sck_backend():
             assert resp.json()["screen_recording"] == "granted"
 
 
+def test_preflight_degrades_to_unknown_when_backend_selection_raises():
+    """If select_system_backend blows up (e.g. a broken helper resolve),
+    the route must degrade screen_recording to "unknown" and still return
+    200 — never 500 (T8)."""
+    fake_report = PreflightReport(
+        blackhole_present=True,
+        blackhole_input_candidates=["BlackHole 2ch"],
+        mic_openable=True,
+        microphone_permission_likely=True,
+        default_input_index=0,
+        warnings=[],
+        errors=[],
+    )
+    app = _make_app()
+    with TestClient(app, raise_server_exceptions=False) as c:
+        with (
+            patch.object(
+                preflight_routes,
+                "select_system_backend",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch.object(preflight_routes, "run_preflight", return_value=fake_report),
+        ):
+            resp = c.get("/api/preflight", headers=_auth_headers())
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["screen_recording"] == "unknown"
+
+
 def test_preflight_reports_screen_recording_not_applicable_for_blackhole_backend():
     """When BlackHole is the selected backend (SCK not in use), screen_recording
     should be not_applicable rather than probing anything."""

@@ -746,6 +746,193 @@ def test_api_start_recording_no_warning_emitted_on_clean_start(
 
 
 # ---------------------------------------------------------------------------
+# I1: the silent-system warning message must be backend-aware. Under the
+# ScreenCaptureKit backend the fix is Screen Recording, not BlackHole routing.
+# ---------------------------------------------------------------------------
+
+
+def _fire_silent_input_warning(app):
+    """Drive the wired audio.level callback once with the silence detector
+    forced to fire, returning every emitted event as (type, kwargs)."""
+    app._silent_input_detector = MagicMock()
+    app._silent_input_detector.observe.return_value = True
+
+    emitted: list[tuple] = []
+    app._emit = lambda event_type, **kwargs: emitted.append((event_type, kwargs))
+
+    app._wire_audio_level_callback()
+    app._capture.on_audio_level(system_rms=0.0, mic_rms=0.5)
+    return emitted
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_silent_input_message_is_screen_recording_worded_for_sck_backend(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.main import ContextRecall
+    from src.system_audio import ScreenCaptureKitSystemCapture
+    from src.utils.config import AudioConfig
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture._system_backend = ScreenCaptureKitSystemCapture(
+        AudioConfig(), Path("/nonexistent/helper")
+    )
+
+    emitted = _fire_silent_input_warning(app)
+
+    silent = [
+        k for (t, k) in emitted if t == "pipeline.warning" and k.get("type") == "silent_input"
+    ]
+    assert silent, f"SCK silence must emit a silent_input warning; got {emitted}"
+    message = silent[0]["message"]
+    assert "Screen Recording" in message, message
+    assert "BlackHole" not in message, message
+    assert silent[0]["source"] == "system"
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_silent_input_message_is_blackhole_worded_for_blackhole_backend(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.main import ContextRecall
+    from src.system_audio import BlackHoleSystemCapture
+    from src.utils.config import AudioConfig
+
+    app = ContextRecall(config_path=tmp_config)
+    app._capture._system_backend = BlackHoleSystemCapture(AudioConfig())
+
+    emitted = _fire_silent_input_warning(app)
+
+    silent = [
+        k for (t, k) in emitted if t == "pipeline.warning" and k.get("type") == "silent_input"
+    ]
+    assert silent, f"BlackHole silence must emit a silent_input warning; got {emitted}"
+    message = silent[0]["message"]
+    assert "BlackHole" in message, message
+    assert "Multi-Output Device" in message, message
+    assert "Screen Recording" not in message, message
+
+
+# ---------------------------------------------------------------------------
+# I2: a capture warning that appears AFTER start() (the SCK "grant Screen
+# Recording" hint, set at the end of the capture loop) must be surfaced once
+# the merge completes — and a start-time mic warning must NOT be re-emitted.
+# ---------------------------------------------------------------------------
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_late_capture_warning_surfaces_sck_warning_when_none_at_start(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+
+    emitted: list[tuple] = []
+    app._emit = lambda event_type, **kwargs: emitted.append((event_type, kwargs))
+
+    # Start-time: no warning yet.
+    app._capture.last_warning = None
+    app._emit_capture_warnings()
+
+    # The SCK backend records its hint at the end of the capture loop.
+    sck_warning = (
+        "System audio capture failed — grant Screen Recording in System "
+        "Settings → Privacy & Security → Screen Recording, then re-record."
+    )
+    app._capture.last_warning = sck_warning
+    app._emit_late_capture_warning()
+
+    warnings = [(t, k) for (t, k) in emitted if t == "pipeline.warning"]
+    assert len(warnings) == 1, f"exactly one warning expected; got {warnings}"
+    assert warnings[0][1]["source"] == "system"
+    assert "Screen Recording" in warnings[0][1]["message"]
+
+
+@patch("src.main.Summariser")
+@patch("src.main.TeamsDetector")
+@patch("src.main.Transcriber")
+@patch("src.main.AudioCapture")
+def test_late_capture_warning_does_not_double_emit_start_time_warning(
+    mock_capture_cls,
+    mock_transcriber_cls,
+    mock_detector_cls,
+    mock_summariser_cls,
+    tmp_config,
+):
+    from src.main import ContextRecall
+
+    app = ContextRecall(config_path=tmp_config)
+
+    emitted: list[tuple] = []
+    app._emit = lambda event_type, **kwargs: emitted.append((event_type, kwargs))
+
+    # A mic warning surfaced at start and was already emitted. AudioCapture
+    # only records last_warning once, so it is unchanged at the post-merge
+    # point — the late emit must recognise it as already-surfaced.
+    mic_warning = "Configured microphone 'USB Mic' was not found. Recording system audio only."
+    app._capture.last_warning = mic_warning
+    app._emit_capture_warnings()
+    app._emit_late_capture_warning()
+
+    warnings = [(t, k) for (t, k) in emitted if t == "pipeline.warning"]
+    assert len(warnings) == 1, f"start-time warning must not be re-emitted; got {warnings}"
+    assert warnings[0][1]["source"] == "mic"
+
+
+def test_process_audio_emits_late_capture_warning_after_merge(app_with_mocked_api, audio_file):
+    """Integration: _process_audio surfaces a post-merge SCK warning via the
+    same pipeline.warning bus once wait_for_merge returns."""
+    app = app_with_mocked_api
+
+    emitted: list[tuple] = []
+    app._emit = lambda event_type, **kwargs: emitted.append((event_type, kwargs))
+
+    sck_warning = (
+        "System audio capture failed — grant Screen Recording in System "
+        "Settings → Privacy & Security → Screen Recording, then re-record."
+    )
+    app._capture.merge_pending = True
+    app._capture.wait_for_merge = MagicMock(return_value=True)
+    app._capture.last_warning = sck_warning
+    app._capture.last_error = None
+    # Empty transcript short-circuits the heavy pipeline to an error write,
+    # but only AFTER the post-merge warning emit we care about.
+    app._transcriber.transcribe.return_value = Transcript(
+        segments=[], language="en", language_probability=0.0, duration_seconds=0.0
+    )
+
+    app._process_audio(audio_file, started_at=1000.0, duration_seconds=60.0)
+
+    system_warnings = [
+        k for (t, k) in emitted if t == "pipeline.warning" and k.get("source") == "system"
+    ]
+    assert system_warnings, f"post-merge SCK warning must be emitted; got {emitted}"
+    assert "Screen Recording" in system_warnings[0]["message"]
+
+
+# ---------------------------------------------------------------------------
 # Unit 1: orchestrator must wire on_capture_error and on_stream_status
 # BEFORE calling _capture.start(), and the callbacks must translate to
 # pipeline.error / pipeline.warning events on the WebSocket bus.
