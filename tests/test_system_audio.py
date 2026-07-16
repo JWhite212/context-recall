@@ -236,3 +236,20 @@ def test_select_backend_auto_falls_back_on_old_macos(tmp_path):
         patch("src.system_audio._macos_at_least", return_value=False),
     ):
         assert isinstance(sa.select_system_backend(cfg), sa.BlackHoleSystemCapture)
+
+
+def test_select_backend_explicit_sck_with_helper(tmp_path):
+    cfg = AudioConfig(temp_audio_dir=str(tmp_path), system_capture_backend="screencapturekit")
+    with patch("src.system_audio.resolve_helper_path", return_value=tmp_path / "helper"):
+        assert isinstance(sa.select_system_backend(cfg), sa.ScreenCaptureKitSystemCapture)
+
+
+def test_macos_at_least_parses_major_version():
+    with patch("src.system_audio.platform.mac_ver", return_value=("13.2.1", ("", "", ""), "arm64")):
+        assert sa._macos_at_least(13) is True
+        assert sa._macos_at_least(14) is False
+
+
+def test_macos_at_least_defensive_on_malformed_version():
+    with patch("src.system_audio.platform.mac_ver", return_value=("", ("", "", ""), "arm64")):
+        assert sa._macos_at_least(13) is False  # no exception raised
