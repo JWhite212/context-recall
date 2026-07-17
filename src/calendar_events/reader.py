@@ -56,7 +56,8 @@ def _events_from_extracted(
     EventKit's eventIdentifier is shared across recurring occurrences.
     """
     events: list[CalendarEvent] = []
-    seen: set = set()
+    by_mid: dict = {}  # meeting_id -> index into events
+    by_tt: dict = {}  # (title, int(start), int(end)) -> index into events
     for e in extracted:
         if e.get("is_all_day"):
             continue
@@ -72,32 +73,47 @@ def _events_from_extracted(
         end_ts = float(e.get("end_ts", start_ts))
         title = e.get("title", "") or ""
         meeting_id = e.get("meeting_id", "") or ""
-        # Collapse the same meeting appearing on multiple calendars (duplicate
-        # accounts, or a mirrored invite) to a single row. Prefer the strongest
-        # identity available; fall back to title + time window.
-        if meeting_id:
-            key = ("mid", meeting_id)
-        elif join_url:
-            key = ("url", join_url)
-        else:
-            key = ("tt", title.strip().lower(), int(start_ts), int(end_ts))
-        if key in seen:
-            continue
-        seen.add(key)
-        events.append(
-            CalendarEvent(
-                event_uid=f"{e['event_identifier']}:{int(start_ts)}",
-                title=title,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                attendees=attendees,
-                organizer=e.get("organizer"),
-                join_url=join_url,
-                meeting_id=meeting_id,
-                calendar_name=cal_name,
-                calendar_id=cal_id,
-            )
+        candidate = CalendarEvent(
+            event_uid=f"{e['event_identifier']}:{int(start_ts)}",
+            title=title,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            attendees=attendees,
+            organizer=e.get("organizer"),
+            join_url=join_url,
+            meeting_id=meeting_id,
+            calendar_name=cal_name,
+            calendar_id=cal_id,
         )
+        # Collapse the same meeting appearing on multiple calendars (duplicate
+        # accounts, or an invite mirrored across accounts) to a single row.
+        # Identity is title + start + end — always shared by the same meeting,
+        # even when only one copy parsed the join link. A shared meeting_id is
+        # authoritative; two DISTINCT non-empty meeting_ids in the same slot are
+        # genuinely different meetings and stay apart. The richer copy (one that
+        # carries a join link / meeting id) wins.
+        tkey = (title.strip().lower(), int(start_ts), int(end_ts))
+        dup_idx = None
+        if meeting_id and meeting_id in by_mid:
+            dup_idx = by_mid[meeting_id]
+        elif tkey in by_tt:
+            cand_mid = events[by_tt[tkey]].meeting_id
+            if not (meeting_id and cand_mid and meeting_id != cand_mid):
+                dup_idx = by_tt[tkey]
+        if dup_idx is not None:
+            kept = events[dup_idx]
+            if (not kept.join_url and join_url) or (not kept.meeting_id and meeting_id):
+                events[dup_idx] = candidate
+            merged = events[dup_idx]
+            by_tt[tkey] = dup_idx
+            if merged.meeting_id:
+                by_mid[merged.meeting_id] = dup_idx
+            continue
+        idx = len(events)
+        events.append(candidate)
+        by_tt[tkey] = idx
+        if meeting_id:
+            by_mid[meeting_id] = idx
     events.sort(key=lambda ev: ev.start_ts)
     return events
 
