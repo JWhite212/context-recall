@@ -1266,9 +1266,76 @@ class PipelineRunner:
     async def _augment_note_context(self, ctx, meeting):
         """Enrich a NoteContext with DB-derived data.
 
-        Phase 1: identity only (passthrough). Later phases fill taxonomy,
-        attendees, action items, insights, talk stats and related links.
+        Fills taxonomy (client/project folder + hierarchical tags),
+        resolved attendees and topic tags. Action items, insights, talk
+        stats and related links are filled by later helpers in this method
+        as those phases land. Non-fatal: taxonomy misses are surfaced as
+        warnings, not errors.
         """
+        from src.output.attendees import fold_attendees
+        from src.output.taxonomy import resolve_taxonomy
+        from src.tagging.repository import ClientProjectRepository
+
+        md_cfg = self._config.markdown
+
+        client_name = ""
+        project_name = ""
+        if self._db.database is not None and (meeting.client_id or meeting.project_id):
+            cp = ClientProjectRepository(self._db.database)
+            if meeting.client_id:
+                client = await cp.get_client(meeting.client_id)
+                client_name = (client or {}).get("name", "") if client else ""
+            if meeting.project_id:
+                project = await cp.get_project(meeting.project_id)
+                project_name = (project or {}).get("name", "") if project else ""
+
+        resolution = resolve_taxonomy(
+            client_name, project_name, getattr(md_cfg, "client_taxonomy", {}) or {}
+        )
+        if resolution.unknown_client:
+            self._emit(
+                "pipeline.warning",
+                meeting_id=meeting.id,
+                source="markdown",
+                message=(
+                    f"Client '{client_name}' has no vault taxonomy entry; "
+                    "note routed to Unsorted and left untagged."
+                ),
+            )
+        if resolution.unknown_project:
+            self._emit(
+                "pipeline.warning",
+                meeting_id=meeting.id,
+                source="markdown",
+                message=f"Project '{project_name}' has no vault taxonomy entry; left untagged.",
+            )
+
+        ctx.client_name = client_name
+        ctx.project_name = project_name
+        ctx.client_folder = resolution.client_folder
+        ctx.client_tag = resolution.client_tag
+        ctx.project_tag = resolution.project_tag
+
+        # Attendees: calendar attendee names, then resolved transcript speakers.
+        try:
+            raw = json.loads(meeting.attendees_json or "[]")
+        except (ValueError, TypeError):
+            raw = []
+        names = [a.get("name", "") for a in raw if isinstance(a, dict) and a.get("name")]
+        if ctx.transcript is not None:
+            names += [s for s in {seg.speaker for seg in ctx.transcript.segments} if s]
+        ctx.owner_display_name = getattr(md_cfg, "owner_display_name", "Jamie White (QVCCS)")
+        ctx.attendees = fold_attendees(
+            names,
+            getattr(md_cfg, "owner_identities", []) or [],
+            ctx.owner_display_name,
+        )
+        # Topic tags: the summary's freeform tags, minus any client/project noise.
+        ctx.extra_tags = [
+            t
+            for t in (getattr(meeting, "tags", []) or [])
+            if not str(t).startswith(("client/", "project/"))
+        ]
         return ctx
 
     async def _rerender_markdown_async(self, meeting_id: str) -> None:
