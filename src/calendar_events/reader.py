@@ -56,6 +56,7 @@ def _events_from_extracted(
     EventKit's eventIdentifier is shared across recurring occurrences.
     """
     events: list[CalendarEvent] = []
+    seen: set = set()
     for e in extracted:
         if e.get("is_all_day"):
             continue
@@ -68,16 +69,31 @@ def _events_from_extracted(
         if not is_meeting_like(join_url, attendees):
             continue
         start_ts = float(e["start_ts"])
+        end_ts = float(e.get("end_ts", start_ts))
+        title = e.get("title", "") or ""
+        meeting_id = e.get("meeting_id", "") or ""
+        # Collapse the same meeting appearing on multiple calendars (duplicate
+        # accounts, or a mirrored invite) to a single row. Prefer the strongest
+        # identity available; fall back to title + time window.
+        if meeting_id:
+            key = ("mid", meeting_id)
+        elif join_url:
+            key = ("url", join_url)
+        else:
+            key = ("tt", title.strip().lower(), int(start_ts), int(end_ts))
+        if key in seen:
+            continue
+        seen.add(key)
         events.append(
             CalendarEvent(
                 event_uid=f"{e['event_identifier']}:{int(start_ts)}",
-                title=e.get("title", "") or "",
+                title=title,
                 start_ts=start_ts,
-                end_ts=float(e.get("end_ts", start_ts)),
+                end_ts=end_ts,
                 attendees=attendees,
                 organizer=e.get("organizer"),
                 join_url=join_url,
-                meeting_id=e.get("meeting_id", "") or "",
+                meeting_id=meeting_id,
                 calendar_name=cal_name,
                 calendar_id=cal_id,
             )
@@ -252,7 +268,9 @@ class CalendarReader:
             return []
 
     def list_calendars(self) -> list[dict]:
-        """Return [{id, title}] for every event calendar. Empty if unavailable."""
+        """Return [{id, title, source}] for every event calendar. ``source`` is
+        the account name (iCloud, Google, …) so the picker can disambiguate two
+        calendars that share a title. Empty if unavailable."""
         self._ensure_store()
         if not self.available:
             return []
@@ -260,10 +278,23 @@ class CalendarReader:
             import EventKit
 
             cals = self._store.calendarsForEntityType_(EventKit.EKEntityTypeEvent) or []
-            return [
-                {"id": str(c.calendarIdentifier() or ""), "title": str(c.title() or "")}
-                for c in cals
-            ]
+            result = []
+            for c in cals:
+                source = ""
+                try:
+                    src = c.source()
+                    if src:
+                        source = str(src.title() or "")
+                except Exception:
+                    pass
+                result.append(
+                    {
+                        "id": str(c.calendarIdentifier() or ""),
+                        "title": str(c.title() or ""),
+                        "source": source,
+                    }
+                )
+            return result
         except Exception as e:  # pragma: no cover - requires EventKit
             logger.warning("Calendar list_calendars failed: %s", e)
             return []

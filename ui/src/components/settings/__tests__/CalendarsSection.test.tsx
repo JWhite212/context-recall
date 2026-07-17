@@ -12,7 +12,7 @@ describe("CalendarsSection", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let permissionStatus = "authorized";
   let permissionGranted = true;
-  let calendarsList: { id: string; title: string }[] = [];
+  let calendarsList: { id: string; title: string; source?: string }[] = [];
 
   beforeEach(() => {
     permissionStatus = "authorized";
@@ -173,6 +173,21 @@ describe("CalendarsSection", () => {
     const [, init] = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT")!;
     const body = JSON.parse(init?.body as string);
     expect(body.calendar.excluded_calendars).toEqual([]);
+  });
+
+  it("disambiguates same-titled calendars by source account", async () => {
+    calendarsList = [
+      { id: "icloud", title: "Calendar", source: "iCloud" },
+      { id: "google", title: "Calendar", source: "Google" },
+      { id: "work", title: "Work", source: "Exchange" },
+    ];
+    render(<CalendarsSection id="calendars" />, { wrapper: makeWrapper() });
+
+    // Colliding title gets the account suffix; a unique title does not.
+    expect(await screen.findByText("Calendar — iCloud")).toBeInTheDocument();
+    expect(screen.getByText("Calendar — Google")).toBeInTheDocument();
+    expect(screen.getByText("Work")).toBeInTheDocument();
+    expect(screen.queryByText("Work — Exchange")).not.toBeInTheDocument();
   });
 
   it("clicking Sync now POSTs to /api/calendar/sync", async () => {
