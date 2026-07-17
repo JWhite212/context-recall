@@ -179,7 +179,24 @@ class MarkdownConfig:
     enabled: bool = True
     vault_path: str = "~/Documents/Meetings"
     filename_template: str = "{date}_{slug}.md"
-    include_full_transcript: bool = True
+    include_full_transcript: bool = True  # Legacy toggle; transcript_mode overrides it.
+    # File each enriched note into <vault>/<Client>/ via client_taxonomy.
+    # Unknown clients fall back to Unsorted/.
+    route_by_client: bool = True
+    # Transcript handling: foldout (collapsible callout, default), linked
+    # (separate companion note), omit (not written), inline (full text).
+    transcript_mode: str = "foldout"
+    # Render the owner's open action items as a dashboard-wired ## My Tasks list.
+    emit_my_tasks: bool = True
+    # The owner's display name in attendees and the My Tasks owner filter.
+    owner_display_name: str = "Jamie White (QVCCS)"
+    # Speaker labels / emails that are the owner; folded to owner_display_name.
+    owner_identities: list[str] = field(default_factory=lambda: ["Me", "Jamie"])
+    # Curated client/project -> vault folder and hierarchical tag. Never
+    # invents a client/* or project/* tag: an entry not listed here is left
+    # untagged and routed to Unsorted. Shape:
+    #   {"clients": {name: {"folder": str, "tag": str}}, "projects": {name: tag}}
+    client_taxonomy: dict = field(default_factory=dict)
 
 
 @dataclass
