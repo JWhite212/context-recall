@@ -1367,6 +1367,17 @@ class PipelineRunner:
                     ctx.owner_display_name,
                 )
 
+        # Insights + talk stats for their sections.
+        if self._db.database is not None:
+            from src.insights.repository import InsightRepository
+
+            ctx.insights = (
+                await InsightRepository(self._db.database).results_for_meeting(meeting.id) or []
+            )
+        from src.talk_stats import compute_talk_stats
+
+        ctx.talk_stats = compute_talk_stats(getattr(meeting, "transcript_json", None))
+
         # Related links: previous series instance + project note (existing only).
         if self._db.database is not None:
             from src.output.related import resolve_related
