@@ -145,6 +145,73 @@ def test_distinct_meetings_not_deduped():
     assert len(out) == 2
 
 
+def test_dedup_merges_when_one_copy_has_link_and_other_does_not():
+    """B3 (observed live): the same meeting synced to two accounts — one copy
+    parsed the Teams link (join_url + meeting_id), the other did not. Same
+    title+time is the shared identity, so they must collapse to one, keeping
+    the richer copy that carries the join link."""
+    events = [
+        _extracted(
+            event_identifier="E1",
+            calendar_identifier="A",
+            title="Siemens SDM review",
+            join_url="",
+            meeting_id="",
+        ),
+        _extracted(
+            event_identifier="E2",
+            calendar_identifier="B",
+            title="Siemens SDM review",
+            join_url="https://teams/x",
+            meeting_id="19:mtg@thread.v2",
+        ),
+    ]
+    out = _events_from_extracted(events, set())
+    assert len(out) == 1
+    assert out[0].join_url == "https://teams/x"
+    assert out[0].meeting_id == "19:mtg@thread.v2"
+
+
+def test_dedup_prefers_link_regardless_of_order():
+    """Richer copy wins even when it arrives first."""
+    events = [
+        _extracted(
+            event_identifier="E1",
+            calendar_identifier="A",
+            title="Sync",
+            join_url="https://teams/y",
+            meeting_id="19:y@thread.v2",
+        ),
+        _extracted(
+            event_identifier="E2", calendar_identifier="B", title="Sync", join_url="", meeting_id=""
+        ),
+    ]
+    out = _events_from_extracted(events, set())
+    assert len(out) == 1
+    assert out[0].join_url == "https://teams/y"
+
+
+def test_distinct_meeting_ids_same_title_time_not_merged():
+    """Over-merge guard: two DIFFERENT Teams meetings that happen to share a
+    title and time slot carry distinct meeting_ids, so they must stay separate."""
+    events = [
+        _extracted(
+            event_identifier="E1",
+            title="Review",
+            meeting_id="19:aaa@thread.v2",
+            join_url="https://teams/a",
+        ),
+        _extracted(
+            event_identifier="E2",
+            title="Review",
+            meeting_id="19:bbb@thread.v2",
+            join_url="https://teams/b",
+        ),
+    ]
+    out = _events_from_extracted(events, set())
+    assert len(out) == 2
+
+
 def test_events_sorted_by_start():
     out = _events_from_extracted(
         [
