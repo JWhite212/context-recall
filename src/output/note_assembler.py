@@ -11,6 +11,53 @@ import time
 
 from src.output.note_context import NoteContext
 
+_PRIORITY_EMOJI = {"urgent": "🔺", "high": "⏫", "medium": "🔼", "low": "🔽"}
+_INCOMPLETE = {"open", "in_progress"}
+
+
+def format_my_task(item) -> str:
+    """Render one owner task as a Tasks-plugin checkbox line.
+
+    Format: ``- [ ] <title> [#client/x] [#project/y] <emoji> [📅 due]``.
+    The client/project tags are what the Meeting Action Items dashboard
+    query (contains "#client/" or "#project/") matches on.
+    """
+    parts = [f"- [ ] {item.title.strip()}"]
+    if item.client_tag:
+        parts.append(f"#{item.client_tag}")
+    if item.project_tag:
+        parts.append(f"#{item.project_tag}")
+    parts.append(_PRIORITY_EMOJI.get(item.priority, "🔼"))
+    if item.due_date:
+        parts.append(f"📅 {item.due_date}")
+    return " ".join(parts)
+
+
+def render_my_tasks(items) -> str:
+    """Render the ## My Tasks section, or "" when there are no owner tasks."""
+    if not items:
+        return ""
+    lines = ["## My Tasks", ""]
+    lines += [format_my_task(i) for i in items]
+    return "\n".join(lines)
+
+
+def select_owner_tasks(items, owner_identities, owner_display_name) -> list:
+    """Filter to the owner's own incomplete action items.
+
+    An item belongs to the owner when its assignee matches an owner
+    identity or the owner's display name (case-insensitively). Completed or
+    cancelled items are excluded.
+    """
+    ident = {i.strip().lower() for i in owner_identities if i and i.strip()}
+    ident.add((owner_display_name or "").strip().lower())
+    out = []
+    for item in items:
+        assignee = (item.assignee or "").strip().lower()
+        if assignee and assignee in ident and item.status in _INCOMPLETE:
+            out.append(item)
+    return out
+
 
 def assemble_body(ctx: NoteContext) -> str:
     parts = [ctx.summary_markdown.rstrip(), "", "---", ""]

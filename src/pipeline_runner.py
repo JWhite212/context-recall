@@ -1336,6 +1336,36 @@ class PipelineRunner:
             for t in (getattr(meeting, "tags", []) or [])
             if not str(t).startswith(("client/", "project/"))
         ]
+
+        # Action items: the structured table plus the owner's My Tasks. Each
+        # item inherits the note's client/project tag so a My Task line hits
+        # the dashboard query.
+        if self._db.database is not None:
+            from src.action_items.repository import ActionItemRepository
+            from src.output.note_assembler import select_owner_tasks
+            from src.output.note_context import ActionItemView
+
+            rows = await ActionItemRepository(self._db.database).list_by_meeting(meeting.id)
+            views = [
+                ActionItemView(
+                    title=r["title"],
+                    assignee=r.get("assignee"),
+                    due_date=r.get("due_date"),
+                    priority=r.get("priority", "medium"),
+                    status=r.get("status", "open"),
+                    description=r.get("description"),
+                    client_tag=ctx.client_tag,
+                    project_tag=ctx.project_tag,
+                )
+                for r in rows
+            ]
+            ctx.action_items = views
+            if getattr(md_cfg, "emit_my_tasks", True):
+                ctx.owner_tasks = select_owner_tasks(
+                    views,
+                    getattr(md_cfg, "owner_identities", []) or [],
+                    ctx.owner_display_name,
+                )
         return ctx
 
     async def _rerender_markdown_async(self, meeting_id: str) -> None:

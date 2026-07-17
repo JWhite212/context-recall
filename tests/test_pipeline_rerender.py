@@ -27,24 +27,12 @@ class _FakeMeeting:
     markdown_path = ""
 
 
-class _FakeRepo:
-    def __init__(self, meeting):
-        self._meeting = meeting
-        self.updated: dict = {}
+class _Db:
+    """Minimal DbBridge stand-in backed by a real Database + repo."""
 
-    async def get_meeting(self, mid):
-        return self._meeting
-
-    async def update_meeting(self, mid, **fields):
-        self.updated.update(fields)
-        for k, v in fields.items():
-            setattr(self._meeting, k, v)
-
-
-class _FakeDb:
-    def __init__(self, repo):
+    def __init__(self, database, repo):
+        self.database = database
         self.repo = repo
-        self.database = object()  # non-None: re-render proceeds
 
 
 def _runner(cfg, writer, db=None):
@@ -86,30 +74,43 @@ def test_build_note_context_and_write_note_idempotent_by_title(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rerender_updates_same_file_via_markdown_path(tmp_path):
+async def test_rerender_updates_same_file_via_markdown_path(tmp_path, db, repo):
     writer = MarkdownWriter(_cfg(tmp_path))
-    meeting = _FakeMeeting()
-    repo = _FakeRepo(meeting)
-    runner = _runner(_cfg(tmp_path), writer, db=_FakeDb(repo))
+    runner = _runner(_cfg(tmp_path), writer, db=_Db(db, repo))
+
+    mid = await repo.create_meeting(started_at=1_752_570_180.0)
+    await repo.update_meeting(
+        mid,
+        title="Daily Standup",
+        duration_seconds=1680.0,
+        transcript_json='{"segments": [{"start": 0, "end": 2, "text": "hi", "speaker": "Me"}]}',
+        summary_markdown="# Daily Standup\n\n## Summary\n\nWe met.\n",
+        tags=["standup"],
+        word_count=4456,
+        status="complete",
+    )
 
     # Pass 1: write the pre-enrichment note and record its path.
-    seg = TranscriptSegment(start=0.0, end=2.0, text="hi", speaker="Me")
-    transcript = Transcript(segments=[seg], language="en", duration_seconds=2.0)
+    meeting = await repo.get_meeting(mid)
+    transcript = Transcript.from_dict(json.loads(meeting.transcript_json))
     first = writer.write_note(runner._build_note_context(meeting, transcript, enriched=False))
-    meeting.markdown_path = str(first)
+    await repo.update_meeting(mid, markdown_path=str(first))
 
     # Pass 2: re-render must rewrite the SAME file, not duplicate it.
-    await runner._rerender_markdown_async("m1")
+    await runner._rerender_markdown_async(mid)
     assert first.exists()
-    assert len(list(Path(tmp_path).glob("*.md"))) == 1
-    # markdown_path unchanged (same file) so no redundant DB write of it.
-    assert "markdown_path" not in repo.updated
+    assert len(list(Path(tmp_path).rglob("*.md"))) == 1
+
+    # The enriched re-render sets enriched: true in the same file.
+    text = first.read_text(encoding="utf-8")
+    assert "enriched: true" in text
 
     # A moved title on re-render still lands on the original file (reuse_path).
-    meeting.title = "Completely Different Title"
-    await runner._rerender_markdown_async("m1")
-    assert len(list(Path(tmp_path).glob("*.md"))) == 1
-    assert Path(meeting.markdown_path) == first
+    await repo.update_meeting(mid, title="Completely Different Title")
+    await runner._rerender_markdown_async(mid)
+    assert len(list(Path(tmp_path).rglob("*.md"))) == 1
+    refreshed = await repo.get_meeting(mid)
+    assert Path(refreshed.markdown_path) == first
 
 
 def test_transcript_from_dict_matches_stored_shape():
