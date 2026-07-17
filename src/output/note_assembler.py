@@ -55,7 +55,12 @@ def format_my_task(item) -> str:
 
     Format: ``- [ ] <title> [#client/x] [#project/y] <emoji> [📅 due]``.
     The client/project tags are what the Meeting Action Items dashboard
-    query (contains "#client/" or "#project/") matches on.
+    query (contains "#client/" or "#project/") matches on. A meeting whose
+    client resolves to a flat tag (for example the owner's own
+    ``qvccs-internal``) and that has no project therefore carries neither a
+    ``#client/`` nor a ``#project/`` tag, so those owner tasks stay off the
+    client/project dashboard by design; give such a meeting a project to
+    surface its tasks there.
     """
     parts = [f"- [ ] {item.title.strip()}"]
     if item.client_tag:
@@ -161,6 +166,15 @@ def canonical_heading(heading: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _cell(value) -> str:
+    """Make a value safe for a Markdown table cell or callout line.
+
+    Escapes pipes (which would add spurious columns) and flattens newlines
+    (which would break the row / callout after its first line).
+    """
+    return str(value).replace("|", "\\|").replace("\n", " ").strip()
+
+
 def _fmt_hms(seconds: float) -> str:
     m, s = divmod(int(round(seconds)), 60)
     return f"{m}m {s:02d}s"
@@ -185,10 +199,10 @@ def render_related(ctx: NoteContext) -> str:
 
 def render_overview(ctx: NoteContext) -> str:
     lines = ["## Meeting overview", "", "| Field | Detail |", "|---|---|"]
-    lines.append(f"| Date | {_pretty_date(ctx.started_at, ctx.date)} |")
+    lines.append(f"| Date | {_cell(_pretty_date(ctx.started_at, ctx.date))} |")
     lines.append(f"| Duration | ~{ctx.duration_minutes} minutes |")
     if ctx.attendees:
-        lines.append(f"| Attendees | {', '.join(ctx.attendees)} |")
+        lines.append(f"| Attendees | {_cell(', '.join(ctx.attendees))} |")
     return "\n".join(lines)
 
 
@@ -202,15 +216,15 @@ def render_action_items(ctx: NoteContext) -> str:
         return ""
     lines = ["## Action items", "", "| Action | Owner | Due | Status |", "|---|---|---|---|"]
     for it in ctx.action_items:
-        due = it.due_date or "Not specified"
-        owner = it.assignee or "Unassigned"
-        status = it.status.replace("_", " ").capitalize()
-        lines.append(f"| {it.title} | {owner} | {due} | {status} |")
+        due = _cell(it.due_date or "Not specified")
+        owner = _cell(it.assignee or "Unassigned")
+        status = _cell(it.status.replace("_", " ").capitalize())
+        lines.append(f"| {_cell(it.title)} | {owner} | {due} | {status} |")
     detail = [it for it in ctx.action_items if it.description]
     if detail:
         lines += ["", "> [!note]- Action item detail"]
         for it in detail:
-            lines.append(f"> **{it.title}**: {it.description}")
+            lines.append(f"> **{_cell(it.title)}**: {_cell(it.description)}")
     return "\n".join(lines)
 
 
@@ -221,7 +235,7 @@ def render_talk_time(talk_stats: dict) -> str:
     lines = ["## Talk time", "", "| Speaker | Talk time | Turns |", "|---|---|---|"]
     for s in speakers:
         lines.append(
-            f"| {s['speaker']} | {_fmt_hms(s.get('seconds', 0.0))} | {s.get('turns', 0)} |"
+            f"| {_cell(s['speaker'])} | {_fmt_hms(s.get('seconds', 0.0))} | {s.get('turns', 0)} |"
         )
     return "\n".join(lines)
 

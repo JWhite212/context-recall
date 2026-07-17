@@ -103,8 +103,9 @@ class FakeWriter:
         self.last_error = last_error
         self.calls = []
 
-    def write(self, summary, transcript, started_at, duration_seconds):
+    def write(self, summary, transcript, started_at, duration_seconds, *, reuse_path=None):
         self.calls.append((summary, transcript, started_at, duration_seconds))
+        self.reuse_path = reuse_path
         return self.result
 
 

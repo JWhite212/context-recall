@@ -854,6 +854,17 @@ class PipelineRunner:
     ) -> None:
         self._emit("pipeline.stage", meeting_id=meeting_id, stage="writing")
 
+        # A reprocess of an already-written meeting must rewrite its existing
+        # note in place, not create a second flat file. Reuse the stored path
+        # so the pre-enrichment pass keeps the note where it is; the enriched
+        # re-render then relocates it if the client folder changed.
+        existing_md: str | None = None
+        if meeting_id and self._db_available():
+            m = self._db.try_call(
+                self._db.repo.get_meeting(meeting_id), what="fetch existing note path"
+            )
+            existing_md = getattr(m, "markdown_path", "") or None
+
         md_path: str | None = None
         for source, writer in (
             ("markdown", self._md_writer),
@@ -862,7 +873,12 @@ class PipelineRunner:
             if writer is None:
                 continue
             try:
-                result = writer.write(summary, transcript, started_at, duration_seconds)
+                if source == "markdown":
+                    result = writer.write(
+                        summary, transcript, started_at, duration_seconds, reuse_path=existing_md
+                    )
+                else:
+                    result = writer.write(summary, transcript, started_at, duration_seconds)
                 logger.info("%s output: %s", source.capitalize(), result)
                 if source == "markdown" and result is not None:
                     md_path = str(result)
@@ -1424,9 +1440,11 @@ class PipelineRunner:
         ctx = self._build_note_context(meeting, transcript, enriched=True)
         ctx = await self._augment_note_context(ctx, meeting)
         existing = getattr(meeting, "markdown_path", "") or ""
-        if existing:
-            self._md_writer.reuse_path(Path(existing))
-        new_path = await asyncio.to_thread(self._md_writer.write_note, ctx)
+        # reuse_path is passed per call (not held on the shared writer) so
+        # concurrent re-renders of two meetings cannot clobber each other.
+        new_path = await asyncio.to_thread(
+            self._md_writer.write_note, ctx, reuse_path=existing or None
+        )
         if new_path is not None and str(new_path) != existing:
             await self._db.repo.update_meeting(meeting_id, markdown_path=str(new_path))
 

@@ -57,8 +57,7 @@ def test_pre_enrichment_note_not_routed(tmp_path):
 def test_reroute_moves_existing_note_no_duplicate(tmp_path):
     w = MarkdownWriter(_cfg(tmp_path))
     first = w.write_note(_ctx(client_folder="Unsorted"))  # pass 1, unknown client
-    w.reuse_path(first)
-    second = w.write_note(_ctx(client_folder="Siemens"))  # re-render, now resolved
+    second = w.write_note(_ctx(client_folder="Siemens"), reuse_path=first)  # re-render
     assert second.parent.name == "Siemens"
     assert not first.exists()  # moved, not duplicated
     assert len(list(Path(tmp_path).rglob("*.md"))) == 1
@@ -67,10 +66,35 @@ def test_reroute_moves_existing_note_no_duplicate(tmp_path):
 def test_reuse_path_preserves_basename_on_title_change(tmp_path):
     w = MarkdownWriter(_cfg(tmp_path))
     first = w.write_note(_ctx(title="Weekly Review", client_folder="Siemens"))
-    w.reuse_path(first)
     # Title changed but the re-render must rewrite the SAME file (basename).
-    second = w.write_note(_ctx(title="Totally New Title", client_folder="Siemens"))
+    second = w.write_note(
+        _ctx(title="Totally New Title", client_folder="Siemens"), reuse_path=first
+    )
     assert second == first
+    assert len(list(Path(tmp_path).rglob("*.md"))) == 1
+
+
+def test_reuse_path_is_per_call_not_shared_state(tmp_path):
+    # A reuse_path passed to one call must not leak into the next call on the
+    # same shared writer (concurrency-safety regression guard).
+    w = MarkdownWriter(_cfg(tmp_path))
+    first = w.write_note(_ctx(title="Meeting A", client_folder="Siemens"))
+    w.write_note(_ctx(title="Meeting A", client_folder="NTT"), reuse_path=first)  # relocates A
+    # A fresh write with NO reuse_path must compute its own path, not reuse A's.
+    b = w.write_note(_ctx(title="Meeting B", client_folder="Armacell"))
+    assert b.parent.name == "Armacell"
+    assert "meeting-b" in b.name
+
+
+def test_pre_enrichment_reuse_keeps_note_in_current_folder(tmp_path):
+    # Reprocess: pass 1 is pre-enrichment (enriched=False) but must NOT drag an
+    # already-client-foldered note back to the vault root.
+    w = MarkdownWriter(_cfg(tmp_path))
+    enriched = w.write_note(_ctx(client_folder="Siemens", enriched=True))
+    assert enriched.parent.name == "Siemens"
+    # Reprocess pass 1 reuses the path with enriched=False.
+    again = w.write_note(_ctx(client_folder="Siemens", enriched=False), reuse_path=enriched)
+    assert again == enriched  # stayed in Siemens/, rewritten in place
     assert len(list(Path(tmp_path).rglob("*.md"))) == 1
 
 

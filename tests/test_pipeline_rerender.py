@@ -70,8 +70,9 @@ def test_build_note_context_reuse_path_relocates_to_single_note(tmp_path):
 
     # Pass 2 (enriched re-render) reuses the path; the unknown client routes it
     # to Unsorted/, moving the note rather than duplicating it.
-    writer.reuse_path(first)
-    second = writer.write_note(runner._build_note_context(meeting, transcript, enriched=True))
+    second = writer.write_note(
+        runner._build_note_context(meeting, transcript, enriched=True), reuse_path=first
+    )
     assert second.parent.name == "Unsorted"
     assert not first.exists()
     assert len(list(Path(tmp_path).rglob("*.md"))) == 1

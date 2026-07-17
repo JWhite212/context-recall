@@ -64,7 +64,7 @@ def render_insights_section(results: list[dict]) -> str:
     """Render insight results into a ``## Insights`` markdown section.
 
     Groups results by ``definition_name`` and renders each as a sub-heading
-    followed by bullets of its ``content`` — both list-mode and structured
+    followed by bullets of its ``content``. Both list-mode and structured
     results already carry a human-readable ``content`` string, so no
     per-field formatting is needed here.
 
@@ -101,14 +101,6 @@ class MarkdownWriter:
         # reads this to emit a pipeline.warning so the UI can surface
         # "Markdown output skipped: <reason>" instead of failing silently.
         self.last_error: str | None = None
-        # Set by reuse_path() so the next write_note() targets an exact
-        # existing file (the enriched re-render rewrites the note the
-        # pre-enrichment pass already created, keyed on markdown_path).
-        self._reuse_path: Path | None = None
-
-    def reuse_path(self, path: Path) -> None:
-        """Force the next write_note() to target this exact path (re-render)."""
-        self._reuse_path = Path(path)
 
     def write(
         self,
@@ -116,6 +108,8 @@ class MarkdownWriter:
         transcript: Transcript,
         started_at: float,
         duration_seconds: float,
+        *,
+        reuse_path: Path | str | None = None,
     ) -> Path | None:
         """Backwards-compatible pre-enrichment write.
 
@@ -124,11 +118,15 @@ class MarkdownWriter:
         pre-enrichment pass and the tests) are unaffected while the enriched
         re-render drives the same writer through a fuller context.
 
+        *reuse_path* points the write at an existing note (a reprocess of an
+        already-written meeting) so it rewrites in place instead of creating
+        a second file.
+
         Returns the path to the created file, or ``None`` if a filesystem
         error prevented the write (in which case ``last_error`` is set).
         """
         ctx = self._context_from_summary(summary, transcript, started_at, duration_seconds)
-        return self.write_note(ctx)
+        return self.write_note(ctx, reuse_path=reuse_path)
 
     def _context_from_summary(
         self,
@@ -155,19 +153,20 @@ class MarkdownWriter:
             enriched=False,
         )
 
-    def write_note(self, ctx: NoteContext) -> Path | None:
+    def write_note(self, ctx: NoteContext, *, reuse_path: Path | str | None = None) -> Path | None:
         """Write a note from a :class:`NoteContext`.
 
         Atomic (temp file + ``os.replace``). Frontmatter is built from the
         context and serialised as block-list YAML; the body is composed by
         :func:`src.output.note_assembler.assemble_body`.
+
+        *reuse_path* is the note's existing file (the enriched re-render or a
+        reprocess targets the file the meeting already has). Passed per call
+        rather than held on the writer, so concurrent post-processing of two
+        meetings sharing one writer cannot clobber each other's target.
         """
         self.last_error = None
-        # Consume any reuse_path once: the enriched re-render targets the file
-        # the pre-enrichment pass created, and may relocate it to a client
-        # folder (previous != filepath) without duplicating it.
-        previous = self._reuse_path
-        self._reuse_path = None
+        previous = Path(reuse_path) if reuse_path else None
         try:
             filepath = self._target_path(ctx, previous)
         except ValueError:
@@ -214,6 +213,7 @@ class MarkdownWriter:
 
         # Re-render relocation: once the new file is safely written, remove the
         # note's old copy so a client-folder change moves rather than duplicates.
+        # The linked-mode companion transcript note is relocated with it.
         if (
             previous is not None
             and Path(previous).resolve() != filepath
@@ -228,6 +228,16 @@ class MarkdownWriter:
                     previous,
                     e,
                 )
+            old_companion = Path(previous).with_name(
+                f"{Path(previous).stem} (transcript){Path(previous).suffix}"
+            )
+            if old_companion != filepath and old_companion.exists():
+                try:
+                    old_companion.unlink()
+                except OSError as e:
+                    logger.warning(
+                        "Could not remove old transcript companion %s: %s", old_companion, e
+                    )
 
         logger.info("Markdown written: %s", filepath)
         return filepath
@@ -255,9 +265,13 @@ class MarkdownWriter:
             fm["meeting_type"] = ctx.meeting_type
         fm["duration_minutes"] = ctx.duration_minutes
         fm["word_count"] = ctx.word_count
-        if ctx.enriched:
+        # Omit empty list fields: an empty list can only serialise as the inline
+        # flow form (``[]``), and the vault convention is block lists only. A
+        # missing key reads the same as an empty list to Dataview's contains().
+        if ctx.enriched and ctx.attendees:
             fm["attendees"] = list(ctx.attendees)
-        fm["tags"] = ctx.all_tags
+        if ctx.all_tags:
+            fm["tags"] = ctx.all_tags
         if ctx.enriched:
             fm["source"] = "context-recall"
             fm["recall_id"] = ctx.recall_id
@@ -298,10 +312,13 @@ class MarkdownWriter:
         """Compute the note's file path.
 
         Enriched notes route into ``<vault>/<client_folder>/`` when
-        ``route_by_client`` is on; pre-enrichment notes stay flat. On a
-        re-render (*previous* given) the existing basename is preserved, so
-        only the client folder may change (title to filename changes are the
-        rename path's job).
+        ``route_by_client`` is on; a fresh pre-enrichment note stays flat. On
+        a re-render or reprocess (*previous* given) the existing basename is
+        preserved (title to filename changes are the rename path's job) and
+        the note stays in its current folder unless enriched routing resolves
+        a different client folder, in which case it relocates there. This
+        keeps a reprocess from stranding the note's previous client-folder
+        copy or bouncing it through the vault root.
         """
         vault_path = Path(self._config.vault_path)
         route = (
@@ -309,11 +326,12 @@ class MarkdownWriter:
             and ctx.enriched
             and bool(ctx.client_folder)
         )
-        base = vault_path / ctx.client_folder if route else vault_path
-        os.makedirs(base, exist_ok=True)
         if previous is not None:
-            filename = Path(previous).name
+            previous = Path(previous)
+            base = vault_path / ctx.client_folder if route else previous.parent
+            filename = previous.name
         else:
+            base = vault_path / ctx.client_folder if route else vault_path
             time_str = ctx.time.replace(":", "-")
             title_slug = slugify(ctx.title, max_length=60)
             filename = self._config.filename_template.format(
@@ -323,6 +341,7 @@ class MarkdownWriter:
             )
             # Sanitize filename to prevent directory traversal.
             filename = filename.replace("/", "_").replace("\\", "_").lstrip(".")
+        os.makedirs(base, exist_ok=True)
         filepath = (base / filename).resolve()
         if not filepath.is_relative_to(vault_path.resolve()):
             raise ValueError(f"Generated filename would escape the vault directory: {filename!r}")

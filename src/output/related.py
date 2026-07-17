@@ -17,8 +17,12 @@ def resolve_related(
 
     - ``Previous``: the most recent series sibling that started earlier and
       whose ``markdown_path`` file still exists.
-    - ``Project``: the ``10 Projects`` note matching *project_note_name*, when
-      such a note exists anywhere under the vault.
+    - ``Project``: the project note matching *project_note_name*, when such a
+      note exists anywhere under the vault. The search starts at the vault
+      ROOT (the parent of the meetings folder), because project notes live in
+      ``10 Projects``, a sibling of ``70 Meetings``, not under it. Matches the
+      exact name or the common ``Project <name>`` convention and links the
+      note's real filename.
 
     Only existing notes are linked; nothing is fabricated.
     """
@@ -37,8 +41,11 @@ def resolve_related(
             break
 
     if project_note_name:
-        matches = list(Path(vault_base).rglob(f"{project_note_name}.md"))
-        if matches:
-            out.append(("Project", project_note_name))
+        root = Path(vault_base).parent  # 10 Projects is a sibling of the meetings folder
+        for candidate in (project_note_name, f"Project {project_note_name}"):
+            matches = list(root.rglob(f"{candidate}.md"))
+            if matches:
+                out.append(("Project", matches[0].stem))
+                break
 
     return out
