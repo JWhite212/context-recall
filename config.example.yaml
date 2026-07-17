@@ -224,15 +224,52 @@ calendar:
 markdown:
   enabled: true
 
-  # Absolute path to the Obsidian vault meetings folder.
+  # Absolute path to the Obsidian vault meetings folder (the "70 Meetings" base).
   vault_path: "~/Documents/Meetings"
 
   # Template for the filename. Available variables:
   # {date}, {time}, {slug} (auto-generated from summary title).
   filename_template: "{date}_{slug}.md"
 
-  # Whether to include the full transcript in the markdown file.
-  include_full_transcript: true
+  # Legacy toggle, kept for compatibility. transcript_mode below overrides it.
+  include_full_transcript: false
+
+  # File each enriched note into <vault>/<Client>/ using client_taxonomy below.
+  # Unknown clients fall back to Unsorted/.
+  route_by_client: true
+
+  # How the transcript is written: foldout (collapsible callout, default),
+  # linked (separate companion note), omit (not written), inline (full text).
+  transcript_mode: foldout
+
+  # Render the owner's open action items as a dashboard-wired ## My Tasks list.
+  emit_my_tasks: true
+
+  # The owner's display name in attendees and the My Tasks owner filter.
+  owner_display_name: "Jamie White (QVCCS)"
+
+  # Speaker labels / emails that are the owner; folded to owner_display_name.
+  owner_identities:
+    - Me
+    - Jamie
+    - jamiecs@live.co.uk
+    - j65541761@gmail.com
+
+  # Curated client/project -> vault folder and hierarchical tag. The writer
+  # never invents a client/* or project/* tag: a client or project not listed
+  # here is left untagged and routed to Unsorted, with a surfaced warning.
+  client_taxonomy:
+    clients:
+      Siemens: {folder: Siemens, tag: client/siemens}
+      Armacell: {folder: Armacell, tag: client/armacell}
+      NTT: {folder: NTT, tag: client/ntt}
+      "QVCCS Internal": {folder: QVCCS Internal, tag: qvccs-internal}
+      Venetian: {folder: Unsorted, tag: client/venetian}
+    projects:
+      "Siemens 7 France": project/siemens-7
+      "Siemens 13": project/siemens-13
+      "Siemens 16 Smart UK Infrastructure": project/siemens-16
+      Armacell: project/armacell
 
 # --- Output: Notion ---
 notion:
