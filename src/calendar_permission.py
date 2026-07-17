@@ -41,6 +41,41 @@ _EK_STATUS = {
 # States from which calendar events cannot be read.
 _BLOCKING = {DENIED, RESTRICTED, WRITE_ONLY}
 
+# Process-wide singleton EKEventStore. macOS caps the number of EKEventStore
+# instances a process may hold and returns EKCADErrorDomain 1021 ("too many
+# EKEventStore instances") once exceeded — after which EVERY EventKit call,
+# including authorizationStatusForEntityType_, starts failing and the calendar
+# grant can never finalise. Allocating a fresh store per request/reader/matcher
+# is exactly what triggers that, so every store consumer shares this one.
+_shared_store = None
+_shared_store_lock = threading.Lock()
+
+
+def get_shared_store():
+    """Return the process-wide EKEventStore, creating it once. None when
+    EventKit is unavailable or store creation fails. Thread-safe."""
+    global _shared_store
+    if not _eventkit_available():
+        return None
+    with _shared_store_lock:
+        if _shared_store is None:
+            try:
+                import EventKit
+
+                _shared_store = EventKit.EKEventStore.alloc().init()
+            except Exception:
+                logger.debug("EKEventStore alloc failed", exc_info=True)
+                return None
+        return _shared_store
+
+
+def reset_shared_store() -> None:
+    """Drop the cached store. For tests (which inject fake EventKit modules)
+    and defensive re-init; production never needs it."""
+    global _shared_store
+    with _shared_store_lock:
+        _shared_store = None
+
 
 def _status_from_raw(raw: int) -> str:
     """Map an EKAuthorizationStatus int to our string. Pure/testable."""
@@ -88,9 +123,9 @@ def request_access(*, timeout_seconds: float = 15.0) -> bool | None:
     if not _eventkit_available():
         return None
     try:
-        import EventKit
-
-        store = EventKit.EKEventStore.alloc().init()
+        store = get_shared_store()
+        if store is None:
+            return None
         done = threading.Event()
         outcome: dict[str, bool] = {}
 
@@ -107,6 +142,8 @@ def request_access(*, timeout_seconds: float = 15.0) -> bool | None:
         if hasattr(store, "requestFullAccessToEventsWithCompletion_"):
             store.requestFullAccessToEventsWithCompletion_(on_access)
         else:
+            import EventKit
+
             store.requestAccessToEntityType_completion_(EventKit.EKEntityTypeEvent, on_access)
         if done.wait(timeout=timeout_seconds):
             return outcome.get("granted")

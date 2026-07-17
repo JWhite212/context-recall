@@ -8,6 +8,7 @@ All EventKit access is guarded: without EventKit (e.g. CI) the reader is simply
 
 import logging
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 
 from src import calendar_permission
@@ -81,12 +82,19 @@ def _events_from_extracted(
 class CalendarReader:
     """Range reader over macOS Calendar events. EventKit access is lazy + guarded."""
 
+    # While the status is NOT_DETERMINED the store is unlatched so a later
+    # grant self-heals — but firing a fresh 60s request on every read leaks
+    # EKEventStore instances (via request_access). Bound retries to one per
+    # this many seconds.
+    _REQUEST_COOLDOWN_SECONDS = 30.0
+
     def __init__(self, excluded_calendars: list[str] | None = None) -> None:
         self._excluded = set(excluded_calendars or [])
         self._store = None
         self._authorized = False
         self._init_attempted = False
         self._init_lock = threading.Lock()
+        self._last_request_ts = 0.0
 
     def _ensure_store(self) -> None:
         """Lazily create the EventKit store, requesting access only when needed.
@@ -124,24 +132,30 @@ class CalendarReader:
                 # the next call.
                 return
             # NOT_DETERMINED (or UNKNOWN introspection failure): fire the
-            # request. May raise the system dialog and block until answered
-            # or timed out; the permission module prefers the macOS 14+
-            # full-access API.
+            # request, but at most once per cooldown window. Re-requesting on
+            # every read (UI polls, sync tick, auto-arm) is what exhausts
+            # EventKit. The boot poller is the primary requester; this is the
+            # self-heal backstop.
+            now = time.monotonic()
+            if now - self._last_request_ts < self._REQUEST_COOLDOWN_SECONDS:
+                return
+            self._last_request_ts = now
             if calendar_permission.request_access(timeout_seconds=60.0):
                 self._create_store()
                 self._init_attempted = True
 
     def _create_store(self) -> None:
-        """Create the EKEventStore for an already-authorized process."""
-        try:
-            import EventKit
-
-            self._store = EventKit.EKEventStore.alloc().init()
-            self._authorized = True
-        except Exception as e:  # pragma: no cover - requires EventKit
-            logger.warning("Failed to initialise EventKit reader: %s", e)
+        """Attach the process-wide shared EKEventStore for an already-authorized
+        process. Reusing the singleton (rather than alloc()'ing a fresh store)
+        is what keeps the daemon under macOS's EKEventStore instance cap."""
+        store = calendar_permission.get_shared_store()
+        if store is None:  # pragma: no cover - requires EventKit
+            logger.warning("Failed to initialise EventKit reader: no shared store")
             self._store = None
             self._authorized = False
+            return
+        self._store = store
+        self._authorized = True
 
     @property
     def available(self) -> bool:

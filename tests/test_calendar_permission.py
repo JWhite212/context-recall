@@ -78,6 +78,64 @@ def test_describe_fix_not_determined_mentions_allow():
     assert "Allow" in describe_fix(NOT_DETERMINED)
 
 
+def test_get_shared_store_is_a_singleton(monkeypatch):
+    """B1: the whole process must reuse ONE EKEventStore. Repeated calls
+    return the same instance and alloc/init exactly once — creating a fresh
+    store per call is what exhausts EventKit (EKCADErrorDomain 1021)."""
+    allocs = {"n": 0}
+
+    class _Store:
+        pass
+
+    def _alloc():
+        allocs["n"] += 1
+        return SimpleNamespace(init=lambda: _Store())
+
+    mod = types.ModuleType("EventKit")
+    mod.EKEntityTypeEvent = 0
+    mod.EKEventStore = SimpleNamespace(alloc=_alloc)
+    monkeypatch.setattr(cp, "_eventkit_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "EventKit", mod)
+
+    cp.reset_shared_store()
+    first = cp.get_shared_store()
+    second = cp.get_shared_store()
+    assert first is not None
+    assert first is second
+    assert allocs["n"] == 1
+
+
+def test_get_shared_store_none_without_eventkit(monkeypatch):
+    monkeypatch.setattr(cp, "_eventkit_available", lambda: False)
+    cp.reset_shared_store()
+    assert cp.get_shared_store() is None
+
+
+def test_request_access_reuses_shared_store(monkeypatch):
+    """request_access must draw from the shared store rather than allocating
+    its own — otherwise every boot/retry leaks a store."""
+    allocs = {"n": 0}
+
+    class ModernStore:
+        def requestFullAccessToEventsWithCompletion_(self, handler):
+            handler(True, None)
+
+    def _alloc():
+        allocs["n"] += 1
+        return SimpleNamespace(init=lambda: ModernStore())
+
+    mod = types.ModuleType("EventKit")
+    mod.EKEntityTypeEvent = 0
+    mod.EKEventStore = SimpleNamespace(alloc=_alloc)
+    monkeypatch.setattr(cp, "_eventkit_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "EventKit", mod)
+
+    cp.reset_shared_store()
+    assert _REAL_REQUEST_ACCESS(timeout_seconds=1.0) is True
+    assert _REAL_REQUEST_ACCESS(timeout_seconds=1.0) is True
+    assert allocs["n"] == 1  # both requests shared one store
+
+
 def test_request_access_prefers_full_access_api(monkeypatch):
     """macOS 14 split calendar access: the legacy entity-type request only
     grants write-only there. Prefer requestFullAccessToEventsWithCompletion_
