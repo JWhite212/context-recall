@@ -1366,6 +1366,26 @@ class PipelineRunner:
                     getattr(md_cfg, "owner_identities", []) or [],
                     ctx.owner_display_name,
                 )
+
+        # Related links: previous series instance + project note (existing only).
+        if self._db.database is not None:
+            from src.output.related import resolve_related
+            from src.series.repository import SeriesRepository
+
+            series_meetings: list[dict] = []
+            if getattr(meeting, "series_id", None):
+                series_meetings = (
+                    await SeriesRepository(self._db.database).get_meetings(meeting.series_id) or []
+                )
+            ctx.related_links = resolve_related(
+                series_meetings=[
+                    m.to_dict() if hasattr(m, "to_dict") else dict(m) for m in series_meetings
+                ],
+                this_started_at=getattr(meeting, "started_at", 0.0) or 0.0,
+                project_note_name=ctx.project_name,
+                vault_base=self._config.markdown.vault_path,
+                client_folder=ctx.client_folder,
+            )
         return ctx
 
     async def _rerender_markdown_async(self, meeting_id: str) -> None:
