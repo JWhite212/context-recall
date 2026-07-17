@@ -163,8 +163,13 @@ class MarkdownWriter:
         :func:`src.output.note_assembler.assemble_body`.
         """
         self.last_error = None
+        # Consume any reuse_path once: the enriched re-render targets the file
+        # the pre-enrichment pass created, and may relocate it to a client
+        # folder (previous != filepath) without duplicating it.
+        previous = self._reuse_path
+        self._reuse_path = None
         try:
-            filepath = self._target_path(ctx)
+            filepath = self._target_path(ctx, previous)
         except ValueError:
             raise
         except OSError as e:
@@ -172,10 +177,22 @@ class MarkdownWriter:
             logger.error("Markdown write failed: %s", self.last_error)
             return None
 
-        from src.output.note_assembler import assemble_body  # local import avoids a cycle
+        from src.output.note_assembler import assemble_body, render_transcript
+
+        # Linked transcript: write the companion note first so the main note
+        # can wikilink it. Best-effort; a companion failure never fails the note.
+        transcript_link: str | None = None
+        if ctx.transcript_mode == "linked" and ctx.transcript is not None:
+            companion = filepath.with_name(f"{filepath.stem} (transcript){filepath.suffix}")
+            rows = render_transcript(ctx.transcript, "inline")
+            try:
+                companion.write_text(f"# {ctx.title} (transcript)\n\n{rows}\n", encoding="utf-8")
+                transcript_link = companion.stem
+            except OSError as e:
+                logger.warning("Could not write transcript companion note: %s", e)
 
         frontmatter_yaml = self._dump_frontmatter(self._build_frontmatter(ctx))
-        body = assemble_body(ctx)
+        body = assemble_body(ctx, transcript_link)
         content = f"---\n{frontmatter_yaml}\n---\n\n{body}"
 
         # Atomic write: stream to a sibling temp file then os.replace() in
@@ -194,6 +211,23 @@ class MarkdownWriter:
             except OSError:
                 pass
             return None
+
+        # Re-render relocation: once the new file is safely written, remove the
+        # note's old copy so a client-folder change moves rather than duplicates.
+        if (
+            previous is not None
+            and Path(previous).resolve() != filepath
+            and Path(previous).exists()
+        ):
+            try:
+                Path(previous).unlink()
+            except OSError as e:
+                logger.warning(
+                    "Re-render wrote %s but could not remove old note %s: %s",
+                    filepath,
+                    previous,
+                    e,
+                )
 
         logger.info("Markdown written: %s", filepath)
         return filepath
@@ -247,25 +281,36 @@ class MarkdownWriter:
             width=1000,
         ).rstrip()
 
-    def _target_path(self, ctx: NoteContext) -> Path:
-        """Compute the note's file path from the configured template."""
-        if self._reuse_path is not None:
-            target = self._reuse_path
-            self._reuse_path = None
-            os.makedirs(target.parent, exist_ok=True)
-            return target
+    def _target_path(self, ctx: NoteContext, previous: Path | None = None) -> Path:
+        """Compute the note's file path.
+
+        Enriched notes route into ``<vault>/<client_folder>/`` when
+        ``route_by_client`` is on; pre-enrichment notes stay flat. On a
+        re-render (*previous* given) the existing basename is preserved, so
+        only the client folder may change (title to filename changes are the
+        rename path's job).
+        """
         vault_path = Path(self._config.vault_path)
-        os.makedirs(vault_path, exist_ok=True)
-        time_str = ctx.time.replace(":", "-")
-        title_slug = slugify(ctx.title, max_length=60)
-        filename = self._config.filename_template.format(
-            date=ctx.date,
-            time=time_str,
-            slug=title_slug or "meeting",
+        route = (
+            getattr(self._config, "route_by_client", False)
+            and ctx.enriched
+            and bool(ctx.client_folder)
         )
-        # Sanitize filename to prevent directory traversal.
-        filename = filename.replace("/", "_").replace("\\", "_").lstrip(".")
-        filepath = (vault_path / filename).resolve()
+        base = vault_path / ctx.client_folder if route else vault_path
+        os.makedirs(base, exist_ok=True)
+        if previous is not None:
+            filename = Path(previous).name
+        else:
+            time_str = ctx.time.replace(":", "-")
+            title_slug = slugify(ctx.title, max_length=60)
+            filename = self._config.filename_template.format(
+                date=ctx.date,
+                time=time_str,
+                slug=title_slug or "meeting",
+            )
+            # Sanitize filename to prevent directory traversal.
+            filename = filename.replace("/", "_").replace("\\", "_").lstrip(".")
+        filepath = (base / filename).resolve()
         if not filepath.is_relative_to(vault_path.resolve()):
             raise ValueError(f"Generated filename would escape the vault directory: {filename!r}")
         return filepath
@@ -298,7 +343,10 @@ class MarkdownWriter:
             date=date_str, time=time_str, slug=title_slug or "meeting"
         )
         filename = filename.replace("/", "_").replace("\\", "_").lstrip(".")
-        new_path = (vault_path / filename).resolve()
+        # Rename within the note's current folder, so an enriched note that
+        # was routed into a client subfolder is not yanked back to the vault
+        # root by a title change.
+        new_path = (old_path.parent / filename).resolve()
         if not new_path.is_relative_to(vault_path.resolve()):
             raise ValueError(f"Rename target would escape the vault directory: {filename!r}")
 
