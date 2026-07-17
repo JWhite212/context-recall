@@ -92,7 +92,67 @@ describe("CalendarsSection", () => {
     expect(url.toString()).toContain("/api/config");
     expect(init?.method).toBe("PUT");
     const body = JSON.parse(init?.body as string);
-    expect(body.calendar.excluded_calendars).toEqual(["Personal", "Work"]);
+    // Exclusion is stored by calendar id (c1), not title. The legacy title
+    // "Personal" already in the config is preserved (a different calendar).
+    expect(body.calendar.excluded_calendars).toEqual(["Personal", "c1"]);
+  });
+
+  it("toggles same-titled calendars independently by id", async () => {
+    // Two DISTINCT calendars both named "Calendar" (e.g. iCloud + Google).
+    calendarsList = [
+      { id: "icloud", title: "Calendar" },
+      { id: "google", title: "Calendar" },
+    ];
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url.includes("/api/calendar/calendars")) {
+        return new Response(JSON.stringify({ calendars: calendarsList }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.includes("/api/calendar/permission")) {
+        return new Response(
+          JSON.stringify({ status: "authorized", granted: true }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/api/config")) {
+        if (init?.method === "PUT") {
+          return new Response(init.body as string, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({ calendar: { excluded_calendars: [] } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    render(<CalendarsSection id="calendars" />, { wrapper: makeWrapper() });
+    await waitFor(() =>
+      expect(screen.getAllByRole("checkbox")).toHaveLength(2),
+    );
+
+    // Uncheck only the first "Calendar" — excludes its id, not the other's.
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([, init]) => init?.method === "PUT" && init?.body,
+      );
+      expect(putCall).toBeTruthy();
+    });
+    const [, init] = fetchMock.mock.calls.find(([, i]) => i?.method === "PUT")!;
+    const body = JSON.parse(init?.body as string);
+    expect(body.calendar.excluded_calendars).toEqual(["icloud"]);
   });
 
   it("re-checking an excluded calendar removes it from the PUT body", async () => {

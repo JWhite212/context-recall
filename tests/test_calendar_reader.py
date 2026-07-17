@@ -41,6 +41,7 @@ def _extracted(**over):
         "join_url": "",
         "meeting_id": "",
         "calendar_name": "Work",
+        "calendar_identifier": "CAL-WORK",
         "is_all_day": False,
     }
     base.update(over)
@@ -71,6 +72,39 @@ def test_non_meeting_like_skipped():
 
 def test_excluded_calendar_skipped():
     assert _events_from_extracted([_extracted(calendar_name="Personal")], {"Personal"}) == []
+
+
+def test_calendar_id_populated_on_event():
+    events = _events_from_extracted([_extracted(calendar_identifier="CAL-42")], set())
+    assert events[0].calendar_id == "CAL-42"
+    assert events[0].to_dict()["calendar_id"] == "CAL-42"
+
+
+def test_excluded_by_calendar_id():
+    """B2: exclusion is keyed by calendar id, so the matching id is skipped."""
+    assert _events_from_extracted([_extracted(calendar_identifier="CAL-X")], {"CAL-X"}) == []
+
+
+def test_same_title_calendars_excluded_independently_by_id():
+    """B2: two DISTINCT calendars sharing a title must be independently
+    excludable — excluding one id must not drop the other's events."""
+    events = [
+        _extracted(event_identifier="E1", calendar_name="Calendar", calendar_identifier="ICLOUD"),
+        _extracted(event_identifier="E2", calendar_name="Calendar", calendar_identifier="GOOGLE"),
+    ]
+    out = _events_from_extracted(events, {"ICLOUD"})
+    assert [e.calendar_id for e in out] == ["GOOGLE"]
+
+
+def test_legacy_title_exclusion_still_honoured():
+    """B2 back-compat: a config that still stores a calendar TITLE (pre-id
+    migration) continues to exclude by name."""
+    assert (
+        _events_from_extracted(
+            [_extracted(calendar_name="Personal", calendar_identifier="CAL-P")], {"Personal"}
+        )
+        == []
+    )
 
 
 def test_events_sorted_by_start():
