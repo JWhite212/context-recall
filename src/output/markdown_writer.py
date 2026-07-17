@@ -243,7 +243,10 @@ class MarkdownWriter:
         """
         fm: dict = {
             "title": ctx.title,
-            "date": ctx.date,
+            # A real YAML date (unquoted) so Obsidian Dataview treats it as a
+            # date, matching the vault's Circleback notes. Falls back to the
+            # raw string if it is not a plain ISO date.
+            "date": self._as_date(ctx.date),
             "time": ctx.time,
         }
         if ctx.enriched:
@@ -262,6 +265,16 @@ class MarkdownWriter:
         else:
             fm["type"] = "meeting-note"
         return fm
+
+    @staticmethod
+    def _as_date(value: str):
+        """Parse a ``YYYY-MM-DD`` string to a date, else return it unchanged."""
+        from datetime import date as _date
+
+        try:
+            return _date.fromisoformat(value)
+        except (ValueError, TypeError):
+            return value
 
     def _dump_frontmatter(self, fm: dict) -> str:
         """Serialise frontmatter as block-list YAML, preserving key order.
