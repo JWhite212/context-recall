@@ -84,6 +84,25 @@ async def get_calendar_permission():
     return {"status": status, "granted": status == calendar_permission.AUTHORIZED}
 
 
+@router.post("/api/calendar/request", summary="Request macOS Calendar access")
+async def request_calendar_access():
+    """Fire the macOS Calendar permission dialog from the daemon.
+
+    macOS lists an app under System Settings > Privacy > Calendars only after
+    it has *requested* access — there is no manual "+" to add one. A daemon
+    that never completes a request therefore never appears, so the user cannot
+    grant it by hand. This endpoint issues the request (offloaded so the event
+    loop is never blocked) and returns the resulting status; the dialog stays
+    on screen and the UI polls /permission for the final answer.
+    """
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None, lambda: calendar_permission.request_access(timeout_seconds=2.0)
+    )
+    status = calendar_permission.authorization_status()
+    return {"status": status, "granted": status == calendar_permission.AUTHORIZED}
+
+
 @router.post("/api/calendar/sync", summary="Sync the calendar mirror now")
 async def sync_calendar():
     """Mirror the rolling near-term window into calendar_events immediately."""

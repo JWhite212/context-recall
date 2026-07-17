@@ -6,6 +6,7 @@ import {
   getConfig,
   updateConfig,
   triggerCalendarSync,
+  requestCalendarAccess,
 } from "../../lib/api";
 import { useToast } from "../common/Toast";
 
@@ -58,6 +59,20 @@ export function CalendarsSection({ id }: { id?: string }) {
     onError: () => toast.error("Sync failed."),
   });
 
+  const requestAccess = useMutation({
+    mutationFn: requestCalendarAccess,
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["calendar-permission"] });
+      queryClient.invalidateQueries({ queryKey: ["calendars"] });
+      if (r.granted) {
+        toast.success("Calendar access granted.");
+      } else {
+        toast.success("Requested calendar access — approve the macOS prompt.");
+      }
+    },
+    onError: () => toast.error("Could not request calendar access."),
+  });
+
   // Exclusion is keyed by calendar id so two distinct calendars sharing a
   // title (e.g. "Calendar" in iCloud and in Google) toggle independently. A
   // legacy title entry (pre-id configs) is still treated as excluded and is
@@ -101,15 +116,27 @@ export function CalendarsSection({ id }: { id?: string }) {
         <div className="mt-3 rounded-lg border border-border bg-surface p-3">
           <p className="text-sm text-text-secondary">
             Calendar access is not granted. Context Recall needs macOS Calendar
-            permission to import your meetings.
+            permission to import your meetings. macOS only lists the app under
+            Privacy &amp; Security &rarr; Calendars after you request access
+            below, so use "Request calendar access" and approve the prompt.
           </p>
-          <button
-            type="button"
-            onClick={openSystemSettings}
-            className="mt-2 px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors"
-          >
-            Open System Settings
-          </button>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => requestAccess.mutate()}
+              disabled={requestAccess.isPending}
+              className="px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
+            >
+              Request calendar access
+            </button>
+            <button
+              type="button"
+              onClick={openSystemSettings}
+              className="px-3 py-1.5 text-xs rounded-lg border border-border text-text-secondary hover:bg-surface-hover transition-colors"
+            >
+              Open System Settings
+            </button>
+          </div>
         </div>
       )}
 

@@ -686,6 +686,16 @@ export async function getCalendarPermission(): Promise<{
   );
 }
 
+export async function requestCalendarAccess(): Promise<{
+  status: string;
+  granted: boolean;
+}> {
+  return request<{ status: string; granted: boolean }>(
+    "/api/calendar/request",
+    { method: "POST" },
+  );
+}
+
 // --- Action Items ---
 
 export async function getActionItems(opts?: {
