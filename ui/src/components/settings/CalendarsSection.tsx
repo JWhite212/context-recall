@@ -47,10 +47,17 @@ export function CalendarsSection({ id }: { id?: string }) {
     onError: () => toast.error("Sync failed."),
   });
 
-  function toggle(title: string, include: boolean) {
-    const next = include
-      ? excluded.filter((t) => t !== title)
-      : [...excluded, title];
+  // Exclusion is keyed by calendar id so two distinct calendars sharing a
+  // title (e.g. "Calendar" in iCloud and in Google) toggle independently. A
+  // legacy title entry (pre-id configs) is still treated as excluded and is
+  // dropped when the calendar is re-included, migrating it to id-based.
+  function isExcluded(cal: { id: string; title: string }) {
+    return excluded.includes(cal.id) || excluded.includes(cal.title);
+  }
+
+  function toggle(cal: { id: string; title: string }, include: boolean) {
+    const cleaned = excluded.filter((x) => x !== cal.id && x !== cal.title);
+    const next = include ? cleaned : [...cleaned, cal.id];
     save.mutate(next);
   }
 
@@ -101,7 +108,7 @@ export function CalendarsSection({ id }: { id?: string }) {
             <p className="text-sm text-text-muted">No calendars available.</p>
           ) : (
             calendars.map((c) => {
-              const included = !excluded.includes(c.title);
+              const included = !isExcluded(c);
               return (
                 <label
                   key={c.id}
@@ -110,7 +117,7 @@ export function CalendarsSection({ id }: { id?: string }) {
                   <input
                     type="checkbox"
                     checked={included}
-                    onChange={(e) => toggle(c.title, e.target.checked)}
+                    onChange={(e) => toggle(c, e.target.checked)}
                   />
                   {c.title}
                 </label>

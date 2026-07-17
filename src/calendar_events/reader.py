@@ -32,6 +32,7 @@ class CalendarEvent:
     join_url: str = ""
     meeting_id: str = ""
     calendar_name: str = ""
+    calendar_id: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -48,6 +49,9 @@ def _events_from_extracted(
     """Pure transform: filter extracted event dicts and build CalendarEvents.
 
     Skips all-day events, excluded calendars, and non-meeting-like events.
+    Exclusion is keyed by calendar **id** so two distinct calendars sharing a
+    title stay independently toggleable; a calendar *name* in the excluded set
+    is also honoured for backward compatibility with pre-id configs.
     The event_uid is synthesised as ``<eventIdentifier>:<int(start_ts)>`` because
     EventKit's eventIdentifier is shared across recurring occurrences.
     """
@@ -55,7 +59,9 @@ def _events_from_extracted(
     for e in extracted:
         if e.get("is_all_day"):
             continue
-        if e.get("calendar_name", "") in excluded_calendars:
+        cal_name = e.get("calendar_name", "") or ""
+        cal_id = e.get("calendar_identifier", "") or ""
+        if cal_id in excluded_calendars or cal_name in excluded_calendars:
             continue
         join_url = e.get("join_url", "") or ""
         attendees = e.get("attendees") or []
@@ -72,7 +78,8 @@ def _events_from_extracted(
                 organizer=e.get("organizer"),
                 join_url=join_url,
                 meeting_id=e.get("meeting_id", "") or "",
-                calendar_name=e.get("calendar_name", "") or "",
+                calendar_name=cal_name,
+                calendar_id=cal_id,
             )
         )
     events.sort(key=lambda ev: ev.start_ts)
@@ -198,8 +205,11 @@ class CalendarReader:
                 except Exception:
                     continue
             cal = ""
+            cal_id = ""
             try:
-                cal = str(event.calendar().title() or "")
+                calendar = event.calendar()
+                cal = str(calendar.title() or "")
+                cal_id = str(calendar.calendarIdentifier() or "")
             except Exception:
                 pass
             return {
@@ -212,6 +222,7 @@ class CalendarReader:
                 "join_url": join_url,
                 "meeting_id": meeting_id,
                 "calendar_name": cal,
+                "calendar_identifier": cal_id,
                 "is_all_day": bool(event.isAllDay()),
             }
         except Exception:
