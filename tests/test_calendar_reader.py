@@ -145,6 +145,29 @@ def test_reader_request_granted_initialises_and_latches(monkeypatch):
     assert requests["n"] == 1
 
 
+def test_reader_not_determined_requests_are_cooldown_bounded(monkeypatch):
+    """B1: while status stays not_determined, back-to-back reads must NOT
+    re-fire request_access on every call — that is what leaks EKEventStore
+    instances (EKCADErrorDomain 1021). A cooldown bounds the retries."""
+    status = {"v": "not_determined"}
+    _eventkit_reader_env(monkeypatch, status)
+    requests = {"n": 0}
+
+    def _unanswered(**_kw):
+        requests["n"] += 1
+        return None
+
+    monkeypatch.setattr("src.calendar_permission.request_access", _unanswered)
+    reader = CalendarReader()
+    reader._ensure_store()
+    reader._ensure_store()
+    reader._ensure_store()
+    # Three consecutive not-determined reads, but the cooldown collapses them
+    # to a single request.
+    assert requests["n"] == 1
+    assert reader.available is False
+
+
 def test_reader_denied_never_requests_and_heals_on_settings_grant(monkeypatch):
     """A determined-but-blocked status (denied) cannot prompt, so no
     request may fire (the conftest guard raises if it does) — and it must

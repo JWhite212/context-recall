@@ -187,14 +187,15 @@ class CalendarMatcher:
             logger.warning("Failed to initialize EventKit: %s", e)
 
     def _create_store(self) -> None:
-        """Create the EKEventStore for an already-authorized process."""
-        try:
-            import EventKit
-
-            self._store = EventKit.EKEventStore.alloc().init()
-            self._authorized = True
-        except Exception as e:
-            logger.warning("Failed to initialize EventKit: %s", e)
+        """Attach the process-wide shared EKEventStore for an already-authorized
+        process. Sharing the singleton (rather than alloc()'ing a fresh store)
+        keeps the daemon under macOS's EKEventStore instance cap."""
+        store = calendar_permission.get_shared_store()
+        if store is None:
+            logger.warning("Failed to initialize EventKit: no shared store")
+            return
+        self._store = store
+        self._authorized = True
 
     def _retry_init(self) -> None:
         """Late-grant self-heal: when authorization arrived after

@@ -74,6 +74,18 @@ def _no_real_calendar_tcc(monkeypatch):
     monkeypatch.setattr("src.calendar_permission.request_access", _forbidden)
 
 
+@pytest.fixture(autouse=True)
+def _reset_calendar_shared_store():
+    """B1: the process-wide EKEventStore is a module singleton. Reset it
+    around every test so a fake store built from one test's injected EventKit
+    module never leaks into the next."""
+    from src import calendar_permission
+
+    calendar_permission.reset_shared_store()
+    yield
+    calendar_permission.reset_shared_store()
+
+
 class FakePlatform:
     """Controllable PlatformDetector for testing."""
 
