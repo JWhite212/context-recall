@@ -25,6 +25,18 @@ from src.utils.config import MarkdownConfig
 logger = logging.getLogger(__name__)
 
 
+class _BlockListDumper(_yaml.Dumper):
+    """YAML dumper that indents block sequences under their mapping key.
+
+    PyYAML's default emits list items flush with the key; the vault's
+    Circleback notes (and Obsidian's own convention) indent them two
+    spaces, so match that for a consistent, tooling-safe frontmatter.
+    """
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+
 def _rewrite_frontmatter_title(content: str, new_title: str) -> str:
     """Return *content* with its YAML frontmatter ``title`` set to *new_title*.
 
@@ -189,24 +201,50 @@ class MarkdownWriter:
     def _build_frontmatter(self, ctx: NoteContext) -> dict:
         """Build the YAML frontmatter mapping for a note.
 
-        Phase 1 reproduces the legacy frontmatter shape; the enriched fields
-        (client, project, attendees, source, recall_id, enriched) are added
-        in a later phase and gated on ``ctx.enriched``.
+        A pre-enrichment note carries the legacy shape (title/date/time/
+        duration/word_count/tags/type). Once ``ctx.enriched`` is set the
+        parity fields (client, project, meeting_type, attendees, source,
+        recall_id, enriched) are included so the note matches the vault's
+        Circleback frontmatter.
         """
-        return {
+        fm: dict = {
             "title": ctx.title,
             "date": ctx.date,
             "time": ctx.time,
-            "duration_minutes": ctx.duration_minutes,
-            "word_count": ctx.word_count,
-            "tags": ctx.all_tags,
-            "type": "meeting-note",
         }
+        if ctx.enriched:
+            fm["client"] = ctx.client_name
+            fm["project"] = ctx.project_name
+            fm["meeting_type"] = ctx.meeting_type
+        fm["duration_minutes"] = ctx.duration_minutes
+        fm["word_count"] = ctx.word_count
+        if ctx.enriched:
+            fm["attendees"] = list(ctx.attendees)
+        fm["tags"] = ctx.all_tags
+        if ctx.enriched:
+            fm["source"] = "context-recall"
+            fm["recall_id"] = ctx.recall_id
+            fm["enriched"] = True
+        else:
+            fm["type"] = "meeting-note"
+        return fm
 
     def _dump_frontmatter(self, fm: dict) -> str:
-        """Serialise frontmatter, preserving key order and block-list style."""
+        """Serialise frontmatter as block-list YAML, preserving key order.
+
+        Uses an indenting dumper so block sequences sit two spaces under
+        their key (matching the vault's Circleback notes); a flow list or a
+        quoted list string corrupts the user's vault tooling. ``time`` is
+        auto-quoted by PyYAML so a value like ``10:03`` is not re-read as a
+        sexagesimal integer.
+        """
         return _yaml.dump(
-            fm, default_flow_style=False, allow_unicode=True, sort_keys=False, width=1000
+            fm,
+            Dumper=_BlockListDumper,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+            width=1000,
         ).rstrip()
 
     def _target_path(self, ctx: NoteContext) -> Path:
