@@ -33,6 +33,26 @@ def format_my_task(item) -> str:
     return " ".join(parts)
 
 
+def render_transcript(transcript, mode: str) -> str:
+    """Render the transcript block for the given mode.
+
+    ``inline`` emits a ## Full Transcript section; ``foldout`` wraps it in a
+    collapsible ``> [!quote]-`` callout; ``omit`` and ``linked`` emit nothing
+    here (``linked`` is handled by the writer, which knows the vault path).
+    """
+    if transcript is None or mode in ("omit", "linked"):
+        return ""
+    rows = []
+    for seg in transcript.segments:
+        speaker = f" *{seg.speaker}*:" if seg.speaker else ""
+        rows.append(f"**{seg.timestamp}**{speaker} {seg.text.strip()}")
+    if mode == "foldout":
+        body = "\n".join(f"> {r}" for r in rows)
+        return "> [!quote]- Full transcript\n" + body
+    # inline
+    return "## Full Transcript\n\n" + "\n\n".join(rows)
+
+
 def render_my_tasks(items) -> str:
     """Render the ## My Tasks section, or "" when there are no owner tasks."""
     if not items:
