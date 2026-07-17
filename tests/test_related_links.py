@@ -39,25 +39,47 @@ def test_most_recent_earlier_sibling_wins(tmp_path):
     assert ("Previous", "newer") in out and ("Previous", "older") not in out
 
 
-def test_project_link_only_when_note_exists(tmp_path):
-    (tmp_path / "10 Projects").mkdir(parents=True)
-    (tmp_path / "10 Projects" / "Project Siemens 16.md").write_text("x")
+def test_project_link_found_in_sibling_projects_folder(tmp_path):
+    # Real layout: vault_base is <root>/70 Meetings; project notes live in the
+    # sibling <root>/10 Projects. The 'Project <name>' convention is matched.
+    meetings = tmp_path / "70 Meetings"
+    meetings.mkdir()
+    (tmp_path / "10 Projects").mkdir()
+    (tmp_path / "10 Projects" / "Project Siemens 16 Smart UK Infrastructure.md").write_text("x")
     out = resolve_related(
         series_meetings=[],
         this_started_at=0.0,
-        project_note_name="Project Siemens 16",
-        vault_base=str(tmp_path),
+        project_note_name="Siemens 16 Smart UK Infrastructure",
+        vault_base=str(meetings),
         client_folder="Siemens",
     )
-    assert ("Project", "Project Siemens 16") in out
+    assert ("Project", "Project Siemens 16 Smart UK Infrastructure") in out
+
+
+def test_project_link_exact_name_match(tmp_path):
+    meetings = tmp_path / "70 Meetings"
+    meetings.mkdir()
+    (tmp_path / "10 Projects").mkdir()
+    (tmp_path / "10 Projects" / "Armacell.md").write_text("x")
+    out = resolve_related(
+        series_meetings=[],
+        this_started_at=0.0,
+        project_note_name="Armacell",
+        vault_base=str(meetings),
+        client_folder="Armacell",
+    )
+    assert ("Project", "Armacell") in out
 
 
 def test_missing_project_note_is_not_linked(tmp_path):
+    meetings = tmp_path / "70 Meetings"
+    meetings.mkdir()
+    (tmp_path / "10 Projects").mkdir()
     out = resolve_related(
         series_meetings=[],
         this_started_at=0.0,
         project_note_name="Nonexistent",
-        vault_base=str(tmp_path),
+        vault_base=str(meetings),
         client_folder="Siemens",
     )
     assert out == []
