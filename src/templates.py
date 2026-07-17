@@ -44,16 +44,16 @@ SUMMARISATION_PROMPT = (
     "Use these to attribute statements. If speaker names are identifiable "
     'from context (e.g. "Thanks, Sarah"), use real names throughout. '
     '"Me" is the person who recorded the meeting.\n'
-    "- For the Summary section: write 3-5 substantial paragraphs. Cover "
-    "the meeting purpose, each major topic discussed, key concerns "
-    "raised, and the overall outcome. Include specific details — names, "
-    "dates, numbers, systems mentioned.\n"
-    "- For Discussion Points: create a subsection for EVERY distinct "
+    "- For the Executive summary section: write 3-5 substantial "
+    "paragraphs. Cover the meeting purpose, each major topic discussed, "
+    "key concerns raised, and the overall outcome. Include specific "
+    "details: names, dates, numbers, systems mentioned.\n"
+    "- For Discussion points: create a subsection for EVERY distinct "
     "topic discussed, no matter how brief. Attribute who said what.\n"
     "- For Action Items: each must include the owner, deadline, full "
     "context of why it was raised, specific requirements, and concrete "
     "next steps as checkboxes.\n"
-    "- For Key Decisions: include the reasoning behind each decision, "
+    "- For Decisions made: include the reasoning behind each decision, "
     "not just the decision itself.\n"
     "\n"
     "Output the summary in EXACTLY this format:\n"
@@ -66,27 +66,27 @@ SUMMARISATION_PROMPT = (
     "transcript. Use real names where possible, otherwise speaker "
     "labels.}\n"
     "\n"
-    "## Summary\n"
+    "## Executive summary\n"
     "\n"
     "{3-5 detailed paragraphs. First paragraph: meeting purpose and "
     "context. Middle paragraphs: major topics with specific details, "
     "names, dates, and numbers. Final paragraph: overall outcome and "
     "next steps.}\n"
     "\n"
-    "## Discussion Points\n"
+    "## Discussion points\n"
     "\n"
-    "### {Topic 1 — descriptive title}\n"
+    "### {Topic 1: descriptive title}\n"
     "\n"
     "{2-4 paragraphs covering: what was discussed, who contributed "
     "what, differing opinions or concerns raised, and the resolution "
     "or current status. Include specific details and context.}\n"
     "\n"
-    "### {Topic 2 — descriptive title}\n"
+    "### {Topic 2: descriptive title}\n"
     "\n"
     "{Same detailed format. Create as many subsections as there are "
     "distinct topics.}\n"
     "\n"
-    "## Key Decisions\n"
+    "## Decisions made\n"
     "\n"
     "| Decision | Rationale | Owner |\n"
     "| --- | --- | --- |\n"
@@ -95,7 +95,7 @@ SUMMARISATION_PROMPT = (
     "\n"
     "## Action Items\n"
     "\n"
-    "### {Action item 1 — short title}\n"
+    "### {Action item 1: short title}\n"
     "\n"
     "- **Owner:** {Name}\n"
     "- **Deadline:** {Specific date, or timeframe like 'end of next "
@@ -106,22 +106,28 @@ SUMMARISATION_PROMPT = (
     "- [ ] {Concrete next step}\n"
     "- [ ] {Additional subtask if applicable}\n"
     "\n"
-    "### {Action item 2 — short title}\n"
+    "### {Action item 2: short title}\n"
     "\n"
     "{Same format. List ALL action items mentioned, even informal "
     "commitments like 'I will send you that document'.}\n"
     "\n"
-    "## Open Questions & Risks\n"
+    "## Open questions\n"
     "\n"
-    "- **{Question/Risk 1}:** {Context about why this is unresolved "
+    "- **{Open question 1}:** {Context about why this is unresolved "
     "and who needs to address it}\n"
-    "- **{Question/Risk 2}:** {Same format}\n"
+    "- **{Open question 2}:** {Same format}\n"
     "\n"
-    "## Notable Quotes\n"
+    "## Risks and blockers\n"
     "\n"
-    '> "{Exact or near-exact quote}" — {Speaker}\n'
+    "- **{Risk or blocker 1}:** {What is at risk, the impact if it is "
+    "not addressed, and who owns mitigating it}\n"
+    "- **{Risk or blocker 2}:** {Same format}\n"
     "\n"
-    '> "{Another significant statement}" — {Speaker}\n'
+    "## Notable quotes\n"
+    "\n"
+    '> "{Exact or near-exact quote}" - {Speaker}\n'
+    "\n"
+    '> "{Another significant statement}" - {Speaker}\n'
     "\n"
     "## Tags\n"
     "\n"
@@ -151,12 +157,13 @@ def _builtin_templates() -> dict[str, SummaryTemplate]:
             system_prompt=SUMMARISATION_PROMPT,
             sections=[
                 "Participants",
-                "Summary",
-                "Discussion Points",
-                "Key Decisions",
+                "Executive summary",
+                "Discussion points",
+                "Decisions made",
                 "Action Items",
-                "Open Questions & Risks",
-                "Notable Quotes",
+                "Open questions",
+                "Risks and blockers",
+                "Notable quotes",
                 "Tags",
             ],
         ),
@@ -277,7 +284,7 @@ def _builtin_templates() -> dict[str, SummaryTemplate]:
                 "Rules:\n"
                 "- Capture topics discussed, feedback given or received, "
                 "career development discussions, and action items.\n"
-                "- Be sensitive to the personal nature of 1:1s — capture "
+                "- Be sensitive to the personal nature of 1:1s, capture "
                 "substance without unnecessary detail.\n"
                 "- Attribute statements to speakers where possible.\n"
                 "- Highlight follow-up items clearly.\n"
@@ -293,7 +300,7 @@ def _builtin_templates() -> dict[str, SummaryTemplate]:
                 "\n"
                 "## Feedback\n"
                 "\n"
-                "{Any feedback exchanged — positive recognition, "
+                "{Any feedback exchanged, positive recognition, "
                 "constructive suggestions, or concerns raised.}\n"
                 "\n"
                 "## Career & Development\n"
