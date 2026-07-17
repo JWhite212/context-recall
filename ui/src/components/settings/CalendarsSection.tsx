@@ -31,6 +31,17 @@ export function CalendarsSection({ id }: { id?: string }) {
   const calendars = calData?.calendars ?? [];
   const granted = permission?.granted ?? true;
 
+  // Titles that appear on more than one calendar are ambiguous, so show the
+  // account (source) alongside them to distinguish, e.g. "Calendar" on iCloud
+  // vs. on Google.
+  const titleCounts = new Map<string, number>();
+  for (const c of calendars) {
+    titleCounts.set(c.title, (titleCounts.get(c.title) ?? 0) + 1);
+  }
+  const duplicateTitles = new Set(
+    [...titleCounts].filter(([, n]) => n > 1).map(([t]) => t),
+  );
+
   const save = useMutation({
     mutationFn: (next: string[]) =>
       updateConfig({ calendar: { excluded_calendars: next } }),
@@ -109,6 +120,10 @@ export function CalendarsSection({ id }: { id?: string }) {
           ) : (
             calendars.map((c) => {
               const included = !isExcluded(c);
+              const label =
+                duplicateTitles.has(c.title) && c.source
+                  ? `${c.title} — ${c.source}`
+                  : c.title;
               return (
                 <label
                   key={c.id}
@@ -119,7 +134,7 @@ export function CalendarsSection({ id }: { id?: string }) {
                     checked={included}
                     onChange={(e) => toggle(c, e.target.checked)}
                   />
-                  {c.title}
+                  {label}
                 </label>
               );
             })

@@ -107,6 +107,44 @@ def test_legacy_title_exclusion_still_honoured():
     )
 
 
+def test_dedup_by_meeting_id():
+    """B3: the same meeting present on two calendars (distinct event ids)
+    must render once. meeting_id is the strongest identity."""
+    events = [
+        _extracted(event_identifier="E1", calendar_identifier="A", meeting_id="19:mtg@thread.v2"),
+        _extracted(event_identifier="E2", calendar_identifier="B", meeting_id="19:mtg@thread.v2"),
+    ]
+    out = _events_from_extracted(events, set())
+    assert len(out) == 1
+
+
+def test_dedup_by_join_url_when_no_meeting_id():
+    events = [
+        _extracted(event_identifier="E1", calendar_identifier="A", join_url="https://z/m"),
+        _extracted(event_identifier="E2", calendar_identifier="B", join_url="https://z/m"),
+    ]
+    out = _events_from_extracted(events, set())
+    assert len(out) == 1
+
+
+def test_dedup_by_title_and_time_when_no_link():
+    events = [
+        _extracted(event_identifier="E1", calendar_identifier="A", title="1:1", join_url=""),
+        _extracted(event_identifier="E2", calendar_identifier="B", title="1:1", join_url=""),
+    ]
+    out = _events_from_extracted(events, set())
+    assert len(out) == 1
+
+
+def test_distinct_meetings_not_deduped():
+    events = [
+        _extracted(event_identifier="E1", title="Standup", join_url=""),
+        _extracted(event_identifier="E2", title="Retro", join_url=""),
+    ]
+    out = _events_from_extracted(events, set())
+    assert len(out) == 2
+
+
 def test_events_sorted_by_start():
     out = _events_from_extracted(
         [

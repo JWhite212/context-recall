@@ -666,11 +666,11 @@ export async function getCalendarEvents(
 }
 
 export async function getCalendars(): Promise<{
-  calendars: { id: string; title: string }[];
+  calendars: { id: string; title: string; source?: string }[];
 }> {
-  return request<{ calendars: { id: string; title: string }[] }>(
-    "/api/calendar/calendars",
-  );
+  return request<{
+    calendars: { id: string; title: string; source?: string }[];
+  }>("/api/calendar/calendars");
 }
 
 export async function triggerCalendarSync(): Promise<{ synced: number }> {
