@@ -29,6 +29,12 @@ describe("CalendarsSection", () => {
           headers: { "content-type": "application/json" },
         });
       }
+      if (url.includes("/api/calendar/request")) {
+        return new Response(
+          JSON.stringify({ status: "authorized", granted: true }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
       if (url.includes("/api/calendar/calendars")) {
         return new Response(
           JSON.stringify({
@@ -220,6 +226,28 @@ describe("CalendarsSection", () => {
       screen.getByRole("button", { name: /open system settings/i }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /sync now/i })).toBeDisabled();
+  });
+
+  it("clicking Request calendar access POSTs to /api/calendar/request", async () => {
+    permissionStatus = "not_determined";
+    permissionGranted = false;
+    render(<CalendarsSection />, { wrapper: makeWrapper() });
+
+    const btn = await screen.findByRole("button", {
+      name: /request calendar access/i,
+    });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) =>
+        url.toString().includes("/api/calendar/request"),
+      );
+      expect(call).toBeTruthy();
+    });
+    const [, init] = fetchMock.mock.calls.find(([url]) =>
+      url.toString().includes("/api/calendar/request"),
+    )!;
+    expect(init?.method).toBe("POST");
   });
 
   it("clicking Open System Settings opens the Calendars pane via the opener plugin", async () => {

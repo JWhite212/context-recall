@@ -187,6 +187,33 @@ def test_calendar_permission_endpoint(monkeypatch):
     assert body["granted"] is True
 
 
+def test_request_calendar_access_endpoint(monkeypatch):
+    """B6: macOS only lists an app under Privacy > Calendars once it has
+    requested access (there is no manual add). This endpoint fires the request
+    from the daemon so the app registers and the prompt appears."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.routes import calendar as calendar_routes
+
+    calls = {"n": 0}
+
+    def _req(**_kw):
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr("src.calendar_permission.request_access", _req)
+    monkeypatch.setattr("src.calendar_permission.authorization_status", lambda: "authorized")
+    app = FastAPI()
+    app.include_router(calendar_routes.router)
+    client = TestClient(app)
+
+    resp = client.post("/api/calendar/request")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "authorized", "granted": True}
+    assert calls["n"] == 1
+
+
 class _RecordingSync:
     """Mock sync job that records whether apply was called."""
 
