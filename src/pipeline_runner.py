@@ -950,6 +950,13 @@ class PipelineRunner:
             await self._refresh_analytics(started_at)
         except Exception:
             logger.warning("Analytics refresh failed", exc_info=True)
+        # Pass 2: re-render the markdown note with everything post-processing
+        # produced (tags, action items, insights, talk stats). Runs last so it
+        # sees the fully enriched meeting row. Idempotent on markdown_path.
+        try:
+            await self._rerender_markdown_async(meeting_id)
+        except Exception:
+            logger.warning("Markdown re-render failed", exc_info=True)
 
     async def _extract_action_items(self, meeting_id: str, transcript, is_reprocess: bool) -> None:
         from src.action_items.extractor import ActionItemExtractor
@@ -1212,6 +1219,88 @@ class PipelineRunner:
         # that is today; for a reprocess it may be an older day.
         day = datetime.fromtimestamp(started_at, tz=timezone.utc).strftime("%Y-%m-%d")
         await engine.refresh_period("daily", day)
+
+    # ------------------------------------------------------------------
+    # Enriched markdown re-render (Pass 2)
+    # ------------------------------------------------------------------
+
+    def _build_note_context(self, meeting, transcript, *, enriched: bool):
+        """Assemble a NoteContext from a meeting row + transcript.
+
+        Phase 1 fills identity, timing, the summary body and the transcript.
+        Later phases enrich taxonomy, attendees, action items, insights,
+        talk stats and related links via :meth:`_augment_note_context`.
+        """
+        import time as _t
+
+        from src.output.note_context import NoteContext
+
+        started_at = getattr(meeting, "started_at", 0.0) or 0.0
+        duration_seconds = getattr(meeting, "duration_seconds", 0.0) or 0.0
+        date_str = _t.strftime("%Y-%m-%d", _t.localtime(started_at))
+        time_str = _t.strftime("%H:%M", _t.localtime(started_at))
+        md_cfg = self._config.markdown
+        return NoteContext(
+            recall_id=getattr(meeting, "id", "") or "",
+            title=getattr(meeting, "title", "") or "Untitled Meeting",
+            date=date_str,
+            time=time_str,
+            started_at=started_at,
+            duration_minutes=int((duration_seconds or 0.0) / 60),
+            word_count=getattr(meeting, "word_count", 0) or 0,
+            extra_tags=[
+                t
+                for t in (getattr(meeting, "tags", []) or [])
+                if not str(t).startswith(("client/", "project/"))
+            ],
+            summary_markdown=getattr(meeting, "summary_markdown", "") or "",
+            meeting_type=(getattr(meeting, "template_name", "") or "").capitalize(),
+            transcript=transcript,
+            transcript_mode=(
+                getattr(md_cfg, "transcript_mode", None)
+                or ("inline" if getattr(md_cfg, "include_full_transcript", False) else "omit")
+            ),
+            enriched=enriched,
+        )
+
+    async def _augment_note_context(self, ctx, meeting):
+        """Enrich a NoteContext with DB-derived data.
+
+        Phase 1: identity only (passthrough). Later phases fill taxonomy,
+        attendees, action items, insights, talk stats and related links.
+        """
+        return ctx
+
+    async def _rerender_markdown_async(self, meeting_id: str) -> None:
+        """Pass 2: rewrite the note in place with post-processing data.
+
+        Located by the meeting's stored ``markdown_path`` so a re-run updates
+        the same file rather than duplicating it (idempotent, reprocess-safe).
+        Non-fatal: any failure is logged, never raised.
+        """
+        if not getattr(self._config.markdown, "enabled", False) or self._md_writer is None:
+            return
+        if self._db is None or self._db.database is None:
+            return
+        meeting = await self._db.repo.get_meeting(meeting_id)
+        if meeting is None:
+            return
+        transcript = None
+        if getattr(meeting, "transcript_json", None):
+            from src.transcriber import Transcript
+
+            try:
+                transcript = Transcript.from_dict(json.loads(meeting.transcript_json))
+            except Exception:
+                transcript = None
+        ctx = self._build_note_context(meeting, transcript, enriched=True)
+        ctx = await self._augment_note_context(ctx, meeting)
+        existing = getattr(meeting, "markdown_path", "") or ""
+        if existing:
+            self._md_writer.reuse_path(Path(existing))
+        new_path = await asyncio.to_thread(self._md_writer.write_note, ctx)
+        if new_path is not None and str(new_path) != existing:
+            await self._db.repo.update_meeting(meeting_id, markdown_path=str(new_path))
 
 
 def derive_source_paths(audio_path: Path, temp_audio_dir: str | Path) -> dict[str, Path | None]:

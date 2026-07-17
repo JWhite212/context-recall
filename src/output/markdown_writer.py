@@ -89,6 +89,14 @@ class MarkdownWriter:
         # reads this to emit a pipeline.warning so the UI can surface
         # "Markdown output skipped: <reason>" instead of failing silently.
         self.last_error: str | None = None
+        # Set by reuse_path() so the next write_note() targets an exact
+        # existing file (the enriched re-render rewrites the note the
+        # pre-enrichment pass already created, keyed on markdown_path).
+        self._reuse_path: Path | None = None
+
+    def reuse_path(self, path: Path) -> None:
+        """Force the next write_note() to target this exact path (re-render)."""
+        self._reuse_path = Path(path)
 
     def write(
         self,
@@ -203,6 +211,11 @@ class MarkdownWriter:
 
     def _target_path(self, ctx: NoteContext) -> Path:
         """Compute the note's file path from the configured template."""
+        if self._reuse_path is not None:
+            target = self._reuse_path
+            self._reuse_path = None
+            os.makedirs(target.parent, exist_ok=True)
+            return target
         vault_path = Path(self._config.vault_path)
         os.makedirs(vault_path, exist_ok=True)
         time_str = ctx.time.replace(":", "-")
