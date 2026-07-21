@@ -1,11 +1,17 @@
 import { useState } from "react";
 import { format } from "date-fns";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CalendarEvent } from "../../lib/types";
-import { generatePrepForEvent, startRecording } from "../../lib/api";
+import {
+  generatePrepForEvent,
+  getCalendarMeetings,
+  linkMeetingToCalendarEvent,
+  startRecording,
+} from "../../lib/api";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { useToast } from "../common/Toast";
 import { PrepModal } from "./PrepModal";
+import { CalendarLinkPicker, type LinkCandidate } from "./CalendarLinkPicker";
 
 interface UpcomingEventCardProps {
   event: CalendarEvent;
@@ -58,6 +64,33 @@ export function UpcomingEventCard({
     onError: () => toast.error("Failed to start recording."),
   });
 
+  const [assigning, setAssigning] = useState(false);
+  const meetingsQuery = useQuery({
+    queryKey: ["calendar", "assign-picker", event.event_uid],
+    queryFn: () =>
+      getCalendarMeetings(event.start_ts - 86400, event.end_ts + 86400),
+    enabled: assigning,
+    staleTime: 30_000,
+  });
+  const recCandidates: LinkCandidate[] = (meetingsQuery.data?.meetings ?? [])
+    .filter((m) => !m.calendar_event_uid)
+    .map((m) => ({
+      id: m.id,
+      label: m.title || "Untitled",
+      subtitle: format(new Date(m.started_at * 1000), "EEE HH:mm"),
+    }));
+  const assign = useMutation({
+    mutationFn: (meetingId: string) =>
+      linkMeetingToCalendarEvent(meetingId, event),
+    onSuccess: () => {
+      setAssigning(false);
+      setOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      void queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
+    },
+    onError: () => toast.error("Failed to link the recording."),
+  });
+
   return (
     <div className="relative">
       <button
@@ -88,7 +121,10 @@ export function UpcomingEventCard({
           {event.attendees.length > 0 && (
             <ul className="mt-2 flex flex-col gap-0.5">
               {event.attendees.map((a, i) => (
-                <li key={`${a.email || a.name}-${i}`} className="text-text-secondary">
+                <li
+                  key={`${a.email || a.name}-${i}`}
+                  className="text-text-secondary"
+                >
                   {a.name || a.email}
                 </li>
               ))}
@@ -163,7 +199,26 @@ export function UpcomingEventCard({
                 </button>
               </div>
             )}
+
+            <button
+              type="button"
+              onClick={() => setAssigning(true)}
+              className="text-left text-accent hover:underline"
+            >
+              Assign a recording
+            </button>
           </div>
+
+          {assigning && (
+            <CalendarLinkPicker
+              title="Assign a recording"
+              candidates={recCandidates}
+              emptyLabel="No nearby recordings"
+              busy={assign.isPending}
+              onPick={(id) => assign.mutate(id)}
+              onClose={() => setAssigning(false)}
+            />
+          )}
         </div>
       )}
 
