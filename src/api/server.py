@@ -143,7 +143,13 @@ class ApiServer:
 
         # Initialise route dependencies.
         status_routes.init(self._get_daemon_state, self._get_active_meeting)
-        meetings_routes.init(self.repo, event_bus=self.event_bus)
+        from src.calendar_events.repository import CalendarEventRepository as _CalEventRepo
+
+        meetings_routes.init(
+            self.repo,
+            event_bus=self.event_bus,
+            calendar_event_repo=_CalEventRepo(self.db),
+        )
         config_routes.init(DEFAULT_CONFIG_PATH)
         recording_routes.init(
             self._start_recording,
