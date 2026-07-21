@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 
 from src import calendar_permission
 from src.calendar_matcher import (
+    _event_uid,
     _extract_attendee_info,
     _extract_teams_details,
     _is_eventkit_available,
@@ -74,7 +75,7 @@ def _events_from_extracted(
         title = e.get("title", "") or ""
         meeting_id = e.get("meeting_id", "") or ""
         candidate = CalendarEvent(
-            event_uid=f"{e['event_identifier']}:{int(start_ts)}",
+            event_uid=_event_uid(e["event_identifier"], start_ts),
             title=title,
             start_ts=start_ts,
             end_ts=end_ts,

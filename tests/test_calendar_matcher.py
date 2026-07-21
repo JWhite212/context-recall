@@ -122,3 +122,39 @@ def test_matcher_denied_never_requests_and_heals_on_settings_grant(monkeypatch):
     status["v"] = "authorized"
     matcher.match(1000.0)
     assert matcher.available is True
+
+
+def test_event_uid_helper_matches_reader_format():
+    from src.calendar_matcher import _event_uid
+
+    # Same format the mirror reader uses: "<identifier>:<int(start_ts)>".
+    assert _event_uid("E1", 1000.9) == "E1:1000"
+    assert _event_uid("abc-123", 1_700_000_000.0) == "abc-123:1700000000"
+
+
+def test_reader_uses_shared_event_uid_helper():
+    from src.calendar_events.reader import _events_from_extracted
+
+    out = _events_from_extracted(
+        [
+            {
+                "event_identifier": "E9",
+                "calendar_identifier": "c1",
+                "title": "Sync",
+                "start_ts": 2500.7,
+                "end_ts": 4300.0,
+                "attendees": [{"name": "A"}, {"name": "B"}],
+                "join_url": "",
+                "meeting_id": "",
+                "is_all_day": False,
+            }
+        ],
+        set(),
+    )
+    assert out[0].event_uid == "E9:2500"
+
+
+def test_calendar_match_defaults_event_uid_empty():
+    from src.calendar_matcher import CalendarMatch
+
+    assert CalendarMatch(event_title="x").event_uid == ""

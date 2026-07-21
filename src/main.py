@@ -844,6 +844,7 @@ class ContextRecall:
                 "calendar_confidence": calendar_match.confidence,
                 "teams_join_url": calendar_match.teams_join_url,
                 "teams_meeting_id": calendar_match.teams_meeting_id,
+                "calendar_event_uid": calendar_match.event_uid,
             }
 
         runner = PipelineRunner(
