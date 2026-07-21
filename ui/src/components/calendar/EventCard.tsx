@@ -1,5 +1,10 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { format } from "date-fns";
 import type { Meeting } from "../../lib/types";
+import { getCalendarEvents, linkMeetingToCalendarEvent } from "../../lib/api";
+import { CalendarLinkPicker, type LinkCandidate } from "./CalendarLinkPicker";
 
 const STATUS_COLORS: Record<string, string> = {
   complete: "bg-status-idle",
@@ -20,6 +25,46 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
     ? Math.round(meeting.duration_seconds / 60)
     : null;
   const statusColor = STATUS_COLORS[meeting.status] ?? "bg-gray-400";
+
+  // Link-to-calendar-event affordance — hooks must run unconditionally, so
+  // these live above the compact-mode early return even though the menu
+  // only renders in full mode.
+  const qc = useQueryClient();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const linked = !!meeting.calendar_event_uid;
+
+  // Nearby unlinked calendar entries (± a day) for the picker.
+  const anchor = meeting.started_at;
+  const eventsQuery = useQuery({
+    queryKey: ["calendar-events", "picker", meeting.id],
+    queryFn: () => getCalendarEvents(anchor - 86400, anchor + 86400),
+    enabled: pickerOpen,
+    staleTime: 30_000,
+  });
+  const candidates: LinkCandidate[] = (eventsQuery.data?.events ?? []).map(
+    (e) => ({
+      id: e.event_uid,
+      label: e.title || "Untitled",
+      subtitle: format(new Date(e.start_ts * 1000), "EEE HH:mm"),
+    }),
+  );
+
+  const link = useMutation({
+    mutationFn: (eventUid: string) => {
+      const ev = (eventsQuery.data?.events ?? []).find(
+        (e) => e.event_uid === eventUid,
+      )!;
+      return linkMeetingToCalendarEvent(meeting.id, ev);
+    },
+    onSuccess: () => {
+      setPickerOpen(false);
+      setMenuOpen(false);
+      void qc.invalidateQueries({ queryKey: ["calendar"] });
+      void qc.invalidateQueries({ queryKey: ["calendar-events"] });
+      void qc.invalidateQueries({ queryKey: ["meeting", meeting.id] });
+    },
+  });
 
   if (compact) {
     return (
@@ -85,6 +130,48 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
             </button>
           )}
         </div>
+        {linked && meeting.calendar_event_title && (
+          <p className="mt-0.5 text-[11px] text-text-muted truncate">
+            ↳ linked to {meeting.calendar_event_title}
+          </p>
+        )}
+      </div>
+      <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          aria-label="link options"
+          onClick={() => setMenuOpen((v) => !v)}
+          className="px-1 text-text-muted hover:text-text-secondary"
+        >
+          ⋯
+        </button>
+        {menuOpen && !pickerOpen && (
+          <div className="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-border bg-surface-raised p-1 shadow-lg text-xs">
+            {linked ? (
+              <span className="block px-2 py-1 text-text-muted">
+                Linked to a calendar event
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                className="w-full text-left px-2 py-1 rounded hover:bg-surface-hover text-text-primary"
+              >
+                Link to calendar event
+              </button>
+            )}
+          </div>
+        )}
+        {pickerOpen && (
+          <CalendarLinkPicker
+            title="Link to calendar event"
+            candidates={candidates}
+            emptyLabel="No nearby calendar entries"
+            busy={link.isPending}
+            onPick={(id) => link.mutate(id)}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
       </div>
     </div>
   );

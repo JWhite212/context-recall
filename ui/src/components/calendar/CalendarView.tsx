@@ -21,6 +21,7 @@ import {
   getCalendarEvents,
   getPreparedEventUids,
 } from "../../lib/api";
+import type { Meeting, CalendarEvent } from "../../lib/types";
 import { useDaemonStatus } from "../../hooks/useDaemonStatus";
 import { MonthGrid } from "./MonthGrid";
 import { WeekTimeline } from "./WeekTimeline";
@@ -59,6 +60,17 @@ function getDateRange(
       return { start: getUnixTime(ds), end: getUnixTime(de) + 1 };
     }
   }
+}
+
+/** Events already linked to a recording are dropped — the recorded card owns the slot. */
+export function collapseLinkedEvents(
+  meetings: Meeting[],
+  events: CalendarEvent[],
+): CalendarEvent[] {
+  const linked = new Set(
+    meetings.map((m) => m.calendar_event_uid).filter((u): u is string => !!u),
+  );
+  return events.filter((e) => !linked.has(e.event_uid));
 }
 
 export function CalendarView() {
@@ -117,6 +129,13 @@ export function CalendarView() {
   const meetings = data?.meetings ?? [];
   const events = eventsData?.events ?? [];
   const heatmapMeetings = heatmapData?.meetings ?? [];
+
+  // Hide calendar entries a recording has already claimed — the recorded
+  // card is the single representation of that meeting slot.
+  const visibleEvents = useMemo(
+    () => collapseLinkedEvents(meetings, events),
+    [meetings, events],
+  );
 
   function navigate(direction: "prev" | "next" | "today") {
     if (direction === "today") {
@@ -232,7 +251,7 @@ export function CalendarView() {
           <MonthGrid
             currentDate={currentDate}
             meetings={meetings}
-            events={events}
+            events={visibleEvents}
             onDayClick={handleDayClick}
             preparedUids={preparedUids}
           />
@@ -241,7 +260,7 @@ export function CalendarView() {
           <WeekTimeline
             currentDate={currentDate}
             meetings={meetings}
-            events={events}
+            events={visibleEvents}
             preparedUids={preparedUids}
           />
         )}
@@ -249,14 +268,14 @@ export function CalendarView() {
           <DayDetail
             currentDate={currentDate}
             meetings={meetings}
-            events={events}
+            events={visibleEvents}
             preparedUids={preparedUids}
           />
         )}
         {viewMode === "agenda" && (
           <AgendaList
             meetings={meetings}
-            events={events}
+            events={visibleEvents}
             preparedUids={preparedUids}
           />
         )}
