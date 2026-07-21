@@ -12,6 +12,7 @@ import type {
   AppConfig,
   AskResponse,
   AssignPersonResponse,
+  CalendarEvent,
   CalendarEventsResponse,
   Client,
   EmailDraft,
@@ -419,6 +420,25 @@ export async function renameMeeting(
     method: "PATCH",
     body: JSON.stringify({ title }),
   });
+}
+
+export async function linkMeetingToCalendarEvent(
+  meetingId: string,
+  event: CalendarEvent,
+): Promise<Meeting> {
+  return request<Meeting>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/calendar-link`,
+    { method: "PUT", body: JSON.stringify(event) },
+  );
+}
+
+export async function unlinkMeetingFromCalendarEvent(
+  meetingId: string,
+): Promise<void> {
+  await requestRaw(
+    `/api/meetings/${encodeURIComponent(meetingId)}/calendar-link`,
+    { method: "DELETE" },
+  );
 }
 
 export async function getMeetingTags(): Promise<string[]> {

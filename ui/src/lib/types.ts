@@ -51,6 +51,7 @@ export interface Meeting {
   assignment_confidence?: number;
   template_name?: string | null;
   template_source?: string | null;
+  calendar_event_uid?: string;
 }
 
 /** A client in the client/project store. */
@@ -462,7 +463,12 @@ export type WSEvent =
       reference_id: string | null;
     }
   | { type: "action_items.extracted"; meeting_id: string; count: number }
-  | { type: "meeting.renamed"; meeting_id: string; title: string };
+  | { type: "meeting.renamed"; meeting_id: string; title: string }
+  | {
+      type: "meeting.calendar_link";
+      meeting_id: string;
+      calendar_event_uid: string;
+    };
 
 /** Action item types. */
 export type ActionItemStatus = "open" | "in_progress" | "done" | "cancelled";
