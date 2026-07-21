@@ -1864,3 +1864,23 @@ async def test_append_notion_insights_noop_without_results(monkeypatch, tmp_path
     )
     await runner._append_notion_insights("m1")
     notion.append_insights.assert_not_called()
+
+
+def test_calendar_event_uid_is_persisted(tmp_path, loop_thread):
+    repo = _make_repo()
+    bridge = DbBridge(repo, loop_thread)
+    runner = _make_runner(_make_config(tmp_path), db=bridge)
+
+    runner.run(
+        tmp_path / "a.wav",
+        "m1",
+        started_at=1000.0,
+        calendar_fields={
+            "calendar_event_title": "Weekly Sync",
+            "calendar_event_uid": "EK1:1000",
+        },
+    )
+
+    _drain(loop_thread)
+    persist_calls = [c.kwargs for c in repo.update_meeting.call_args_list]
+    assert any(c.get("calendar_event_uid") == "EK1:1000" for c in persist_calls)

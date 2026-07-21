@@ -90,6 +90,7 @@ def _make_meeting(meeting_id="m1", audio_path="/tmp/x.wav", **overrides):
     m.notion_page_id = overrides.get("notion_page_id", "")
     m.title_source = overrides.get("title_source", "auto")
     m.calendar_event_title = overrides.get("calendar_event_title", "")
+    m.calendar_event_uid = overrides.get("calendar_event_uid", "")
     return m
 
 
@@ -259,7 +260,10 @@ def test_runner_keeps_calendar_auto_title_on_reprocess(tmp_path, _default_config
             _wait_for_drain(repo)
 
     _, kwargs = fake.calls[0]
-    assert kwargs["calendar_fields"] == {"calendar_event_title": "Weekly Sync"}
+    assert kwargs["calendar_fields"] == {
+        "calendar_event_title": "Weekly Sync",
+        "calendar_event_uid": "",
+    }
 
 
 def test_runner_gets_empty_calendar_title_when_never_matched(tmp_path, _default_config):
@@ -279,7 +283,32 @@ def test_runner_gets_empty_calendar_title_when_never_matched(tmp_path, _default_
             _wait_for_drain(repo)
 
     _, kwargs = fake.calls[0]
-    assert kwargs["calendar_fields"] == {"calendar_event_title": ""}
+    assert kwargs["calendar_fields"] == {
+        "calendar_event_title": "",
+        "calendar_event_uid": "",
+    }
+
+
+def test_runner_resupplies_calendar_event_uid_on_reprocess(tmp_path, _default_config):
+    """The forward link (calendar_event_uid) must survive a reprocess so a
+    recording auto-linked at record time stays linked to its calendar
+    entry — mirrors the calendar_event_title auto-title preservation above."""
+    audio_file = tmp_path / "meeting_20260708_120000.wav"
+    audio_file.write_bytes(b"\x00" * 100)
+
+    meeting = _make_meeting(audio_path=str(audio_file), calendar_event_uid="EK1:1000")
+    repo = _make_repo(meeting=meeting)
+    fake = FakeRunner()
+
+    app = _make_app(repo)
+    with TestClient(app) as c:
+        with _patch_runner(fake):
+            resp = c.post("/api/meetings/m1/reprocess", headers=_auth_headers())
+            assert resp.status_code == 202
+            _wait_for_drain(repo)
+
+    _, kwargs = fake.calls[0]
+    assert kwargs["calendar_fields"]["calendar_event_uid"] == "EK1:1000"
 
 
 def test_runner_preserves_manual_title_on_reprocess(tmp_path, _default_config):

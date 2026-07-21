@@ -112,7 +112,8 @@ async def _do_reprocess(meeting, config) -> None:
             # on reprocess (I2) — otherwise a calendar-titled meeting
             # silently reverts to the fresh summary.title.
             calendar_fields={
-                "calendar_event_title": getattr(meeting, "calendar_event_title", "") or ""
+                "calendar_event_title": getattr(meeting, "calendar_event_title", "") or "",
+                "calendar_event_uid": getattr(meeting, "calendar_event_uid", "") or "",
             },
             is_reprocess=True,
             preserve_title=(meeting.title_source == "manual"),

@@ -40,6 +40,7 @@ class CalendarMatch:
     event_end: float = 0.0
     teams_join_url: str = ""
     teams_meeting_id: str = ""
+    event_uid: str = ""
 
 
 def _is_eventkit_available() -> bool:
@@ -77,6 +78,15 @@ def _extract_teams_details(text: str) -> tuple[str, str]:
     join_url = match.group(0)
     meeting_id = unquote(match.group(1))
     return join_url, meeting_id
+
+
+def _event_uid(event_identifier: str, start_ts: float) -> str:
+    """Stable per-occurrence id shared with the calendar_events reader.
+
+    EventKit's eventIdentifier is shared across recurring occurrences, so it
+    is combined with the integer start timestamp.
+    """
+    return f"{event_identifier}:{int(start_ts)}"
 
 
 def _score_time_match(event_start: float, event_end: float, meeting_start: float) -> float:
@@ -261,6 +271,7 @@ class CalendarMatcher:
             event_start = float(event.startDate().timeIntervalSince1970())
             event_end = float(event.endDate().timeIntervalSince1970())
             title = str(event.title() or "")
+            event_uid = _event_uid(str(event.eventIdentifier() or ""), event_start)
 
             # Tier 1: Teams URL match
             teams_thread_id = None
@@ -322,6 +333,7 @@ class CalendarMatcher:
                         event_end=event_end,
                         teams_join_url=join_url,
                         teams_meeting_id=meeting_id,
+                        event_uid=event_uid,
                     )
                 )
             else:
@@ -337,6 +349,7 @@ class CalendarMatcher:
                             match_method="time_window",
                             event_start=event_start,
                             event_end=event_end,
+                            event_uid=event_uid,
                         )
                     )
 
