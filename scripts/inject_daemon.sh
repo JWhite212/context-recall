@@ -50,10 +50,25 @@ if ! codesign -d -r- "$DEST_DIR/Context Recall Daemon.app" 2>&1 | grep -q 'certi
     echo "    reset on each rebuild. Run scripts/setup_signing_cert.sh for a stable grant."
 fi
 
-# Replacing resources invalidates the outer app's seal; re-sign ad-hoc
-# (the nested daemon bundle keeps its own stable-identity signature).
-echo "==> Re-sealing outer app"
-codesign --force --sign - "$APP"
+# Replacing resources invalidates the outer app's seal; re-sign it. The nested
+# daemon bundle keeps its own signature (signed by build_daemon.sh). Use the
+# same identity tier: Developer ID -> Hardened Runtime + timestamp + the app
+# entitlements (notarizable); self-signed/ad-hoc -> as before. Degrade to
+# ad-hoc on failure so CI/fresh clones never abort.
+source "$SCRIPT_DIR/signing_lib.sh"
+cr_resolve_signing
+APP_ENTITLEMENTS="$PROJECT_ROOT/ui/src-tauri/Entitlements.plist"
+echo "==> Re-sealing outer app (tier: $CR_SIGN_TIER)"
+if [ "$CR_SIGN_IDENTITY" = "-" ]; then
+    codesign --force --sign - "$APP"
+elif [ "$CR_HARDENED" = "1" ]; then
+    codesign --force --sign "$CR_SIGN_IDENTITY" --options runtime --timestamp \
+        --entitlements "$APP_ENTITLEMENTS" "$APP" \
+        || { echo "    WARNING: Developer ID re-seal failed; ad-hoc."; codesign --force --sign - "$APP"; }
+else
+    codesign --force --sign "$CR_SIGN_IDENTITY" --timestamp=none "$APP" \
+        || { echo "    WARNING: self-signed re-seal failed; ad-hoc."; codesign --force --sign - "$APP"; }
+fi
 
 # The daemon must be able to bootstrap Python from the injected copy.
 "$DEST_DIR/Context Recall Daemon.app/Contents/MacOS/context-recall-daemon" --help >/dev/null 2>&1 \
