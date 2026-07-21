@@ -88,7 +88,7 @@ class CalendarEventRepository:
             await self._db.conn.commit()
         return cur.rowcount or 0
 
-    async def set_recorded_meeting(self, event_uid: str, meeting_id: str) -> None:
+    async def set_recorded_meeting(self, event_uid: str, meeting_id: str | None) -> None:
         async with self._db.write_lock:
             await self._db.conn.execute(
                 "UPDATE calendar_events SET recorded_meeting_id = ? WHERE event_uid = ?",
