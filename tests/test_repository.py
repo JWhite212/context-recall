@@ -637,3 +637,27 @@ async def test_update_and_read_title_source_and_markdown_path(repo: MeetingRepos
     assert m.title_source == "manual"
     assert m.markdown_path == "/v/n.md"
     assert m.to_dict()["title_source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_calendar_event_uid_roundtrips_and_lookup(tmp_path):
+    from src.db.database import Database
+    from src.db.repository import MeetingRepository
+
+    db = Database(db_path=tmp_path / "link.db")
+    await db.connect()
+    try:
+        repo = MeetingRepository(db)
+        mid = await repo.create_meeting(started_at=1000.0, status="complete")
+        # Default empty, absent from any lookup.
+        m = await repo.get_meeting(mid)
+        assert m.calendar_event_uid == ""
+        assert m.to_dict()["calendar_event_uid"] == ""
+        assert await repo.meeting_id_for_calendar_event("EK1:1000") is None
+        assert await repo.meeting_id_for_calendar_event("") is None
+        # Write + read back + reverse lookup.
+        await repo.update_meeting(mid, calendar_event_uid="EK1:1000")
+        assert (await repo.get_meeting(mid)).calendar_event_uid == "EK1:1000"
+        assert await repo.meeting_id_for_calendar_event("EK1:1000") == mid
+    finally:
+        await db.close()

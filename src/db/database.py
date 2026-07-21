@@ -23,7 +23,7 @@ logger = logging.getLogger("contextrecall.db")
 DEFAULT_DB_DIR = app_support_dir()
 DEFAULT_DB_PATH = db_path()
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 _vec_available = False
 
@@ -685,6 +685,8 @@ class Database:
             await _safe_add_column(self.conn, "insight_definitions", "fields_json", "TEXT", "NULL")
             await _safe_add_column(self.conn, "insight_results", "fields_json", "TEXT", "NULL")
             await self.conn.executescript(APP_METADATA_SQL)
+            # Recording↔calendar-event link (v24).
+            await _safe_add_column(self.conn, "meetings", "calendar_event_uid", "TEXT", "''")
             await self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             await self.conn.commit()
             logger.info("Database schema created (version %d)", SCHEMA_VERSION)
@@ -981,5 +983,19 @@ class Database:
             await self.conn.commit()
             logger.info("Database migrated to version 23 (structured insights + app_metadata)")
             current_version = 23
+
+        if current_version < 24:
+            # Recording↔calendar-event link: forward reference from a meeting to
+            # its calendar entry. Guard on the meetings table existing so minimal
+            # migration fixtures don't hard-fail (mirrors v21/v22/v23).
+            cur = await self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='meetings'"
+            )
+            if await cur.fetchone() is not None:
+                await _safe_add_column(self.conn, "meetings", "calendar_event_uid", "TEXT", "''")
+            await self.conn.execute("PRAGMA user_version = 24")
+            await self.conn.commit()
+            logger.info("Database migrated to version 24 (recording↔calendar link)")
+            current_version = 24
         else:
             logger.debug("Database schema up to date (version %d)", current_version)

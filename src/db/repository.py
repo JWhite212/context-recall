@@ -48,6 +48,7 @@ _MUTABLE_COLUMNS = frozenset(
         "template_source",
         "title_source",
         "markdown_path",
+        "calendar_event_uid",
         "updated_at",
     }
 )
@@ -87,6 +88,7 @@ class MeetingRecord:
     template_source: str = ""
     title_source: str = "auto"
     markdown_path: str = ""
+    calendar_event_uid: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +120,7 @@ class MeetingRecord:
             "template_source": self.template_source,
             "title_source": self.title_source,
             "markdown_path": self.markdown_path,
+            "calendar_event_uid": self.calendar_event_uid,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -181,6 +184,10 @@ class MeetingRecord:
         if "markdown_path" in row.keys():
             markdown_path = row["markdown_path"] or ""
 
+        calendar_event_uid = ""
+        if "calendar_event_uid" in row.keys():
+            calendar_event_uid = row["calendar_event_uid"] or ""
+
         return cls(
             id=row["id"],
             title=row["title"],
@@ -212,6 +219,7 @@ class MeetingRecord:
             template_source=template_source,
             title_source=title_source,
             markdown_path=markdown_path,
+            calendar_event_uid=calendar_event_uid,
         )
 
 
@@ -311,6 +319,22 @@ class MeetingRepository:
         rows = await cursor.fetchall()
         by_id = {row["id"]: MeetingRecord.from_row(row) for row in rows}
         return [by_id[mid] for mid in ids if mid in by_id]
+
+    async def meeting_id_for_calendar_event(self, event_uid: str) -> str | None:
+        """Return the id of the meeting linked to ``event_uid``, or None.
+
+        Backs the link-conflict check: an event may be linked to at most one
+        recording. Uses the forward link on meetings, so it is correct even
+        when the event is absent from the calendar_events mirror.
+        """
+        if not event_uid:
+            return None
+        cursor = await self._db.conn.execute(
+            "SELECT id FROM meetings WHERE calendar_event_uid = ? LIMIT 1",
+            (event_uid,),
+        )
+        row = await cursor.fetchone()
+        return row["id"] if row else None
 
     _SORT_MAP = {
         "started_at:desc": "started_at DESC",
