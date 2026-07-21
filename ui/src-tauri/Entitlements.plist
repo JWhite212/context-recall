@@ -17,5 +17,16 @@
     <!-- File access for reading/writing meeting data and config -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
+
+    <!-- Hardened Runtime: WKWebView (Tauri's renderer) JITs JavaScript and
+         maps unsigned executable memory; Hardened Runtime blocks both without
+         these. disable-library-validation lets the app load the injected
+         daemon + its unsigned-by-us dylibs. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>
