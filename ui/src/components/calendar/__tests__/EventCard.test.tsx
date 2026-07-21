@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { EventCard } from "../EventCard";
 import type { Meeting } from "../../../lib/types";
 import { makeWrapper } from "../../../test/queryWrapper";
@@ -50,5 +50,62 @@ describe("EventCard link affordances", () => {
     renderCard(base);
     fireEvent.click(screen.getByRole("button", { name: /link options/i }));
     expect(screen.getByText(/Link to calendar event/i)).toBeInTheDocument();
+  });
+
+  it("excludes calendar entries already linked to another recording", async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("/api/calendar/events")) {
+        return new Response(
+          JSON.stringify({
+            events: [
+              {
+                event_uid: "EK-claimed",
+                title: "Already Claimed Sync",
+                start_ts: 1000,
+                end_ts: 1600,
+                attendees: [],
+                organizer: null,
+                join_url: "",
+                meeting_id: "",
+                calendar_name: "Work",
+              },
+              {
+                event_uid: "EK-free",
+                title: "Unclaimed Sync",
+                start_ts: 1000,
+                end_ts: 1600,
+                attendees: [],
+                organizer: null,
+                join_url: "",
+                meeting_id: "",
+                calendar_name: "Work",
+              },
+            ],
+            count: 2,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("/api/calendar/meetings")) {
+        return new Response(
+          JSON.stringify({
+            meetings: [{ ...base, id: "m2", calendar_event_uid: "EK-claimed" }],
+            count: 1,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(null, { status: 204 });
+    }) as unknown as typeof fetch;
+
+    renderCard(base);
+    fireEvent.click(screen.getByRole("button", { name: /link options/i }));
+    fireEvent.click(screen.getByText(/Link to calendar event/i));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Unclaimed Sync/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Already Claimed Sync/)).not.toBeInTheDocument();
   });
 });
