@@ -80,25 +80,33 @@ fi
 # profile: tccd then rejects the bundle, zeroes the inputs, and KILLS the
 # daemon on an explicit permission request (OS_REASON_TCC, observed
 # 2026-07-07). Only ad-hoc / self-signed work for TCC here.
-SELF_SIGNED_CN="Context Recall Self-Signed"
 SIGN_IDENTIFIER="dev.jamiewhite.contextrecall.daemon"
-SIGN_IDENTITY="${CONTEXT_RECALL_SIGN_IDENTITY:-}"
+ENTITLEMENTS="$PROJECT_ROOT/scripts/daemon.entitlements"
 
-if [ -z "$SIGN_IDENTITY" ]; then
-    if security find-certificate -c "$SELF_SIGNED_CN" >/dev/null 2>&1; then
-        SIGN_IDENTITY="$SELF_SIGNED_CN"
-        echo "==> Detected stable self-signed identity '$SELF_SIGNED_CN'"
-    else
-        SIGN_IDENTITY="-"
+# Resolve the signing identity (tier: env > Developer ID > self-signed > ad-hoc).
+source "$SCRIPT_DIR/signing_lib.sh"
+cr_resolve_signing
+echo "==> Signing tier: $CR_SIGN_TIER (identity: $CR_SIGN_IDENTITY, hardened: $CR_HARDENED)"
+
+# Sign a bundle/binary per the resolved tier. Developer ID -> Hardened Runtime
+# + secure timestamp + entitlements (notarizable). Self-signed -> stable DR,
+# no timestamp. Ad-hoc -> cdhash DR. On a Developer ID/self-signed failure,
+# degrade to ad-hoc rather than aborting the build (load-bearing for CI).
+cr_sign() { # <path> <identifier>
+    local path="$1" ident="$2"
+    if [ "$CR_SIGN_IDENTITY" = "-" ]; then
+        codesign --force --sign - --identifier "$ident" "$path"
+        return
     fi
-fi
-
-sign_adhoc() {
-    echo "==> Ad-hoc signing daemon app bundle (identifier $SIGN_IDENTIFIER)"
-    echo "    NOTE: ad-hoc cdhash changes per rebuild -> macOS re-prompts for the"
-    echo "    microphone after each deploy. Run scripts/setup_signing_cert.sh once"
-    echo "    to make the grant survive rebuilds."
-    codesign --force --sign - --identifier "$SIGN_IDENTIFIER" "$APP_DIR"
+    if [ "$CR_HARDENED" = "1" ]; then
+        codesign --force --sign "$CR_SIGN_IDENTITY" --identifier "$ident" \
+            --options runtime --timestamp --entitlements "$ENTITLEMENTS" "$path" && return
+    else
+        codesign --force --sign "$CR_SIGN_IDENTITY" --identifier "$ident" \
+            --timestamp=none "$path" && return
+    fi
+    echo "    WARNING: signing '$path' with '$CR_SIGN_IDENTITY' failed; falling back to ad-hoc."
+    codesign --force --sign - --identifier "$ident" "$path"
 }
 
 # --- Compile + inject the ScreenCaptureKit system-audio helper -------------
@@ -114,13 +122,7 @@ if command -v swiftc >/dev/null 2>&1 && [ -f "$HELPER_SRC" ]; then
     # A present-but-broken main.swift must NOT abort the whole daemon build
     # under `set -euo pipefail`: degrade to a BlackHole-only daemon instead.
     if swiftc -O "$HELPER_SRC" -o "$HELPER_DEST"; then
-        if [ "$SIGN_IDENTITY" = "-" ]; then
-            codesign --force --sign - --identifier "$HELPER_IDENTIFIER" "$HELPER_DEST"
-        else
-            codesign --force --sign "$SIGN_IDENTITY" --identifier "$HELPER_IDENTIFIER" \
-                --timestamp=none "$HELPER_DEST" 2>/dev/null || \
-                codesign --force --sign - --identifier "$HELPER_IDENTIFIER" "$HELPER_DEST"
-        fi
+        cr_sign "$HELPER_DEST" "$HELPER_IDENTIFIER"
         echo "==> SCK helper signed and placed at Contents/Resources/sck-audio-capture"
     else
         echo "==> WARNING: SCK helper failed to compile — daemon will degrade to BlackHole (no SCK)"
@@ -130,19 +132,8 @@ else
     echo "==> WARNING: swiftc or $HELPER_SRC missing — daemon degrades to BlackHole (no SCK)"
 fi
 
-if [ "$SIGN_IDENTITY" = "-" ]; then
-    sign_adhoc
-else
-    echo "==> Codesigning daemon app bundle with '$SIGN_IDENTITY' (stable DR)"
-    # Attempt-and-fallback: a missing/renamed/locked identity degrades to ad-hoc
-    # instead of aborting the build under `set -euo pipefail`. Load-bearing for
-    # CI and fresh clones, which have no cert.
-    if ! codesign --force --sign "$SIGN_IDENTITY" \
-            --identifier "$SIGN_IDENTIFIER" --timestamp=none "$APP_DIR" 2>/dev/null; then
-        echo "    WARNING: signing with '$SIGN_IDENTITY' failed; falling back to ad-hoc."
-        sign_adhoc
-    fi
-fi
+echo "==> Codesigning daemon app bundle (tier: $CR_SIGN_TIER)"
+cr_sign "$APP_DIR" "$SIGN_IDENTIFIER"
 codesign --verify --verbose=1 "$APP_DIR"
 
 # Echo the resulting DR so deploy logs confirm it is cert-leaf (stable) not
