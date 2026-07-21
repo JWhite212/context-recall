@@ -22,12 +22,14 @@ router = APIRouter()
 # Injected at startup.
 _repo = None
 _event_bus = None
+_calendar_event_repo = None
 
 
-def init(repo, event_bus=None):
-    global _repo, _event_bus
+def init(repo, event_bus=None, calendar_event_repo=None):
+    global _repo, _event_bus, _calendar_event_repo
     _repo = repo
     _event_bus = event_bus
+    _calendar_event_repo = calendar_event_repo
 
 
 class MergeMeetingsRequest(BaseModel):
@@ -44,6 +46,23 @@ class SetTagsRequest(BaseModel):
 
 class RenameMeetingRequest(BaseModel):
     title: str = Field(min_length=1, max_length=300)
+
+
+class CalendarLinkAttendee(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
+class CalendarLinkRequest(BaseModel):
+    event_uid: str = Field(min_length=1, max_length=512)
+    title: str = ""
+    start_ts: float = 0.0
+    end_ts: float = 0.0
+    attendees: list[CalendarLinkAttendee] = Field(default_factory=list, max_length=200)
+    organizer: CalendarLinkAttendee | None = None
+    join_url: str = ""
+    meeting_id: str = ""
+    calendar_name: str = ""
 
 
 @router.get("/api/meetings", response_model=MeetingListResponse, summary="List meetings")
@@ -244,6 +263,62 @@ async def set_meeting_tags(meeting_id: str, body: SetTagsRequest):
             normalised.append(tag)
     await _repo.update_meeting(meeting_id, tags=normalised)
     return {"meeting_id": meeting_id, "tags": normalised}
+
+
+@router.put(
+    "/api/meetings/{meeting_id}/calendar-link", summary="Link a recording to a calendar event"
+)
+async def link_meeting_calendar(meeting_id: str, body: CalendarLinkRequest):
+    from src.calendar_events.reader import CalendarEvent
+    from src.calendar_link import CalendarLinkConflict, link_meeting_to_event
+
+    meeting = await _repo.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+
+    event = CalendarEvent(
+        event_uid=body.event_uid,
+        title=body.title,
+        start_ts=body.start_ts,
+        end_ts=body.end_ts,
+        attendees=[a.model_dump() for a in body.attendees],
+        organizer=body.organizer.model_dump() if body.organizer else None,
+        join_url=body.join_url,
+        meeting_id=body.meeting_id,
+        calendar_name=body.calendar_name,
+    )
+    try:
+        await link_meeting_to_event(_repo, _calendar_event_repo, meeting, event, source="manual")
+    except CalendarLinkConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    if _event_bus is not None:
+        _event_bus.emit(
+            {
+                "type": "meeting.calendar_link",
+                "meeting_id": meeting_id,
+                "calendar_event_uid": body.event_uid,
+            }
+        )
+    updated = await _repo.get_meeting(meeting_id)
+    return updated.to_dict()
+
+
+@router.delete(
+    "/api/meetings/{meeting_id}/calendar-link", summary="Unlink a recording from its calendar event"
+)
+async def unlink_meeting_calendar(meeting_id: str):
+    from src.calendar_link import unlink_meeting_from_event
+
+    meeting = await _repo.get_meeting(meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting not found")
+    await unlink_meeting_from_event(_repo, _calendar_event_repo, meeting)
+    if _event_bus is not None:
+        _event_bus.emit(
+            {"type": "meeting.calendar_link", "meeting_id": meeting_id, "calendar_event_uid": ""}
+        )
+    return {"meeting_id": meeting_id, "calendar_event_uid": ""}
 
 
 @router.patch("/api/meetings/{meeting_id}", summary="Rename a meeting")
