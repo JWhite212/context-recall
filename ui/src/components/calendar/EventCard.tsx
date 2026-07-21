@@ -3,8 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { format } from "date-fns";
 import type { Meeting } from "../../lib/types";
-import { getCalendarEvents, linkMeetingToCalendarEvent } from "../../lib/api";
+import {
+  getCalendarEvents,
+  getCalendarMeetings,
+  linkMeetingToCalendarEvent,
+} from "../../lib/api";
 import { CalendarLinkPicker, type LinkCandidate } from "./CalendarLinkPicker";
+import { useToast } from "../common/Toast";
 
 const STATUS_COLORS: Record<string, string> = {
   complete: "bg-status-idle",
@@ -30,6 +35,7 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
   // these live above the compact-mode early return even though the menu
   // only renders in full mode.
   const qc = useQueryClient();
+  const toast = useToast();
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const linked = !!meeting.calendar_event_uid;
@@ -42,13 +48,26 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
     enabled: pickerOpen,
     staleTime: 30_000,
   });
-  const candidates: LinkCandidate[] = (eventsQuery.data?.events ?? []).map(
-    (e) => ({
+  // Nearby recordings, to exclude calendar entries already claimed by
+  // another recording (linking to one would just 409).
+  const meetingsForPicker = useQuery({
+    queryKey: ["calendar", "eventcard-picker", meeting.id],
+    queryFn: () => getCalendarMeetings(anchor - 86400, anchor + 86400),
+    enabled: pickerOpen,
+    staleTime: 30_000,
+  });
+  const linkedUids = new Set(
+    (meetingsForPicker.data?.meetings ?? [])
+      .map((m) => m.calendar_event_uid)
+      .filter((u): u is string => !!u),
+  );
+  const candidates: LinkCandidate[] = (eventsQuery.data?.events ?? [])
+    .filter((e) => !linkedUids.has(e.event_uid))
+    .map((e) => ({
       id: e.event_uid,
       label: e.title || "Untitled",
       subtitle: format(new Date(e.start_ts * 1000), "EEE HH:mm"),
-    }),
-  );
+    }));
 
   const link = useMutation({
     mutationFn: (eventUid: string) => {
@@ -64,6 +83,7 @@ export function EventCard({ meeting, compact = false }: EventCardProps) {
       void qc.invalidateQueries({ queryKey: ["calendar-events"] });
       void qc.invalidateQueries({ queryKey: ["meeting", meeting.id] });
     },
+    onError: () => toast.error("Failed to link to calendar event."),
   });
 
   if (compact) {
