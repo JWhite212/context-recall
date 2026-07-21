@@ -15,6 +15,7 @@ import {
 } from "../../lib/api";
 import { ActionItemCard } from "../action-items/ActionItemCard";
 import { AssignmentSelect } from "../clients/AssignmentSelect";
+import { CalendarLinkCard } from "./CalendarLinkCard";
 import { MeetingInsights } from "./MeetingInsights";
 import { TemplateBadge } from "./TemplateBadge";
 import { TagEditor } from "./TagEditor";
@@ -658,6 +659,7 @@ export function MeetingDetail() {
             )}
           </div>
         )}
+        <CalendarLinkCard meeting={meeting} />
       </div>
 
       {/* Actions row */}

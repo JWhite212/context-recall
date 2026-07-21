@@ -92,10 +92,12 @@ function AppShell() {
       if (
         event.type === "pipeline.complete" ||
         event.type === "meeting.resummarise" ||
-        event.type === "meeting.renamed"
+        event.type === "meeting.renamed" ||
+        event.type === "meeting.calendar_link"
       ) {
         queryClient.invalidateQueries({ queryKey: ["meetings"] });
         queryClient.invalidateQueries({ queryKey: ["calendar"] });
+        queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
         queryClient.invalidateQueries({ queryKey: ["calendar-heatmap"] });
         if (event.meeting_id) {
           queryClient.invalidateQueries({
