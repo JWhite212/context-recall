@@ -20,7 +20,7 @@ async def test_v22_db_migrates_to_v23_with_new_columns(tmp_path):
     await db2.connect()
     try:
         cur = await db2.conn.execute("PRAGMA user_version")
-        assert (await cur.fetchone())[0] == SCHEMA_VERSION == 23
+        assert (await cur.fetchone())[0] == SCHEMA_VERSION == 24
         # Old row defaults to list mode, null fields.
         cur = await db2.conn.execute(
             "SELECT output_mode, fields_json FROM insight_definitions WHERE id = 'd1'"
@@ -58,7 +58,7 @@ async def test_v23_migration_survives_missing_insight_tables(tmp_path):
     await db2.connect()  # must not raise sqlite3.OperationalError
     try:
         cur = await db2.conn.execute("PRAGMA user_version")
-        assert (await cur.fetchone())[0] == SCHEMA_VERSION == 23
+        assert (await cur.fetchone())[0] == SCHEMA_VERSION == 24
         cur = await db2.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='app_metadata'"
         )
