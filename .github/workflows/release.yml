@@ -136,8 +136,16 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ env.CONTEXT_RECALL_SIGN_IDENTITY }}
         if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
 
+      # Runs when the Tauri updater key is absent. APPLE_SIGNING_IDENTITY is
+      # still applied here so that when a Developer ID cert IS configured (but
+      # the updater key is not), the app and its nested frameworks are signed
+      # Developer ID + Hardened Runtime — otherwise inject_daemon.sh re-seals
+      # only the outer app and notarization rejects the ad-hoc nested Mach-Os.
+      # Empty when no cert → Tauri falls back to the config's "-" (ad-hoc).
       - name: Build Tauri app (unsigned)
         run: cd ui && npm run tauri build
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ env.CONTEXT_RECALL_SIGN_IDENTITY }}
         if: ${{ !env.TAURI_SIGNING_PRIVATE_KEY }}
 
       # The Tauri resource copier destroys the symlink farm inside the
