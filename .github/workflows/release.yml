@@ -47,6 +47,12 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           IDENT="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)".*/\1/')"
           echo "CONTEXT_RECALL_SIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
+          # Also drive Tauri's codesign identity. Written to $GITHUB_ENV (not a
+          # step-level env:) so it is set ONLY when a cert exists — a step-level
+          # env that interpolates to "" is exported present-but-empty, which
+          # Tauri reads via var_os as Some("") and would try to codesign --sign
+          # "" (fails). Truly-unset makes Tauri fall back to the config's "-".
+          echo "APPLE_SIGNING_IDENTITY=$IDENT" >> "$GITHUB_ENV"
           echo "==> Imported Developer ID identity: $IDENT"
 
       # build_daemon.sh (not raw pyinstaller) so CI gets the same layout the
@@ -76,6 +82,10 @@ jobs:
     needs: build-daemon
     env:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      # Surfaced at job level so the notarize step's `if:` can require it —
+      # a cert-without-API-key config then skips notarization (and still
+      # uploads the signed DMG) instead of hard-failing the release.
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -126,26 +136,32 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           IDENT="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.*)".*/\1/')"
           echo "CONTEXT_RECALL_SIGN_IDENTITY=$IDENT" >> "$GITHUB_ENV"
+          # Also drive Tauri's codesign identity. Written to $GITHUB_ENV (not a
+          # step-level env:) so it is set ONLY when a cert exists — a step-level
+          # env that interpolates to "" is exported present-but-empty, which
+          # Tauri reads via var_os as Some("") and would try to codesign --sign
+          # "" (fails). Truly-unset makes Tauri fall back to the config's "-".
+          echo "APPLE_SIGNING_IDENTITY=$IDENT" >> "$GITHUB_ENV"
           echo "==> Imported Developer ID identity: $IDENT"
 
+      # APPLE_SIGNING_IDENTITY is inherited from $GITHUB_ENV (set by the
+      # cert-import step) only when a Developer ID cert is configured.
       - name: Build Tauri app
         run: cd ui && npm run tauri build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ env.CONTEXT_RECALL_SIGN_IDENTITY }}
         if: ${{ env.TAURI_SIGNING_PRIVATE_KEY != '' }}
 
-      # Runs when the Tauri updater key is absent. APPLE_SIGNING_IDENTITY is
-      # still applied here so that when a Developer ID cert IS configured (but
-      # the updater key is not), the app and its nested frameworks are signed
-      # Developer ID + Hardened Runtime — otherwise inject_daemon.sh re-seals
-      # only the outer app and notarization rejects the ad-hoc nested Mach-Os.
-      # Empty when no cert → Tauri falls back to the config's "-" (ad-hoc).
+      # Runs when the Tauri updater key is absent. It still inherits
+      # APPLE_SIGNING_IDENTITY from $GITHUB_ENV when a Developer ID cert is
+      # configured, so the app and its nested frameworks are signed Developer
+      # ID + Hardened Runtime even on this no-updater-key path (otherwise
+      # inject_daemon.sh re-seals only the outer app and notarization rejects
+      # the ad-hoc nested Mach-Os). No cert → the var is never written → Tauri
+      # falls back to the config's "-" (ad-hoc), unchanged from today.
       - name: Build Tauri app (unsigned)
         run: cd ui && npm run tauri build
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ env.CONTEXT_RECALL_SIGN_IDENTITY }}
         if: ${{ !env.TAURI_SIGNING_PRIVATE_KEY }}
 
       # The Tauri resource copier destroys the symlink farm inside the
@@ -167,9 +183,8 @@ jobs:
             "ui/src-tauri/target/release/bundle/dmg/Context Recall_injected_aarch64.dmg"
 
       - name: Notarize and staple DMG
-        if: ${{ env.APPLE_CERTIFICATE != '' }}
+        if: ${{ env.APPLE_CERTIFICATE != '' && env.APPLE_API_KEY_P8 != '' }}
         env:
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_KEY_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
         run: |
