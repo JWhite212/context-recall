@@ -102,7 +102,15 @@ cr_sign() { # <path> <identifier>
         return
     fi
     if [ "$CR_HARDENED" = "1" ]; then
-        codesign --force --sign "$CR_SIGN_IDENTITY" --identifier "$ident" \
+        # --deep: sign every nested Mach-O inside-out (a harmless no-op on a
+        # lone file). Required for notarization — PyInstaller leaves the
+        # collected native libs (torch/numpy/mlx/portaudio/libsndfile …)
+        # ad-hoc-signed, and notarytool rejects any nested Mach-O that is not
+        # Developer ID + Hardened Runtime + secure-timestamped. --deep
+        # propagates these options to them. Only on this tier: self-signed/
+        # ad-hoc keep the shallow sign (a non-notarized local grant binds to
+        # the main-executable DR, so nested ad-hoc libs are fine there).
+        codesign --force --sign "$CR_SIGN_IDENTITY" --identifier "$ident" --deep \
             --options runtime --timestamp --entitlements "$ENTITLEMENTS" "$path" && return
     else
         codesign --force --sign "$CR_SIGN_IDENTITY" --identifier "$ident" \
