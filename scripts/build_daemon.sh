@@ -62,10 +62,13 @@ if [ -n "$LIBMLX" ] && [ -n "$METALLIB" ]; then
     echo "==> Ensured mlx.metallib sits next to libmlx.dylib"
 fi
 
-# Choose the signing identity (self-detecting, ad-hoc fallback). Resolution:
-#   1) explicit CONTEXT_RECALL_SIGN_IDENTITY=<name>  (Developer ID, etc.)
-#   2) auto-detected per-machine self-signed cert     (setup_signing_cert.sh)
-#   3) ad-hoc "-"                                      (CI, fresh clones, others)
+# Choose the signing identity via the shared resolver in signing_lib.sh.
+# Tiers (see that file's header for the authoritative list):
+#   1) explicit CONTEXT_RECALL_SIGN_IDENTITY=<name>  (env override)
+#   2) auto-detected "Developer ID Application" cert  (→ Hardened Runtime +
+#      timestamp + entitlements; notarizable — the durable OS-update-safe tier)
+#   3) auto-detected per-machine self-signed cert     (setup_signing_cert.sh)
+#   4) ad-hoc "-"                                      (CI, fresh clones, others)
 #
 # WHY cert over ad-hoc: an ad-hoc cdhash Designated Requirement changes every
 # rebuild, so the macOS microphone (TCC) grant dies on each deploy — recording
