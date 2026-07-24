@@ -23,20 +23,34 @@
 
 ---
 
+## Execution Reconciliation Notes
+
+Read before executing — these reconcile cross-task ordering and a few conscious design calls surfaced during plan review:
+
+1. **Phase 0 → Phase 1 storage-rewrite window.** Phase 0 (Tasks 1–2) targets the live v24 schema and is independently mergeable. Phase 1 Tasks 3–4 rewrite the storage layer (v25 migration + `create`), which necessarily supersedes some Phase-0-era code: Task 4 deletes the legacy `dispatcher` fixture + 3 legacy dispatcher tests in `tests/test_notifications.py`; Task 5 deletes the Phase-0 `dismiss_all` and replaces it with the v25 version (the two must not coexist); Task 14 replaces the Phase-0 `tests/test_api_notifications.py` with v25-aware coverage. Run each task's scoped test command; the full `tests/test_notifications.py` is green from Task 5 onward.
+2. **macOS volume cap (spec 5.2 gate 3).** There is no dedicated `macos_max_per_hour`. macOS banner volume is bounded _by design_ through the global/per-type `max_per_hour` + `macos_min_priority` routing + quiet hours + sound-off — a conscious choice to avoid an extra knob. To add per-channel macOS throttling later: a `macos_max_per_hour` field (Task 7) plus a `count_channel_since("macos", now - 3600)` gate in the dispatcher (Task 9).
+3. **Migration ladder style.** The existing `_migrate()` uses `if current_version < N:` steps (only the oldest uses `== 2`). Add the v25 step as `if current_version < 25:` immediately after the `< 24` block — functionally equivalent to the `== 24` guard shown in Task 3 (the `< 24` block leaves `current_version == 24`).
+4. **`notif_repo` is file-local.** It lives in `tests/test_notifications.py` (not `conftest.py`, which provides `db`, `event_bus`, `repo`, plus pytest's `tmp_path`). Tasks 4/5/6 append to that file, so it's in scope; any _new_ test file needing it (e.g. Task 9's `tests/test_notifications_dispatcher.py`) must define its own.
+
+---
+
 ## Phase 0 — Immediate relief (independently mergeable; no v25 dependency)
 
 ### Task 1: Silence the macOS banner by default (make sound opt-in)
 
 **Files:**
+
 - Modify `src/notifications/channels/macos.py:9` — change `send()` signature to `async def send(title: str, body: str, *, sound: bool = False, subtitle: str = "") -> bool`, gate the `sound name "default"` line on `sound`, and return `True` only when `osascript` returncode is 0.
 - Test (new): `tests/test_macos_channel.py`.
 - No change to `src/notifications/dispatcher.py:103` or `src/automations/executor.py:126` — both call `send(title, body)` positionally, so with the new default `sound=False` every existing banner is silent immediately. (Note this explicitly in the commit body.)
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks.
 - Produces: `channels/macos.send(title: str, body: str, *, sound: bool = False, subtitle: str = "") -> bool` — the exact locked signature the Phase 2 dispatcher rebuild will call with `sound=self._config.macos_sound`. Returns `True` iff `osascript` exits 0.
 
 - [ ] **Step 1: Write the failing test** — create `tests/test_macos_channel.py`:
+
 ```python
 """Tests for src/notifications/channels/macos.py — sound is opt-in."""
 
@@ -95,6 +109,7 @@ async def test_send_returns_false_on_nonzero_returncode(monkeypatch):
   - Expected failure: `test_send_omits_sound_by_default` fails on `assert "sound name" not in script` (current code always appends it); `test_send_includes_sound_when_enabled` errors with `TypeError: send() got an unexpected keyword argument 'sound'`; `test_send_returns_false_on_nonzero_returncode` fails because current `send()` returns `None`, not `False`.
 
 - [ ] **Step 3: Write minimal implementation** — replace the full contents of `src/notifications/channels/macos.py` with:
+
 ```python
 """macOS native notification via osascript."""
 
@@ -137,6 +152,7 @@ async def send(title: str, body: str, *, sound: bool = False, subtitle: str = ""
   - Expected: `3 passed`. Sanity-check nothing else broke: `python -m pytest tests/test_notifications.py -q` → still passes (dispatcher call `macos.send(title, body)` remains valid; banner now silent).
 
 - [ ] **Step 5: Commit**
+
 ```
 git add src/notifications/channels/macos.py tests/test_macos_channel.py
 git commit -m "feat(notifications): make macOS banner sound opt-in
@@ -152,15 +168,18 @@ banners go silent immediately. Phase 0 relief; no schema dependency."
 ### Task 2: Purge the backlog + expose bulk clear (v24-compatible)
 
 **Files:**
-- Modify `src/notifications/repository.py` — add `dismiss_all` after the existing `dismiss` method (ends at line 148). Operates on the CURRENT v24 schema (`status='sent'` is the unread backlog).
+
+- Modify `src/notifications/repository.py` — append `dismiss_all` at end of file, after the existing `dismiss` method (which ends at line 147). Operates on the CURRENT v24 schema (`status='sent'` is the unread backlog). **Task 5 later deletes this Phase-0 `dismiss_all` and replaces it with the v25 version** — the two must not coexist.
 - Modify `src/api/routes/notifications.py` — add a `ClearAllRequest` model and a `POST /api/notifications/clear-all` route (current file ends at line 42).
 - Test (new): `tests/test_api_notifications.py` (covers both the repo method and the endpoint via one fixture, mirroring `tests/test_api_action_items.py`).
 
 **Interfaces:**
+
 - Consumes: `NotificationRepository.count_unread()` and `create(type, title, body, channel, status=...)` (existing v24 signatures); `notifications_routes.init(repo)` / `.router` (existing).
 - Produces: `NotificationRepository.dismiss_all(self, *, type: str | None = None) -> int` (rows affected) — the exact locked signature Phase 1 later re-points at the v25 status vocabulary; and `POST /api/notifications/clear-all` body `{type?: str}` → `{updated: int}`, the endpoint the Phase 1 UI (`clearAllNotifications`) calls.
 
 - [ ] **Step 1: Write the failing test** — create `tests/test_api_notifications.py`:
+
 ```python
 """Tests for bulk clear-all — repo method + endpoint (v24 schema)."""
 
@@ -244,7 +263,8 @@ async def test_clear_all_endpoint_type_filter(notifications_client):
 
 - [ ] **Step 3: Write minimal implementation**
 
-  In `src/notifications/repository.py`, append this method to the `NotificationRepository` class (immediately after `dismiss`, i.e. after line 148):
+  In `src/notifications/repository.py`, append this method to the `NotificationRepository` class (immediately after `dismiss`, i.e. at end of file after line 147):
+
 ```python
     async def dismiss_all(self, *, type: str | None = None) -> int:
         """Bulk-dismiss the unread backlog (v24 status='sent'); return rows updated.
@@ -267,11 +287,13 @@ async def test_clear_all_endpoint_type_filter(notifications_client):
         return cursor.rowcount
 ```
 
-  In `src/api/routes/notifications.py`, add the request model next to `DismissRequest` (after line 24) and the route at the end of the file (after line 42):
+In `src/api/routes/notifications.py`, add the request model next to `DismissRequest` (after line 24) and the route at the end of the file (after line 42):
+
 ```python
 class ClearAllRequest(BaseModel):
     type: str | None = None
 ```
+
 ```python
 @router.post("/clear-all")
 async def clear_all(body: ClearAllRequest | None = None):
@@ -285,6 +307,7 @@ async def clear_all(body: ClearAllRequest | None = None):
   - Expected: all tests pass (`4 passed` for the new file; existing notifications suite unchanged).
 
 - [ ] **Step 5: Commit**
+
 ```
 git add src/notifications/repository.py src/api/routes/notifications.py tests/test_api_notifications.py
 git commit -m "feat(notifications): add bulk clear-all endpoint and dismiss_all repo method
@@ -300,12 +323,14 @@ the user drain the 99+ backlog in one tap. v24-compatible; no v25 dependency."
 ### Task 3: Schema v25 migration (notifications lifecycle + action_items transition column)
 
 **Files:**
+
 - Modify `src/db/database.py:26` (bump `SCHEMA_VERSION`), `src/db/database.py:198-215` (`NOTIFICATIONS_SQL` for fresh installs), `src/db/database.py:995-1001` (add the `if current_version == 24:` migration block, moving the trailing `else`).
 - Create `tests/test_db_migration_v25.py`.
 
 **Interfaces:** Consumes: the existing `Database.connect()` → `_migrate()` ladder and the fresh-install `if current_version < 1:` path (which runs `NOTIFICATIONS_SQL`). Produces: a `notifications` table carrying `read_at, dedup_key, group_key, reference_type, priority, channels, snoozed_until` + indexes `idx_notifications_created_at` and unique `idx_notifications_dedup`, an `action_items.overdue_notified_at` column, and `PRAGMA user_version = 25` — the storage substrate every later task (Repository create/dedup, count_unread snooze filter, retention prune) relies on.
 
 - [ ] **Step 1: Write the failing test** — create `tests/test_db_migration_v25.py`:
+
 ```python
 """Forward-migration test for schema v25 (notifications redesign)."""
 
@@ -428,19 +453,23 @@ async def test_fresh_db_has_v25_schema(db):
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
+
 ```
 python -m pytest tests/test_db_migration_v25.py -q
 ```
+
 Expected failure: both tests fail — `test_fresh_db_has_v25_schema` asserts `user_version == 25` but gets `24`; `test_v24_migrates_to_v25` fails at the same assert (the `if current_version == 24:` block does not yet exist and the new columns are absent).
 
 - [ ] **Step 3: Write minimal implementation** — three edits in `src/db/database.py`:
 
 (a) Bump the version constant (line 26):
+
 ```python
 SCHEMA_VERSION = 25
 ```
 
 (b) Replace the fresh-install `NOTIFICATIONS_SQL` block (lines 198-215) so new databases are born at v25:
+
 ```python
 NOTIFICATIONS_SQL = """
 CREATE TABLE IF NOT EXISTS notifications (
@@ -472,13 +501,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedup ON notifications(dedup
 ```
 
 (c) At the tail of `_migrate` (lines 995-1001), replace:
+
 ```python
             logger.info("Database migrated to version 24 (recording↔calendar link)")
             current_version = 24
         else:
             logger.debug("Database schema up to date (version %d)", current_version)
 ```
+
 with:
+
 ```python
             logger.info("Database migrated to version 24 (recording↔calendar link)")
             current_version = 24
@@ -541,12 +573,15 @@ with:
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
+
 ```
 python -m pytest tests/test_db_migration_v25.py -q
 ```
+
 Expected: `2 passed`. (Fresh DBs walk the ladder to `current_version == 24`, then the guarded block advances them to 25 with no-op ALTERs; a real v24 DB migrates with live ALTERs and the `'sent'→'unread'` backfill.)
 
 - [ ] **Step 5: Commit**
+
 ```
 git add src/db/database.py tests/test_db_migration_v25.py
 git commit -m "feat(db): add schema v25 migration for notifications lifecycle
@@ -562,19 +597,23 @@ Update NOTIFICATIONS_SQL so fresh installs are born at v25."
 ### Task 4: `NotificationRepository.create` rewrite (one row per event, channels JSON, DB-level dedup)
 
 **Files:**
+
 - Modify `src/notifications/repository.py:1-9` (add `import json`), `src/notifications/repository.py:18-84` (replace `create`; delete the now-obsolete `find_recent`).
-- Modify `tests/test_notifications.py` (add `import json` to the imports at the top; append the three test functions below).
+- Modify `tests/test_notifications.py` (add `import json` to the imports at the top; append the three test functions below). **Also delete the now-obsolete legacy dispatcher coverage** in this file — the file-local `dispatcher` fixture and the three tests `test_notify_stores_in_db`, `test_notify_deduplicates`, `test_notify_disabled_does_nothing` (≈ lines 16–48). They call the pre-rewrite dispatcher, which uses the removed `find_recent` and the removed `channel=` kwarg on `create`; leaving them makes `tests/test_notifications.py` red from here until Task 9. The dispatcher's own coverage is re-established in Task 9 (`tests/test_notifications_dispatcher.py`). Keep the file-local `notif_repo` fixture (≈ lines 11–13) — the repository tests use it.
 
 **Interfaces:** Consumes: Task 3's `notifications` schema (`channels`, `priority`, `dedup_key`, unique `idx_notifications_dedup`). Produces exactly:
+
 ```python
 async def create(self, *, type: str, title: str, body: str, priority: str,
                  channels: list[str], status: str = "unread",
                  reference_type: str | None = None, reference_id: str | None = None,
                  dedup_key: str | None = None, group_key: str | None = None) -> str | None
 ```
+
 Returns the new id, or `None` when the insert was deduped (`cursor.rowcount == 0`). This is the single write path the dispatcher (`await self._repo.create(...)`) and Task 5/6 read paths depend on. (The dispatcher rewrite in the Phase-1 dispatch cluster drops the old `find_recent`-based SELECT-then-INSERT dedup — this task removes `find_recent`; its only caller is that dispatcher.)
 
 - [ ] **Step 1: Write the failing test** — add `import json` to the top of `tests/test_notifications.py`, then append:
+
 ```python
 @pytest.mark.asyncio
 async def test_create_returns_id_and_persists(notif_repo):
@@ -625,12 +664,15 @@ async def test_create_null_dedup_keys_coexist(notif_repo):
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
+
 ```
 python -m pytest tests/test_notifications.py::test_create_returns_id_and_persists tests/test_notifications.py::test_create_dedup_on_conflict tests/test_notifications.py::test_create_null_dedup_keys_coexist -q
 ```
+
 Expected failure: `TypeError: create() got an unexpected keyword argument 'priority'` (the current signature is `create(self, type, title, body, channel, ...)`).
 
 - [ ] **Step 3: Write minimal implementation** — in `src/notifications/repository.py`, add `import json` to the imports (top of file), then replace the `create` method **and** the entire `find_recent` method (lines 18-84) with just this new `create`:
+
 ```python
     async def create(
         self,
@@ -694,12 +736,15 @@ Expected failure: `TypeError: create() got an unexpected keyword argument 'prior
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
+
 ```
 python -m pytest tests/test_notifications.py::test_create_returns_id_and_persists tests/test_notifications.py::test_create_dedup_on_conflict tests/test_notifications.py::test_create_null_dedup_keys_coexist -q
 ```
+
 Expected: `3 passed`.
 
 - [ ] **Step 5: Commit**
+
 ```
 git add src/notifications/repository.py tests/test_notifications.py
 git commit -m "feat(notifications): one-row-per-event create with DB-level dedup
@@ -715,10 +760,12 @@ the obsolete find_recent SELECT-then-INSERT dedup."
 ### Task 5: `NotificationRepository` lifecycle methods (list/count/read/dismiss/snooze)
 
 **Files:**
-- Modify `src/notifications/repository.py:86-148` (replace `list_notifications`, `count_unread`, `dismiss`; add `mark_read`, `mark_all_read`, `dismiss_all`, `snooze`).
+
+- Modify `src/notifications/repository.py:86-148` (replace `list_notifications`, `count_unread`, `dismiss`; add `mark_read`, `mark_all_read`, `dismiss_all`, `snooze`) **and delete the Phase-0 `dismiss_all` that Task 2 appended after `dismiss` at end of file** — otherwise two `dismiss_all` definitions coexist and the later (v24) one wins.
 - Modify `tests/test_notifications.py` (add `import time`; append the test functions below).
 
 **Interfaces:** Consumes: Task 4's `create` and the v25 columns (`status`, `read_at`, `snoozed_until`, `channels`, `group_key`). Produces:
+
 ```python
 async def list_notifications(self, *, limit: int = 50, offset: int = 0,
                              type: str | None = None,
@@ -730,9 +777,11 @@ async def dismiss(self, notif_id: str) -> None
 async def dismiss_all(self, *, type: str | None = None) -> int
 async def snooze(self, notif_id: str, until: float) -> None
 ```
+
 `dismiss_all` is the **v25 superset** of the Phase-0 purge task's `dismiss_all` (same name/return-of-rows-affected contract, now excluding already-dismissed rows so the returned count is meaningful and the call is idempotent); the API `clear-all` route and Phase-0 purge both bind to this. Each `list_notifications` dict shape (`id,type,priority,reference_type,reference_id,channels(list),group_key,title,body,status,read_at,snoozed_until,created_at,sent_at`) is what the notifications REST routes and the UI serialize.
 
 - [ ] **Step 1: Write the failing test** — add `import time` to the top of `tests/test_notifications.py`, then append:
+
 ```python
 @pytest.mark.asyncio
 async def test_list_excludes_dismissed_by_default(notif_repo):
@@ -826,12 +875,15 @@ async def test_snooze_resets_to_unread(notif_repo):
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
+
 ```
 python -m pytest tests/test_notifications.py -k "list_excludes_dismissed or type_filter or count_unread_ignores or mark_read or mark_all_read or dismiss_all_is_idempotent or snooze_resets" -q
 ```
+
 Expected failure: `TypeError: list_notifications() got an unexpected keyword argument 'include_dismissed'` / `AttributeError: 'NotificationRepository' object has no attribute 'mark_read'` (the new-shaped methods don't exist yet).
 
-- [ ] **Step 3: Write minimal implementation** — in `src/notifications/repository.py`, replace the existing `list_notifications`, `count_unread`, and `dismiss` methods (lines 86-148) with the following seven methods:
+- [ ] **Step 3: Write minimal implementation** — in `src/notifications/repository.py`, replace the existing `list_notifications`, `count_unread`, and `dismiss` methods (lines 86-148) with the following seven methods. **Also delete the Phase-0 `dismiss_all` method that Task 2 appended after `dismiss` (near the end of the file)** — the v25 `dismiss_all` below supersedes it. If both remain, Python keeps the later (v24 `WHERE status='sent'`) definition, which — after the migration backfills `sent`→`unread` — matches nothing, so `clear-all` and the idempotent purge silently no-op (and `test_dismiss_all_is_idempotent` fails).
+
 ```python
     async def list_notifications(
         self,
@@ -959,12 +1011,15 @@ Expected failure: `TypeError: list_notifications() got an unexpected keyword arg
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
+
 ```
 python -m pytest tests/test_notifications.py -k "list_excludes_dismissed or type_filter or count_unread_ignores or mark_read or mark_all_read or dismiss_all_is_idempotent or snooze_resets" -q
 ```
+
 Expected: `7 passed`.
 
 - [ ] **Step 5: Commit**
+
 ```
 git add src/notifications/repository.py tests/test_notifications.py
 git commit -m "feat(notifications): repository lifecycle methods
@@ -980,19 +1035,23 @@ purge), snooze."
 ### Task 6: `NotificationRepository` rate-limit + retention (`count_recent`, `count_channel_since`, `prune`)
 
 **Files:**
+
 - Modify `src/notifications/repository.py` (append the three methods below to the class).
 - Modify `tests/test_notifications.py` (append the module-level `_insert_notif` helper and test functions below).
 
 **Interfaces:** Consumes: Task 3's `notifications` columns (`created_at`, `status`, `channels`). Produces:
+
 ```python
 async def count_recent(self, type: str, since: float) -> int
 async def count_channel_since(self, channel: str, since: float) -> int
 async def prune(self, *, now: float, retention_days: int,
                 dismissed_retention_days: int, max_rows: int) -> int
 ```
+
 `count_recent` backs the dispatcher's per-type/global `max_per_hour` gate; `count_channel_since` backs the `email.max_per_day` cap (matches channel membership inside the JSON array, excludes `status='failed'`); `prune` (three delete passes → total deleted) backs the scheduled `_prune_notifications` server task.
 
 - [ ] **Step 1: Write the failing test** — append to `tests/test_notifications.py`:
+
 ```python
 async def _insert_notif(repo, *, nid, ntype="task_overdue", status="unread",
                         channels='["in_app"]', created_at=0.0):
@@ -1073,12 +1132,15 @@ async def test_prune_max_rows_cap(notif_repo):
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
+
 ```
 python -m pytest tests/test_notifications.py -k "count_recent or count_channel_since or prune_" -q
 ```
+
 Expected failure: `AttributeError: 'NotificationRepository' object has no attribute 'count_recent'` (none of the three methods exist yet).
 
 - [ ] **Step 3: Write minimal implementation** — append these three methods to the `NotificationRepository` class in `src/notifications/repository.py`:
+
 ```python
     async def count_recent(self, type: str, since: float) -> int:
         """Count notifications of ``type`` created at/after ``since`` (rate limit)."""
@@ -1141,12 +1203,15 @@ Expected failure: `AttributeError: 'NotificationRepository' object has no attrib
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
+
 ```
 python -m pytest tests/test_notifications.py -k "count_recent or count_channel_since or prune_" -q
 ```
+
 Expected: `5 passed`.
 
 - [ ] **Step 5: Commit**
+
 ```
 git add src/notifications/repository.py tests/test_notifications.py
 git commit -m "feat(notifications): repository rate-limit and retention
@@ -1161,6 +1226,7 @@ delete passes (dismissed-age, global-age, hard max_rows cap)."
 ### Task 7: NotificationsConfig new fields + config.example.yaml
 
 **Files:**
+
 - Modify `src/utils/config.py:347-355` (the `NotificationsConfig` dataclass)
 - Modify `config.example.yaml:427-429` (the notifications "Reminder timing" block)
 - Test `tests/test_notifications_config.py` (new)
@@ -1322,27 +1388,27 @@ class NotificationsConfig:
 Then replace the notifications "Reminder timing" block at `config.example.yaml:427-429`:
 
 ```yaml
-  # --- Reminder timing (legacy; parsed but no longer drives cadence) ---
-  default_reminder_before_due: "1d"
-  overdue_check_interval: "6h"
+# --- Reminder timing (legacy; parsed but no longer drives cadence) ---
+default_reminder_before_due: "1d"
+overdue_check_interval: "6h"
 
-  # --- Behaviour ---
-  macos_sound: false            # play a sound with macOS banners (off by default)
-  muted_types: []               # event types to silence entirely, e.g. ["task_overdue"]
-  macos_min_priority: "normal"  # min priority that may raise a macOS banner
-  external_min_priority: "high" # min priority for webhook/email delivery
-  max_per_hour: 12              # global cap on notifications per type per hour
-  per_type_max_per_hour: {}     # per-type overrides, e.g. {automation: 4}
-  quiet_hours_enabled: true     # suppress banners/sound during quiet hours
-  quiet_start: "22:00"          # local HH:MM
-  quiet_end: "08:00"            # local HH:MM (window may wrap past midnight)
-  task_digest: "daily"          # "daily" or "off"
-  digest_time: "08:00"          # local HH:MM the daily digest fires
-  overdue_recheck_minutes: 360  # real cadence for the overdue sweep
-  dedup_window_minutes: 60      # collapse duplicate events within this window
-  retention_days: 30            # prune anything older than this
-  dismissed_retention_days: 7   # prune dismissed rows older than this
-  max_rows: 500                 # hard cap; delete oldest rows beyond this
+# --- Behaviour ---
+macos_sound: false # play a sound with macOS banners (off by default)
+muted_types: [] # event types to silence entirely, e.g. ["task_overdue"]
+macos_min_priority: "normal" # min priority that may raise a macOS banner
+external_min_priority: "high" # min priority for webhook/email delivery
+max_per_hour: 12 # global cap on notifications per type per hour
+per_type_max_per_hour: {} # per-type overrides, e.g. {automation: 4}
+quiet_hours_enabled: true # suppress banners/sound during quiet hours
+quiet_start: "22:00" # local HH:MM
+quiet_end: "08:00" # local HH:MM (window may wrap past midnight)
+task_digest: "daily" # "daily" or "off"
+digest_time: "08:00" # local HH:MM the daily digest fires
+overdue_recheck_minutes: 360 # real cadence for the overdue sweep
+dedup_window_minutes: 60 # collapse duplicate events within this window
+retention_days: 30 # prune anything older than this
+dismissed_retention_days: 7 # prune dismissed rows older than this
+max_rows: 500 # hard cap; delete oldest rows beyond this
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1362,14 +1428,16 @@ git commit -m "feat(config): extend NotificationsConfig with routing, quiet-hour
 
 ---
 
-### Task 8: Channels correctness — macos.send returns bool + honors sound flag
+### Task 8: Channel contract coverage — lock macOS returncode/sound + email bool (no impl change)
+
+> **Note:** This is a **coverage-only** task — there is no implementation change. Task 1 (Phase 0) already gave `macos.send` its `*, sound=False -> bool` contract (real `osascript` returncode + opt-in sound), and `external.send_email` is unchanged. These tests lock the channel contracts that Task 9's `_send_channel` depends on; they pass immediately against the existing code (no red phase).
 
 **Files:**
-- Modify `src/notifications/channels/macos.py:9-29` (the `send` coroutine)
-- Test `tests/test_notification_channels.py` (new)
-- `src/notifications/channels/external.py` — NO code change; a test confirms `send_email` returns a bool
 
-**Interfaces:** Consumes: `NotificationsConfig.macos_sound` (Task 7). Produces: `async def macos.send(title, body, *, sound: bool = False, subtitle: str = "") -> bool` (returns `True` only when `osascript` returncode == 0; adds the `sound name "default"` line only when `sound=True`) — consumed by Task 9's `_send_channel`. Confirms `external.send_email(config, title, body) -> bool` is unchanged and enforces no per-day cap (the cap is enforced in the dispatcher via `count_channel_since`).
+- **No implementation change** — `src/notifications/channels/macos.py` already has the contract (Task 1); `src/notifications/channels/external.py` is unchanged.
+- Test `tests/test_notification_channels.py` (new)
+
+**Interfaces:** Consumes: `macos.send(title, body, *, sound: bool = False, subtitle: str = "") -> bool` as implemented in **Task 1** (returns `True` only when `osascript` returncode == 0; adds the `sound name "default"` line only when `sound=True`), and `NotificationsConfig.macos_sound` (Task 7). Produces: no new code — regression coverage locking the macOS returncode/sound contract and `external.send_email(config, title, body) -> bool` (no per-day cap; the cap lives in the dispatcher via `count_channel_since`), both consumed by Task 9's `_send_channel`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1441,17 +1509,15 @@ async def test_send_email_returns_false_when_unconfigured():
     assert result is False
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the tests — they pass against the existing implementation**
 
 ```bash
 python -m pytest tests/test_notification_channels.py -q
 ```
 
-Expected failure: `test_macos_send_returns_true_on_zero_returncode` fails with `TypeError: send() got an unexpected keyword argument 'sound'` (current signature is `send(title, body, subtitle="")` and returns `None`).
+Expected: `4 passed`. There is **no red phase**: `macos.send` already has the `sound`/returncode contract from Task 1, and `send_email` already returns a bool for an unconfigured channel. This task exists to _lock_ those contracts (Task 9 relies on them); it adds no implementation.
 
-- [ ] **Step 3: Write minimal implementation**
-
-Replace the body of `src/notifications/channels/macos.py` (`send`, lines 9-29) with:
+(For reference, the `macos.send` implementation these tests lock — already in place from Task 1 — is:)
 
 ```python
 async def send(title: str, body: str, *, sound: bool = False, subtitle: str = "") -> bool:
@@ -1466,11 +1532,8 @@ async def send(title: str, body: str, *, sound: bool = False, subtitle: str = ""
         script += ' sound name "default"'
     try:
         proc = await asyncio.create_subprocess_exec(
-            "osascript",
-            "-e",
-            script,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+            "osascript", "-e", script,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
@@ -1482,21 +1545,11 @@ async def send(title: str, body: str, *, sound: bool = False, subtitle: str = ""
         return False
 ```
 
-(`src/notifications/channels/external.py` needs no change: `send_email` already returns `bool` and does not throttle.)
-
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 3: Commit**
 
 ```bash
-python -m pytest tests/test_notification_channels.py -q
-```
-
-Expected: `4 passed`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/notifications/channels/macos.py tests/test_notification_channels.py
-git commit -m "fix(notifications): macos.send returns real osascript status and honors sound flag"
+git add tests/test_notification_channels.py
+git commit -m "test(notifications): lock macOS returncode/sound and email bool channel contracts"
 ```
 
 ---
@@ -1504,18 +1557,20 @@ git commit -m "fix(notifications): macos.send returns real osascript status and 
 ### Task 9: NotificationDispatcher rewrite — full gate pipeline
 
 **Files:**
+
 - Rewrite `src/notifications/dispatcher.py` (whole file, currently lines 1-115)
-- Modify `tests/test_notifications.py:16-48` (remove the obsolete `dispatcher` fixture + 3 legacy dispatcher tests that exercised the old `notify` signature / `status='sent'`; they are superseded by the gate tests below)
-- Test `tests/test_notifications_dispatcher.py` (new)
+- (The obsolete `dispatcher` fixture + 3 legacy dispatcher tests in `tests/test_notifications.py` were **already removed in Task 4** when `create`/`find_recent` changed — nothing to remove here.)
+- Test `tests/test_notifications_dispatcher.py` (new) — defines its own file-local `notif_repo`/dispatcher fixtures.
 
 **Interfaces:**
 Consumes (from earlier Phase-1 tasks — must exist before this task runs):
+
 - `NotificationRepository.create(*, type, title, body, priority, channels: list[str], status="unread", reference_type=None, reference_id=None, dedup_key=None, group_key=None) -> str | None` (returns `None` when deduped via `ON CONFLICT(dedup_key)`)
 - `NotificationRepository.count_recent(type, since) -> int`
 - `NotificationRepository.count_channel_since(channel, since) -> int`
 - `NotificationRepository.count_unread(now=None) -> int` and `list_notifications(*, limit=50, ...) -> list[dict]` (each dict carries `channels` as a `list`)
 - schema v25 migration (adds `dedup_key`/`channels`/`priority`/... columns + the unique dedup index)
-- `macos.send(title, body, *, sound, subtitle) -> bool` (Task 8), `external.send_webhook/send_email -> bool`, `in_app.send(event_bus, title, body, type, reference_id)`
+- `macos.send(title, body, *, sound, subtitle) -> bool` (Task 1; contract-locked in Task 8), `external.send_webhook/send_email -> bool`, `in_app.send(event_bus, title, body, type, reference_id)`
 - `NotificationsConfig` fields (Task 7)
 
 Produces: `async def NotificationDispatcher.notify(*, type, title, body, priority="normal", reference_type=None, reference_id=None, dedup_key=None, group_key=None, now=None) -> str | None` — the single chokepoint that Tasks 10+ (producers: `_check_reminders`, digest, automations) call; plus helpers `_resolve_channels`, `_priority_ge`, `_in_quiet_hours`, and module-level `_start_of_day`.
@@ -1944,11 +1999,13 @@ git commit -m "feat(notifications): rewrite dispatcher with governed gate pipeli
 ### Task 10: `_check_reminders` rewrite — transition-based overdue + reminder clearing
 
 **Files:**
+
 - Modify `src/action_items/repository.py:238` (`list_overdue` add `limit`), `:250` (`list_due_reminders` add `limit`), and append two new methods `mark_overdue_notified` / `clear_reminder` after `:260`.
 - Modify `src/api/server.py:504` (`_check_reminders` full rewrite).
 - Test (create) `tests/test_reminders_producer.py`.
 
 **Interfaces:**
+
 - Consumes: schema v25 `action_items.overdue_notified_at REAL` (migration task); `NotificationDispatcher.notify(*, type, title, body, priority="normal", reference_type=None, reference_id=None, dedup_key=None, group_key=None, now=None) -> str | None` (dispatcher task); `NotificationsConfig` new fields (config task); `NotificationRepository.create/list_notifications` (storage task); `ActionItemRepository.create/get/list_overdue/list_due_reminders`.
 - Produces: `ActionItemRepository.mark_overdue_notified(self, item_id: str, now: float) -> None`; `ActionItemRepository.clear_reminder(self, item_id: str) -> None`; `list_overdue(self, limit: int = 100)`, `list_due_reminders(self, limit: int = 100)`; a `_check_reminders` that emits `task_overdue`/`task_reminder` at priority `low`, once each. Task 13 later swaps the inline dispatcher build for `self._get_notification_dispatcher()`.
 
@@ -2027,6 +2084,7 @@ async def test_reminder_fires_and_clears_reminder_at(db, event_bus):
 ```bash
 python -m pytest tests/test_reminders_producer.py -q
 ```
+
 Expected: FAIL. `test_overdue_notifies_once_across_two_sweeps` fails `assert len(overdue_calls) == 1` (the current `_check_reminders` emits `type="overdue"`, not `"task_overdue"`, so the filtered list is empty), and `test_reminder_fires_and_clears_reminder_at` fails `assert row["reminder_at"] is None` (nothing clears it today).
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2133,6 +2191,7 @@ In `src/api/server.py`, replace the whole `_check_reminders` method (`:504`–`:
 ```bash
 python -m pytest tests/test_reminders_producer.py tests/test_action_items.py -q
 ```
+
 Expected: PASS (both new tests green; existing action-item tests unaffected — `limit` is a defaulted param).
 
 - [ ] **Step 5: Commit**
@@ -2151,10 +2210,12 @@ with a LIMIT. task_overdue/task_reminder emit at priority 'low'."
 ### Task 11: Daily digest producer + scheduler registration
 
 **Files:**
+
 - Modify `src/api/server.py`: add module-level `_within_digest_window` helper (after `logger` at `:53`); add `_emit_daily_digest` and `_run_daily_digest` methods (after `_check_reminders`); register `daily_digest` inside the `if config.notifications.enabled:` block of `_setup_scheduler_jobs` (`:470`).
 - Test (create) `tests/test_daily_digest.py`.
 
 **Interfaces:**
+
 - Consumes: `NotificationDispatcher.notify(...)`; `ActionItemRepository.list_items(status=..., limit=...)` and `list_overdue(limit=...)` (Task 10); `NotificationsConfig.task_digest` / `.digest_time` (config task); `Scheduler.register(name, func, interval_seconds)`; `safe_run`.
 - Produces: `ApiServer._emit_daily_digest(self) -> None` (emits one `digest` notification, `dedup_key=f"digest:{YYYY-MM-DD}"`, priority `low`, body `"<n> due today, <m> overdue."`), `ApiServer._run_daily_digest(self) -> None` (digest-time-windowed wrapper), and a `daily_digest` scheduler job gated on `task_digest != "off"`. Task 13 later swaps the inline dispatcher build for `self._get_notification_dispatcher()`.
 
@@ -2257,6 +2318,7 @@ def test_daily_digest_absent_when_off():
 ```bash
 python -m pytest tests/test_daily_digest.py -q
 ```
+
 Expected: FAIL. `AttributeError: 'ApiServer' object has no attribute '_emit_daily_digest'` for the two async tests, and the two registration tests fail `assert "daily_digest" in [...]` (no such job registered yet).
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2289,7 +2351,10 @@ In `_setup_scheduler_jobs`, extend the existing `if config.notifications.enabled
             self._scheduler.register(
                 "reminder_check",
                 lambda: safe_run("reminder_check", self._check_reminders),
-                60,
+                # Wire the real cadence: replaces the hard-coded 60s that made
+                # the config "lie". Overdue is now transition-based (fires once),
+                # so a slower sweep is correct; reminders fire within this window.
+                max(60, config.notifications.overdue_recheck_minutes * 60),
             )
             if config.notifications.task_digest != "off":
                 self._scheduler.register(
@@ -2357,6 +2422,7 @@ Add these two methods immediately after `_check_reminders`:
 ```bash
 python -m pytest tests/test_daily_digest.py tests/test_server_prep_sweep.py -q
 ```
+
 Expected: PASS (all four digest tests green; the existing prep-sweep scheduler test still passes — the new job registers only when notifications are enabled with `task_digest != "off"`).
 
 - [ ] **Step 5: Commit**
@@ -2375,12 +2441,14 @@ gated on task_digest != 'off'."
 ### Task 12: Route automation `notify` through the governed dispatcher
 
 **Files:**
+
 - Modify `src/automations/executor.py:12` (drop the direct `macos_send` import), add `import time` (`:5` area), rewrite `_notify` (`:122`–`:126`).
 - Modify `src/pipeline_runner.py:197` (`__init__` add `event_bus`), `:218` (`from_config` add + pass `event_bus`), `:1177`–`:1183` (`_run_automations` build dispatcher + add to `services`).
 - Modify `src/main.py:850` (pass `event_bus=self._event_bus`) and `src/api/routes/reprocess.py:66` (pass `event_bus=_event_bus`).
 - Test: replace `test_notify_emits_and_banners` (`tests/test_automations_executor.py:46`–`:54`) with a dispatcher-routing test.
 
 **Interfaces:**
+
 - Consumes: `NotificationDispatcher.notify(*, type, title, body, priority, reference_type, reference_id, dedup_key, ...)`; `NotificationRepository(db)`; `services["notification_dispatcher"]`.
 - Produces: `ActionExecutor._notify` now routes to `services["notification_dispatcher"].notify(type="automation", priority="normal", reference_type="meeting", reference_id=meeting_id, dedup_key=f"automation:{rule.name}:{meeting_id}:{int(now // (cooldown*60))}")` and never banners directly; `PipelineRunner.__init__(..., event_bus=None)` / `from_config(..., event_bus=None)`; `_run_automations` injects a single per-run dispatcher.
 
@@ -2424,6 +2492,7 @@ def test_notify_routes_through_dispatcher(monkeypatch):
 ```bash
 python -m pytest tests/test_automations_executor.py::test_notify_routes_through_dispatcher -q
 ```
+
 Expected: FAIL with `assert 0 == 1` — the current `_notify` calls `self._emit` + `macos_send` and never touches `services["notification_dispatcher"]`, so `calls` stays empty. (The `monkeypatch` neutralises the real `macos_send`, so no `osascript` runs during the red phase.)
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2451,7 +2520,7 @@ In `src/automations/executor.py`: add `import time` to the top imports and delet
         )
 ```
 
-In `src/pipeline_runner.py` `__init__` (`:197`), thread an event bus through:
+In `src/pipeline_runner.py` `__init__` (`:197`–`:216`), add the `event_bus` keyword-only param and its `self._event_bus` assignment — **keep every existing assignment** (`self._transcriber` … `self._notion_writer`). The complete method:
 
 ```python
     def __init__(
@@ -2471,9 +2540,14 @@ In `src/pipeline_runner.py` `__init__` (`:197`), thread an event bus through:
         self._emit_cb = emit
         self._event_bus = event_bus
         self._db = db
+        self._transcriber = transcriber or Transcriber(config.transcription)
+        self._summariser = summariser or Summariser(config.summarisation)
+        self._diariser = diariser
+        self._md_writer = md_writer
+        self._notion_writer = notion_writer
 ```
 
-In `from_config` (`:218`) add the param and forward it:
+In `from_config` (`:219`; the `@classmethod` decorator is `:218`) add the param and forward it:
 
 ```python
     @classmethod
@@ -2542,6 +2616,7 @@ In `src/api/routes/reprocess.py` `_make_runner` (`:66`):
 ```bash
 python -m pytest tests/test_automations_executor.py tests/test_automation_actions.py tests/test_pipeline_runner.py -q
 ```
+
 Expected: PASS (dispatcher-routing test green; automations/pipeline suites unaffected — `event_bus` is a defaulted keyword-only param).
 
 - [ ] **Step 5: Commit**
@@ -2561,10 +2636,12 @@ per-run dispatcher via services['notification_dispatcher']."
 ### Task 13: Retention prune task + single reused dispatcher instance
 
 **Files:**
+
 - Modify `src/api/server.py`: `__init__` (`:79`) add `self._notif_dispatcher = None`; add `_get_notification_dispatcher` + `_prune_notifications` methods; register `notification_prune` at the end of `_setup_scheduler_jobs` (`:502`); refactor `_check_reminders` (Task 10) and `_emit_daily_digest` (Task 11) to reuse `self._get_notification_dispatcher()`.
 - Test (create) `tests/test_notification_retention.py`.
 
 **Interfaces:**
+
 - Consumes: `NotificationRepository.prune(*, now: float, retention_days: int, dismissed_retention_days: int, max_rows: int) -> int` (storage task); `NotificationsConfig.retention_days/.dismissed_retention_days/.max_rows` (config task); `NotificationDispatcher.__init__(config, repo, event_bus)`.
 - Produces: `ApiServer._prune_notifications(self) -> None`; `ApiServer._get_notification_dispatcher(self) -> NotificationDispatcher` (built once, cached on `self._notif_dispatcher`, reused by `_check_reminders`/`_emit_daily_digest`); a `notification_prune` scheduler job (every 6h). Note: the cached dispatcher captures config at first build — config edits take effect on daemon restart (accepted Phase-1 tradeoff).
 
@@ -2624,6 +2701,7 @@ async def test_dispatcher_built_once_and_reused(db, event_bus):
 ```bash
 python -m pytest tests/test_notification_retention.py -q
 ```
+
 Expected: FAIL — `AttributeError: 'ApiServer' object has no attribute '_prune_notifications'` and `... no attribute '_get_notification_dispatcher'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -2736,6 +2814,7 @@ with (keep `config = load_config()` and the `task_digest == "off"` guard as-is; 
 ```bash
 python -m pytest tests/test_notification_retention.py tests/test_reminders_producer.py tests/test_daily_digest.py -q
 ```
+
 Expected: PASS — prune calls `repo.prune` with the configured windows; `_get_notification_dispatcher` returns the same instance twice; the Task 10/11 producer suites stay green through the single-instance refactor.
 
 - [ ] **Step 5: Commit**
@@ -2755,10 +2834,12 @@ reconstructing it every tick."
 ### Task 14: Notifications API — bulk actions, PATCH read/dismiss/snooze, list filters
 
 **Files:**
+
 - Modify: `src/api/routes/notifications.py` (full rewrite of the 43-line file; current `list_notifications` uses a `status` query param and only a `dismiss` PATCH)
-- Create (test): `tests/test_api_notifications.py`
+- Replace (test): `tests/test_api_notifications.py` — this **supersedes** the Phase-0 v24 version written in Task 2 (which becomes red once Task 4 rewrites `create`; it is intentionally replaced here with v25-aware coverage).
 
 **Interfaces:**
+
 - Consumes (from the Storage cluster's `NotificationRepository`, `src/notifications/repository.py`): `create(*, type, title, body, priority, channels, status="unread", reference_type=None, reference_id=None, dedup_key=None, group_key=None) -> str | None`; `list_notifications(*, limit=50, offset=0, type=None, include_dismissed=False) -> list[dict]`; `count_unread(now=None) -> int`; `mark_read(id)`; `mark_all_read(*, type=None) -> int`; `dismiss(id)`; `dismiss_all(*, type=None) -> int`; `snooze(id, until)`. Requires the v25 migration (Storage cluster) so the `notifications` table has the new columns.
 - Produces (consumed by Task 15 UI api layer): `GET /api/notifications?limit&offset&type&include_dismissed` → `{notifications: [...]}`; `GET /api/notifications/unread-count` → `{count:int}`; `POST /api/notifications/read-all` body `{type?}` → `{updated:int}`; `POST /api/notifications/clear-all` body `{type?}` → `{updated:int}`; `PATCH /api/notifications/{id}` body `{action:'read'|'dismiss'|'snooze', snooze_minutes?}`.
 
@@ -2909,6 +2990,7 @@ async def test_list_filters_by_type(notif_client):
 ```
 python -m pytest tests/test_api_notifications.py -q
 ```
+
 Expected failure: the current route has no `/read-all` or `/clear-all` (POST returns **404 Not Found**), the PATCH handler reads `body.status` and does not understand `action` (`test_patch_*` fail), and `list_notifications` still takes a `status=` param so `include_dismissed`/`type` filters are ignored.
 
 - [ ] **Step 3: Write minimal implementation** — replace the entire contents of `src/api/routes/notifications.py`
@@ -3003,6 +3085,7 @@ async def update_notification(notif_id: str, body: NotificationActionRequest):
 ```
 python -m pytest tests/test_api_notifications.py -q
 ```
+
 Expected: **9 passed**.
 
 - [ ] **Step 5: Commit**
@@ -3017,11 +3100,13 @@ git commit -m "feat(api): add notification bulk read/clear, PATCH actions and li
 ### Task 15: UI api layer + notification types
 
 **Files:**
+
 - Modify: `ui/src/lib/types.ts:577` (`NotificationStatus`, `AppNotification`) and `:301` (`NotificationsConfig`)
 - Modify: `ui/src/lib/api.ts:856` (`getNotifications`, `dismissNotification`) — add `markNotificationRead`, `snoozeNotification`, `markAllRead`, `clearAllNotifications`
 - Create (test): `ui/src/lib/__tests__/notifications.api.test.ts`
 
 **Interfaces:**
+
 - Consumes (from Task 14): the five REST endpoints and their JSON shapes.
 - Produces (consumed by Tasks 16 & 17): `getNotifications(limit=50, opts?:{type?; includeDismissed?}) -> Promise<NotificationsResponse>`; `markNotificationRead(id) -> Promise<void>`; `dismissNotification(id) -> Promise<void>`; `snoozeNotification(id, minutes) -> Promise<void>`; `markAllRead(type?) -> Promise<{updated:number}>`; `clearAllNotifications(type?) -> Promise<{updated:number}>`; `AppNotification` with `priority/reference_type/channels/group_key/read_at/snoozed_until/status`; extended `NotificationsConfig` type (used by Task 17).
 
@@ -3062,7 +3147,10 @@ describe("notifications api", () => {
       return json({ notifications: [] });
     }) as unknown as typeof fetch;
 
-    await getNotifications(25, { type: "meeting_failed", includeDismissed: true });
+    await getNotifications(25, {
+      type: "meeting_failed",
+      includeDismissed: true,
+    });
     expect(calls[0]).toContain("/api/notifications?");
     expect(calls[0]).toContain("limit=25");
     expect(calls[0]).toContain("type=meeting_failed");
@@ -3095,7 +3183,9 @@ describe("notifications api", () => {
     expect(res.updated).toBe(3);
     const call = calls.find((c) => c.init?.method === "POST")!;
     expect(call.url).toContain("/api/notifications/read-all");
-    expect(JSON.parse(call.init?.body as string)).toEqual({ type: "task_overdue" });
+    expect(JSON.parse(call.init?.body as string)).toEqual({
+      type: "task_overdue",
+    });
   });
 
   it("markAllRead sends an empty body when no type", async () => {
@@ -3139,7 +3229,9 @@ describe("notifications api", () => {
     await dismissNotification("n1");
     expect(calls[0].url).toContain("/api/notifications/n1");
     expect(calls[0].init?.method).toBe("PATCH");
-    expect(JSON.parse(calls[0].init?.body as string)).toEqual({ action: "dismiss" });
+    expect(JSON.parse(calls[0].init?.body as string)).toEqual({
+      action: "dismiss",
+    });
   });
 
   it("markNotificationRead PATCHes action=read", async () => {
@@ -3152,7 +3244,9 @@ describe("notifications api", () => {
     ) as unknown as typeof fetch;
 
     await markNotificationRead("n2");
-    expect(JSON.parse(calls[0].init?.body as string)).toEqual({ action: "read" });
+    expect(JSON.parse(calls[0].init?.body as string)).toEqual({
+      action: "read",
+    });
   });
 
   it("snoozeNotification PATCHes action=snooze with minutes", async () => {
@@ -3178,6 +3272,7 @@ describe("notifications api", () => {
 ```
 cd ui && npx vitest run src/lib/__tests__/notifications.api.test.ts
 ```
+
 Expected failure: TypeScript/import errors — `markAllRead`, `clearAllNotifications`, `snoozeNotification`, `markNotificationRead` are not exported from `../api`, and `getNotifications` does not accept an `opts` argument.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -3309,6 +3404,7 @@ export async function clearAllNotifications(
 ```
 cd ui && npx vitest run src/lib/__tests__/notifications.api.test.ts && npx tsc --noEmit
 ```
+
 Expected: **8 passed** and no type errors.
 
 - [ ] **Step 5: Commit**
@@ -3323,12 +3419,15 @@ git commit -m "feat(ui): notification api helpers (mark-all/clear-all/snooze/rea
 ### Task 16: NotificationPanel + Badge + appStore — bulk actions, filter chips, mark-visible-read, single-source badge
 
 **Files:**
+
 - Modify: `ui/src/components/notifications/NotificationPanel.tsx` (full rewrite of the 173-line component)
 - Modify: `ui/src/stores/appStore.ts:77-80` (interface) and `:114-117` (implementation) — add `decrementNotifications`
+- Modify: `ui/src/stores/appStore.ts:218-221` and `ui/src/App.tsx:118` — **single-source the badge** (spec 5.7). Today the WS `case "notification"` handler does an unconditional `unreadNotifications + 1`, which drifts against the 30s poll. Remove that raw `+1` (delete the `set((state) => ({ unreadNotifications: state.unreadNotifications + 1 }))` in the `"notification"` case, leaving it a no-op) and instead, in `App.tsx`'s existing `event.type === "notification"` branch (`:118`), invalidate the react-query keys so the count refetches from the one source: `queryClient.invalidateQueries({ queryKey: ["notifications-unread"] })` and `["notifications"]`. Also remove the now-dead `incrementNotifications` action (interface `:79`, impl `:115`) — it has no callers after this. The badge's only writers become the `["notifications-unread"]` query (via `setUnreadNotifications`) and the optimistic `decrementNotifications`.
 - `ui/src/components/notifications/NotificationBadge.tsx` stays as-is (it already derives from the single `appStore.unreadNotifications` source); covered by the test below
 - Create (test): `ui/src/components/notifications/__tests__/NotificationPanel.test.tsx`
 
 **Interfaces:**
+
 - Consumes (from Task 15): `getNotifications`, `getUnreadCount`, `dismissNotification`, `markAllRead`, `clearAllNotifications`, `AppNotification`. Consumes `appStore` `setUnreadNotifications` and the new `decrementNotifications`.
 - Produces: the redesigned panel (bulk Mark-all-read / Clear-all, filter chips, mark-visible-read on open, hidden dismissed rows) and the `decrementNotifications` store action.
 
@@ -3372,7 +3471,7 @@ function row(partial: Partial<Row>): Row {
     type: "meeting_processed",
     title: "Notes ready",
     status: "unread",
-    created_at: Date.now() / 1000,
+    created_at: 1_600_000_000, // fixed epoch — deterministic test input
     body: null,
     priority: "normal",
     reference_type: null,
@@ -3401,7 +3500,9 @@ function installFetch(initial: Row[]) {
       const method = init?.method ?? "GET";
 
       if (url.includes("/api/notifications/unread-count")) {
-        return json({ count: rows.filter((r) => r.status === "unread").length });
+        return json({
+          count: rows.filter((r) => r.status === "unread").length,
+        });
       }
       if (url.includes("/api/notifications/read-all") && method === "POST") {
         let updated = 0;
@@ -3539,6 +3640,7 @@ describe("NotificationPanel", () => {
 ```
 cd ui && npx vitest run src/components/notifications/__tests__/NotificationPanel.test.tsx
 ```
+
 Expected failure: the current panel has no "Mark all read" button and no filter chips (`getByRole("button", { name: "Mark all read" })` / `"Meetings"` throw), and `useAppStore` has no `decrementNotifications` (the rewritten panel references it).
 
 - [ ] **Step 3: Write minimal implementation**
@@ -3788,9 +3890,12 @@ export function NotificationPanel() {
                             </p>
                           )}
                           <p className="text-xs text-muted mt-1">
-                            {formatDistanceToNow(new Date(n.created_at * 1000), {
-                              addSuffix: true,
-                            })}
+                            {formatDistanceToNow(
+                              new Date(n.created_at * 1000),
+                              {
+                                addSuffix: true,
+                              },
+                            )}
                           </p>
                         </div>
                         <button
@@ -3819,6 +3924,7 @@ export function NotificationPanel() {
 ```
 cd ui && npx vitest run src/components/notifications/__tests__/NotificationPanel.test.tsx && npx tsc --noEmit
 ```
+
 Expected: **4 passed** and no type errors.
 
 - [ ] **Step 5: Commit**
@@ -3833,11 +3939,13 @@ git commit -m "feat(ui): notification inbox with bulk actions, filter chips and 
 ### Task 17: Settings — Notification rules section (per-type toggles, quiet hours, macOS sound, rate cap)
 
 **Files:**
+
 - Create: `ui/src/components/settings/NotificationsSection.tsx` (self-contained, auto-saving section mirroring `AutoArmSection.tsx` — the repo's established, testable Settings-section pattern)
 - Modify: `ui/src/components/settings/Settings.tsx:26` (add import) and `:2009` (render the section directly after the existing inline Notifications `<Section>`, which stays as-is for the channel/webhook/email controls)
 - Create (test): `ui/src/components/settings/__tests__/NotificationsSection.test.tsx`
 
 **Interfaces:**
+
 - Consumes (from Task 15): `NotificationsConfig` extended type; `getConfig`, `updateConfig` from `../../lib/api`. Binds to the new config fields (`macos_sound`, `muted_types`, `quiet_hours_enabled`, `quiet_start`, `quiet_end`, `max_per_hour`) that the Config cluster adds to the Python `NotificationsConfig` dataclass + `ConfigUpdateBody`.
 - Produces: `NotificationsSection` component saving `PUT /api/config` `{notifications: {...}}` partials.
 
@@ -3964,6 +4072,7 @@ describe("NotificationsSection", () => {
 ```
 cd ui && npx vitest run src/components/settings/__tests__/NotificationsSection.test.tsx
 ```
+
 Expected failure: `Cannot find module '../NotificationsSection'` — the component does not exist yet.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -4022,7 +4131,10 @@ export function NotificationsSection({ id }: { id?: string }) {
   const queryClient = useQueryClient();
   const toast = useToast();
 
-  const { data: config } = useQuery({ queryKey: ["config"], queryFn: getConfig });
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: getConfig,
+  });
   const n = config?.notifications;
 
   const save = useMutation({
@@ -4080,7 +4192,9 @@ export function NotificationsSection({ id }: { id?: string }) {
         </div>
 
         <div className="py-3 flex items-center justify-between gap-4">
-          <span className="text-sm text-text-secondary">Quiet hours window</span>
+          <span className="text-sm text-text-secondary">
+            Quiet hours window
+          </span>
           <div className="flex items-center gap-2">
             <input
               type="time"
@@ -4110,7 +4224,9 @@ export function NotificationsSection({ id }: { id?: string }) {
             step={1}
             aria-label="Max notifications per hour"
             value={n.max_per_hour}
-            onChange={(e) => save.mutate({ max_per_hour: Number(e.target.value) })}
+            onChange={(e) =>
+              save.mutate({ max_per_hour: Number(e.target.value) })
+            }
             className="w-24 text-right rounded-md bg-surface border border-border px-2 py-1 text-sm"
           />
         </div>
@@ -4169,6 +4285,7 @@ with:
 ```
 cd ui && npx vitest run src/components/settings/__tests__/NotificationsSection.test.tsx && npx tsc --noEmit
 ```
+
 Expected: **3 passed** and no type errors.
 
 - [ ] **Step 5: Commit**
