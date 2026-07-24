@@ -162,7 +162,9 @@ cert import must occur in **both** jobs, or the daemon build must move — see R
 ### 6. What the user must do (one-time, only they can)
 
 1. Create a **Developer ID Application** certificate (Xcode → Settings → Accounts →
-   Manage Certificates → **+**). ~1 minute (already enrolled).
+   Manage Certificates → **+**). REQUIRES a paid Apple Developer Program
+   membership — a free "Personal Team" Apple ID can only make "Apple Development"
+   certs and cannot notarize; enroll at developer.apple.com/account first.
 2. Create an **App Store Connect API key** with the "Developer" role (appstoreconnect.apple.com
    → Users and Access → Keys); download the `.p8` once, note Key ID + Issuer ID.
 3. Run `scripts/setup_notary_profile.sh` (prints exact next steps if either prerequisite

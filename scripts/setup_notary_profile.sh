@@ -2,6 +2,11 @@
 # One-time, per-machine setup of notarization credentials for local deploys.
 # Idempotent: re-running is safe. Mirrors setup_signing_cert.sh ergonomics.
 #
+# REQUIRES a paid Apple Developer Program membership (~$99/yr). A free
+# "Personal Team" Apple ID CANNOT create a Developer ID certificate or notarize
+# — Manage Certificates will only offer "Apple Development". Enroll at
+# developer.apple.com/account first, then:
+#
 # Prerequisites you must create in your Apple Developer account first:
 #   1) A "Developer ID Application" certificate (Xcode > Settings > Accounts >
 #      Manage Certificates > + > Developer ID Application), imported into your
@@ -21,7 +26,9 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer I
     cat >&2 <<'EOF'
 ERROR: No "Developer ID Application" certificate found in the keychain.
 
-Create one (you are already enrolled in the Apple Developer Program):
+Create one (REQUIRES a paid Apple Developer Program membership — a free
+"Personal Team" Apple ID cannot create Developer ID certs or notarize;
+enroll at developer.apple.com/account first):
   Xcode > Settings > Accounts > (your Apple ID) > Manage Certificates >
     + button > "Developer ID Application"
 Then re-run this script.
