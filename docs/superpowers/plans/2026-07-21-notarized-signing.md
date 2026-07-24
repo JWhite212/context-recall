@@ -562,7 +562,9 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer I
     cat >&2 <<'EOF'
 ERROR: No "Developer ID Application" certificate found in the keychain.
 
-Create one (you are already enrolled in the Apple Developer Program):
+Create one (REQUIRES a paid Apple Developer Program membership — a free
+"Personal Team" Apple ID cannot create Developer ID certs or notarize;
+enroll at developer.apple.com/account first):
   Xcode > Settings > Accounts > (your Apple ID) > Manage Certificates >
     + button > "Developer ID Application"
 Then re-run this script.
